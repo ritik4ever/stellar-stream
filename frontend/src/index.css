@@ -1,0 +1,211 @@
+body {
+  margin: 0;
+  font-family: "Segoe UI", sans-serif;
+  background: #f6f8fb;
+  color: #1f2937;
+}
+
+.app-shell {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.hero {
+  margin-bottom: 1rem;
+}
+
+.hero h1 {
+  margin: 0;
+}
+
+.hero-copy {
+  color: #4b5563;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.metric-card {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 0.75rem;
+}
+
+.metric-card span {
+  display: block;
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+
+.metric-card strong {
+  font-size: 1.4rem;
+}
+
+.layout-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.card {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 1rem;
+}
+
+.form-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.row {
+  display: grid;
+  gap: 0.75rem;
+}
+
+label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+
+input {
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  min-height: 38px;
+  padding: 0.45rem 0.6rem;
+}
+
+.btn-primary {
+  border: 0;
+  border-radius: 8px;
+  min-height: 38px;
+  padding: 0.5rem 0.8rem;
+  font-weight: 600;
+  color: white;
+  background: #0ea5a5;
+  cursor: pointer;
+}
+
+.btn-ghost {
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  min-height: 34px;
+  background: white;
+  cursor: pointer;
+  padding: 0.35rem 0.6rem;
+}
+
+.error-banner {
+  margin-bottom: 1rem;
+  background: #dc2626;
+  color: white;
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 0.55rem 0.25rem;
+  font-size: 0.9rem;
+  vertical-align: top;
+}
+
+.muted {
+  color: #6b7280;
+  font-size: 0.8rem;
+}
+
+.stacked {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.progress-bar {
+  height: 7px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  overflow: hidden;
+  margin-top: 0.3rem;
+}
+
+.progress-bar > div {
+  height: 100%;
+  background: #0ea5a5;
+}
+
+.badge {
+  text-transform: capitalize;
+  font-size: 0.78rem;
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  padding: 0.15rem 0.4rem;
+}
+
+.badge-active {
+  background: #ecfeff;
+}
+
+.badge-scheduled {
+  background: #eff6ff;
+}
+
+.badge-completed {
+  background: #f3f4f6;
+}
+
+.badge-canceled {
+  background: #fef2f2;
+}
+
+.issue-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.issue-item {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 0.7rem;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.chip {
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  padding: 0.12rem 0.45rem;
+  font-size: 0.75rem;
+  background: #f9fafb;
+}
+
+@media (min-width: 920px) {
+  .layout-grid {
+    grid-template-columns: 340px 1fr;
+  }
+
+  .row {
+    grid-template-columns: 1fr 1fr;
+  }
+}

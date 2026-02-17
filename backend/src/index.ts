@@ -1,0 +1,146 @@
+import cors from "cors";
+import express, { Request, Response } from "express";
+import { openIssues } from "./services/openIssues";
+import {
+  calculateProgress,
+  cancelStream,
+  createStream,
+  getStream,
+  listStreams,
+  StreamInput,
+} from "./services/streamStore";
+
+const app = express();
+const port = Number(process.env.PORT ?? 3001);
+
+app.use(cors());
+app.use(express.json());
+
+function toNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function parseInput(body: unknown): { ok: true; value: StreamInput } | { ok: false; message: string } {
+  if (!body || typeof body !== "object") {
+    return { ok: false, message: "Body must be a JSON object." };
+  }
+
+  const payload = body as Record<string, unknown>;
+  const sender = typeof payload.sender === "string" ? payload.sender.trim() : "";
+  const recipient = typeof payload.recipient === "string" ? payload.recipient.trim() : "";
+  const assetCodeRaw = typeof payload.assetCode === "string" ? payload.assetCode.trim() : "";
+  const totalAmount = toNumber(payload.totalAmount);
+  const durationSeconds = toNumber(payload.durationSeconds);
+  const startAtValue = payload.startAt === undefined ? null : toNumber(payload.startAt);
+
+  if (sender.length < 5 || recipient.length < 5) {
+    return { ok: false, message: "Sender and recipient must look like valid Stellar account IDs." };
+  }
+
+  if (assetCodeRaw.length < 2 || assetCodeRaw.length > 12) {
+    return { ok: false, message: "assetCode must be between 2 and 12 characters." };
+  }
+
+  if (totalAmount === null || totalAmount <= 0) {
+    return { ok: false, message: "totalAmount must be a positive number." };
+  }
+
+  if (durationSeconds === null || durationSeconds < 60) {
+    return { ok: false, message: "durationSeconds must be at least 60 seconds." };
+  }
+
+  if (startAtValue !== null && startAtValue <= 0) {
+    return { ok: false, message: "startAt must be a valid UNIX timestamp in seconds." };
+  }
+
+  return {
+    ok: true,
+    value: {
+      sender,
+      recipient,
+      assetCode: assetCodeRaw.toUpperCase(),
+      totalAmount,
+      durationSeconds: Math.floor(durationSeconds),
+      startAt: startAtValue === null ? undefined : Math.floor(startAtValue),
+    },
+  };
+}
+
+app.get("/api/health", (_req: Request, res: Response) => {
+  res.json({
+    service: "stellar-stream-backend",
+    status: "ok",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/api/streams", (_req: Request, res: Response) => {
+  const data = listStreams().map((stream) => ({
+    ...stream,
+    progress: calculateProgress(stream),
+  }));
+  res.json({ data });
+});
+
+app.get("/api/streams/:id", (req: Request, res: Response) => {
+  const stream = getStream(req.params.id);
+  if (!stream) {
+    res.status(404).json({ error: "Stream not found." });
+    return;
+  }
+
+  res.json({
+    data: {
+      ...stream,
+      progress: calculateProgress(stream),
+    },
+  });
+});
+
+app.post("/api/streams", (req: Request, res: Response) => {
+  const parsed = parseInput(req.body);
+  if (!parsed.ok) {
+    res.status(400).json({ error: parsed.message });
+    return;
+  }
+
+  const stream = createStream(parsed.value);
+  res.status(201).json({
+    data: {
+      ...stream,
+      progress: calculateProgress(stream),
+    },
+  });
+});
+
+app.post("/api/streams/:id/cancel", (req: Request, res: Response) => {
+  const stream = cancelStream(req.params.id);
+  if (!stream) {
+    res.status(404).json({ error: "Stream not found." });
+    return;
+  }
+
+  res.json({
+    data: {
+      ...stream,
+      progress: calculateProgress(stream),
+    },
+  });
+});
+
+app.get("/api/open-issues", (_req: Request, res: Response) => {
+  res.json({ data: openIssues });
+});
+
+app.listen(port, () => {
+  console.log(`StellarStream API listening on http://localhost:${port}`);
+});
