@@ -10,8 +10,9 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "^12.0.1",
+    "@stellar/stellar-sdk": "^14.5.0",
     "cors": "^2.8.5",
+    "dotenv": "^17.3.1",
     "express": "^4.18.2",
     "ws": "^8.14.2"
   },

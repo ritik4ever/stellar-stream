@@ -1,0 +1,568 @@
+   Compiling stellar-stream v0.1.0 (/home/ayush99336/Desktop/BlockchainDev/drips/stellar-stream/contracts)
+error[E0432]: unresolved import `soroban_sdk::contractevent`
+ --> src/lib.rs:3:43
+  |
+3 | use soroban_sdk::{contract, contractimpl, contractevent, contracttype, Address, Env};
+  |                                           ^^^^^^^^^^^^^
+  |                                           |
+  |                                           no `contractevent` in the root
+  |                                           help: a similar name exists in the module: `contractclient`
+
+error: cannot find attribute `topic` in this scope
+  --> src/lib.rs:52:7
+   |
+52 |     #[topic]
+   |       ^^^^^
+
+error: cannot find attribute `topic` in this scope
+  --> src/lib.rs:54:7
+   |
+54 |     #[topic]
+   |       ^^^^^
+
+error: cannot find attribute `topic` in this scope
+  --> src/lib.rs:42:7
+   |
+42 |     #[topic]
+   |       ^^^^^
+
+error: cannot find attribute `topic` in this scope
+  --> src/lib.rs:44:7
+   |
+44 |     #[topic]
+   |       ^^^^^
+
+error: cannot find attribute `topic` in this scope
+  --> src/lib.rs:27:7
+   |
+27 |     #[topic]
+   |       ^^^^^
+
+error: cannot find attribute `topic` in this scope
+  --> src/lib.rs:29:7
+   |
+29 |     #[topic]
+   |       ^^^^^
+
+error: cannot find attribute `topic` in this scope
+  --> src/lib.rs:31:7
+   |
+31 |     #[topic]
+   |       ^^^^^
+
+error[E0599]: no method named `publish` found for struct `StreamCreated` in the current scope
+   --> src/lib.rs:115:10
+    |
+ 26 |   pub struct StreamCreated {
+    |   ------------------------ method `publish` not found for this struct
+...
+106 | /         StreamCreated {
+107 | |             stream_id: next_id,
+108 | |             sender: stream.sender.clone(),
+109 | |             recipient: stream.recipient.clone(),
+...   |
+115 | |         .publish(&env);
+    | |         -^^^^^^^ method not found in `StreamCreated`
+    | |_________|
+    |
+
+error[E0599]: no method named `publish` found for struct `StreamClaimed` in the current scope
+   --> src/lib.rs:169:10
+    |
+ 41 |   pub struct StreamClaimed {
+    |   ------------------------ method `publish` not found for this struct
+...
+164 | /         StreamClaimed {
+165 | |             stream_id,
+166 | |             recipient: recipient.clone(),
+167 | |             amount,
+168 | |         }
+169 | |         .publish(&env);
+    | |         -^^^^^^^ method not found in `StreamClaimed`
+    | |_________|
+    |
+
+error[E0599]: no method named `publish` found for struct `StreamCanceled` in the current scope
+   --> src/lib.rs:204:10
+    |
+ 51 |   pub struct StreamCanceled {
+    |   ------------------------- method `publish` not found for this struct
+...
+200 | /         StreamCanceled {
+201 | |             stream_id,
+202 | |             sender: sender.clone(),
+203 | |         }
+204 | |         .publish(&env);
+    | |         -^^^^^^^ method not found in `StreamCanceled`
+    | |_________|
+    |
+
+error[E0599]: no function or associated item named `generate` found for struct `soroban_sdk::Address` in the current scope
+   --> src/test.rs:16:27
+    |
+ 16 |     let sender = Address::generate(&env);
+    |                           ^^^^^^^^ function or associated item not found in `soroban_sdk::Address`
+    |
+note: if you're trying to build a new `soroban_sdk::Address` consider using one of the following associated functions:
+      soroban_sdk::Address::from_string
+      soroban_sdk::Address::from_string_bytes
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/address.rs:235:5
+    |
+235 |     pub fn from_string(strkey: &String) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+257 |     pub fn from_string_bytes(strkey: &Bytes) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Address` which provides `generate` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Address;
+    |
+
+error[E0599]: no function or associated item named `generate` found for struct `soroban_sdk::Address` in the current scope
+   --> src/test.rs:17:30
+    |
+ 17 |     let recipient = Address::generate(&env);
+    |                              ^^^^^^^^ function or associated item not found in `soroban_sdk::Address`
+    |
+note: if you're trying to build a new `soroban_sdk::Address` consider using one of the following associated functions:
+      soroban_sdk::Address::from_string
+      soroban_sdk::Address::from_string_bytes
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/address.rs:235:5
+    |
+235 |     pub fn from_string(strkey: &String) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+257 |     pub fn from_string_bytes(strkey: &Bytes) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Address` which provides `generate` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Address;
+    |
+
+error[E0599]: no function or associated item named `generate` found for struct `soroban_sdk::Address` in the current scope
+   --> src/test.rs:18:26
+    |
+ 18 |     let token = Address::generate(&env);
+    |                          ^^^^^^^^ function or associated item not found in `soroban_sdk::Address`
+    |
+note: if you're trying to build a new `soroban_sdk::Address` consider using one of the following associated functions:
+      soroban_sdk::Address::from_string
+      soroban_sdk::Address::from_string_bytes
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/address.rs:235:5
+    |
+235 |     pub fn from_string(strkey: &String) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+257 |     pub fn from_string_bytes(strkey: &Bytes) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Address` which provides `generate` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Address;
+    |
+
+error[E0599]: no method named `to_xdr` found for struct `StreamCreated` in the current scope
+  --> src/test.rs:44:10
+   |
+35 |           std::vec![StreamCreated {
+   |  ___________________-
+36 | |             stream_id,
+37 | |             sender: sender.clone(),
+38 | |             recipient: recipient.clone(),
+...  |
+44 | |         .to_xdr(&env, &contract_id)]
+   | |         -^^^^^^ method not found in `StreamCreated`
+   | |_________|
+   |
+   |
+  ::: src/lib.rs:26:1
+   |
+26 |   pub struct StreamCreated {
+   |   ------------------------ method `to_xdr` not found for this struct
+   |
+   = help: items from traits can only be used if the trait is implemented and in scope
+   = note: the following traits define an item `to_xdr`, perhaps you need to implement one of them:
+           candidate #1: `ToXdr`
+           candidate #2: `WriteXdr`
+
+error[E0599]: no function or associated item named `generate` found for struct `soroban_sdk::Address` in the current scope
+   --> src/test.rs:56:27
+    |
+ 56 |     let sender = Address::generate(&env);
+    |                           ^^^^^^^^ function or associated item not found in `soroban_sdk::Address`
+    |
+note: if you're trying to build a new `soroban_sdk::Address` consider using one of the following associated functions:
+      soroban_sdk::Address::from_string
+      soroban_sdk::Address::from_string_bytes
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/address.rs:235:5
+    |
+235 |     pub fn from_string(strkey: &String) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+257 |     pub fn from_string_bytes(strkey: &Bytes) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Address` which provides `generate` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Address;
+    |
+
+error[E0599]: no function or associated item named `generate` found for struct `soroban_sdk::Address` in the current scope
+   --> src/test.rs:57:30
+    |
+ 57 |     let recipient = Address::generate(&env);
+    |                              ^^^^^^^^ function or associated item not found in `soroban_sdk::Address`
+    |
+note: if you're trying to build a new `soroban_sdk::Address` consider using one of the following associated functions:
+      soroban_sdk::Address::from_string
+      soroban_sdk::Address::from_string_bytes
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/address.rs:235:5
+    |
+235 |     pub fn from_string(strkey: &String) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+257 |     pub fn from_string_bytes(strkey: &Bytes) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Address` which provides `generate` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Address;
+    |
+
+error[E0599]: no function or associated item named `generate` found for struct `soroban_sdk::Address` in the current scope
+   --> src/test.rs:58:26
+    |
+ 58 |     let token = Address::generate(&env);
+    |                          ^^^^^^^^ function or associated item not found in `soroban_sdk::Address`
+    |
+note: if you're trying to build a new `soroban_sdk::Address` consider using one of the following associated functions:
+      soroban_sdk::Address::from_string
+      soroban_sdk::Address::from_string_bytes
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/address.rs:235:5
+    |
+235 |     pub fn from_string(strkey: &String) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+257 |     pub fn from_string_bytes(strkey: &Bytes) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Address` which provides `generate` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Address;
+    |
+
+error[E0599]: no method named `clear` found for struct `soroban_sdk::events::Events` in the current scope
+  --> src/test.rs:74:18
+   |
+74 |     env.events().clear();
+   |                  ^^^^^ method not found in `soroban_sdk::events::Events`
+
+error[E0599]: no method named `set_timestamp` found for struct `soroban_sdk::ledger::Ledger` in the current scope
+   --> src/test.rs:77:18
+    |
+ 77 |     env.ledger().set_timestamp(start_time + 500);
+    |                  ^^^^^^^^^^^^^
+    |
+   ::: /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/testutils.rs:231:8
+    |
+231 |     fn set_timestamp(&self, timestamp: u64);
+    |        ------------- the method is available for `soroban_sdk::ledger::Ledger` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: there is a method `timestamp` with a similar name, but with different arguments
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/ledger.rs:87:5
+    |
+ 87 |     pub fn timestamp(&self) -> u64 {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: trait `Ledger` which provides `set_timestamp` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Ledger;
+    |
+
+error[E0599]: no method named `to_xdr` found for struct `StreamClaimed` in the current scope
+  --> src/test.rs:92:10
+   |
+87 |           std::vec![StreamClaimed {
+   |  ___________________-
+88 | |             stream_id,
+89 | |             recipient: recipient.clone(),
+90 | |             amount: claim_amount,
+91 | |         }
+92 | |         .to_xdr(&env, &contract_id)]
+   | |         -^^^^^^ method not found in `StreamClaimed`
+   | |_________|
+   |
+   |
+  ::: src/lib.rs:41:1
+   |
+41 |   pub struct StreamClaimed {
+   |   ------------------------ method `to_xdr` not found for this struct
+   |
+   = help: items from traits can only be used if the trait is implemented and in scope
+   = note: the following traits define an item `to_xdr`, perhaps you need to implement one of them:
+           candidate #1: `ToXdr`
+           candidate #2: `WriteXdr`
+
+error[E0599]: no function or associated item named `generate` found for struct `soroban_sdk::Address` in the current scope
+   --> src/test.rs:104:27
+    |
+104 |     let sender = Address::generate(&env);
+    |                           ^^^^^^^^ function or associated item not found in `soroban_sdk::Address`
+    |
+note: if you're trying to build a new `soroban_sdk::Address` consider using one of the following associated functions:
+      soroban_sdk::Address::from_string
+      soroban_sdk::Address::from_string_bytes
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/address.rs:235:5
+    |
+235 |     pub fn from_string(strkey: &String) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+257 |     pub fn from_string_bytes(strkey: &Bytes) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Address` which provides `generate` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Address;
+    |
+
+error[E0599]: no function or associated item named `generate` found for struct `soroban_sdk::Address` in the current scope
+   --> src/test.rs:105:30
+    |
+105 |     let recipient = Address::generate(&env);
+    |                              ^^^^^^^^ function or associated item not found in `soroban_sdk::Address`
+    |
+note: if you're trying to build a new `soroban_sdk::Address` consider using one of the following associated functions:
+      soroban_sdk::Address::from_string
+      soroban_sdk::Address::from_string_bytes
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/address.rs:235:5
+    |
+235 |     pub fn from_string(strkey: &String) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+257 |     pub fn from_string_bytes(strkey: &Bytes) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Address` which provides `generate` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Address;
+    |
+
+error[E0599]: no function or associated item named `generate` found for struct `soroban_sdk::Address` in the current scope
+   --> src/test.rs:106:26
+    |
+106 |     let token = Address::generate(&env);
+    |                          ^^^^^^^^ function or associated item not found in `soroban_sdk::Address`
+    |
+note: if you're trying to build a new `soroban_sdk::Address` consider using one of the following associated functions:
+      soroban_sdk::Address::from_string
+      soroban_sdk::Address::from_string_bytes
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/address.rs:235:5
+    |
+235 |     pub fn from_string(strkey: &String) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+257 |     pub fn from_string_bytes(strkey: &Bytes) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Address` which provides `generate` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Address;
+    |
+
+error[E0599]: no method named `clear` found for struct `soroban_sdk::events::Events` in the current scope
+   --> src/test.rs:122:18
+    |
+122 |     env.events().clear();
+    |                  ^^^^^ method not found in `soroban_sdk::events::Events`
+
+error[E0599]: no method named `to_xdr` found for struct `StreamCanceled` in the current scope
+   --> src/test.rs:134:10
+    |
+130 |           std::vec![StreamCanceled {
+    |  ___________________-
+131 | |             stream_id,
+132 | |             sender: sender.clone(),
+133 | |         }
+134 | |         .to_xdr(&env, &contract_id)]
+    | |         -^^^^^^ method not found in `StreamCanceled`
+    | |_________|
+    |
+    |
+   ::: src/lib.rs:51:1
+    |
+ 51 |   pub struct StreamCanceled {
+    |   ------------------------- method `to_xdr` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `to_xdr`, perhaps you need to implement one of them:
+            candidate #1: `ToXdr`
+            candidate #2: `WriteXdr`
+
+error[E0599]: no function or associated item named `generate` found for struct `soroban_sdk::Address` in the current scope
+   --> src/test.rs:146:27
+    |
+146 |     let sender = Address::generate(&env);
+    |                           ^^^^^^^^ function or associated item not found in `soroban_sdk::Address`
+    |
+note: if you're trying to build a new `soroban_sdk::Address` consider using one of the following associated functions:
+      soroban_sdk::Address::from_string
+      soroban_sdk::Address::from_string_bytes
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/address.rs:235:5
+    |
+235 |     pub fn from_string(strkey: &String) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+257 |     pub fn from_string_bytes(strkey: &Bytes) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Address` which provides `generate` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Address;
+    |
+
+error[E0599]: no function or associated item named `generate` found for struct `soroban_sdk::Address` in the current scope
+   --> src/test.rs:147:30
+    |
+147 |     let recipient = Address::generate(&env);
+    |                              ^^^^^^^^ function or associated item not found in `soroban_sdk::Address`
+    |
+note: if you're trying to build a new `soroban_sdk::Address` consider using one of the following associated functions:
+      soroban_sdk::Address::from_string
+      soroban_sdk::Address::from_string_bytes
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/address.rs:235:5
+    |
+235 |     pub fn from_string(strkey: &String) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+257 |     pub fn from_string_bytes(strkey: &Bytes) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Address` which provides `generate` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Address;
+    |
+
+error[E0599]: no function or associated item named `generate` found for struct `soroban_sdk::Address` in the current scope
+   --> src/test.rs:148:26
+    |
+148 |     let token = Address::generate(&env);
+    |                          ^^^^^^^^ function or associated item not found in `soroban_sdk::Address`
+    |
+note: if you're trying to build a new `soroban_sdk::Address` consider using one of the following associated functions:
+      soroban_sdk::Address::from_string
+      soroban_sdk::Address::from_string_bytes
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/address.rs:235:5
+    |
+235 |     pub fn from_string(strkey: &String) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+257 |     pub fn from_string_bytes(strkey: &Bytes) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Address` which provides `generate` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Address;
+    |
+
+error[E0599]: no method named `clear` found for struct `soroban_sdk::events::Events` in the current scope
+   --> src/test.rs:164:18
+    |
+164 |     env.events().clear();
+    |                  ^^^^^ method not found in `soroban_sdk::events::Events`
+
+error[E0599]: no method named `clear` found for struct `soroban_sdk::events::Events` in the current scope
+   --> src/test.rs:170:18
+    |
+170 |     env.events().clear();
+    |                  ^^^^^ method not found in `soroban_sdk::events::Events`
+
+error[E0308]: mismatched types
+   --> src/test.rs:176:36
+    |
+176 |     assert_eq!(env.events().all(), std::vec![]);
+    |                                    ^^^^^^^^^^^ expected `Vec<(Address, Vec<Val>, Val)>`, found `Vec<_>`
+    |
+    = note: `test::std::vec::Vec<_>` and `Vec<(Address, Vec<Val>, Val)>` have similar names, but are actually distinct types
+note: `test::std::vec::Vec<_>` is defined in crate `alloc`
+   --> /home/ayush99336/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:438:1
+    |
+438 | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: `Vec<(Address, Vec<Val>, Val)>` is defined in crate `soroban_sdk`
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/vec.rs:88:1
+    |
+ 88 | pub struct Vec<T> {
+    | ^^^^^^^^^^^^^^^^^
+    = note: this error originates in the macro `std::vec` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no function or associated item named `generate` found for struct `soroban_sdk::Address` in the current scope
+   --> src/test.rs:190:27
+    |
+190 |     let sender = Address::generate(&env);
+    |                           ^^^^^^^^ function or associated item not found in `soroban_sdk::Address`
+    |
+note: if you're trying to build a new `soroban_sdk::Address` consider using one of the following associated functions:
+      soroban_sdk::Address::from_string
+      soroban_sdk::Address::from_string_bytes
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/address.rs:235:5
+    |
+235 |     pub fn from_string(strkey: &String) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+257 |     pub fn from_string_bytes(strkey: &Bytes) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Address` which provides `generate` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Address;
+    |
+
+error[E0599]: no function or associated item named `generate` found for struct `soroban_sdk::Address` in the current scope
+   --> src/test.rs:191:30
+    |
+191 |     let recipient = Address::generate(&env);
+    |                              ^^^^^^^^ function or associated item not found in `soroban_sdk::Address`
+    |
+note: if you're trying to build a new `soroban_sdk::Address` consider using one of the following associated functions:
+      soroban_sdk::Address::from_string
+      soroban_sdk::Address::from_string_bytes
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/address.rs:235:5
+    |
+235 |     pub fn from_string(strkey: &String) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+257 |     pub fn from_string_bytes(strkey: &Bytes) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Address` which provides `generate` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Address;
+    |
+
+error[E0599]: no function or associated item named `generate` found for struct `soroban_sdk::Address` in the current scope
+   --> src/test.rs:192:26
+    |
+192 |     let token = Address::generate(&env);
+    |                          ^^^^^^^^ function or associated item not found in `soroban_sdk::Address`
+    |
+note: if you're trying to build a new `soroban_sdk::Address` consider using one of the following associated functions:
+      soroban_sdk::Address::from_string
+      soroban_sdk::Address::from_string_bytes
+   --> /home/ayush99336/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-21.7.7/src/address.rs:235:5
+    |
+235 |     pub fn from_string(strkey: &String) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+257 |     pub fn from_string_bytes(strkey: &Bytes) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Address` which provides `generate` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use soroban_sdk::testutils::Address;
+    |
+
+Some errors have detailed explanations: E0308, E0432, E0599.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `stellar-stream` (lib test) due to 35 previous errors
