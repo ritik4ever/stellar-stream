@@ -14,6 +14,7 @@ import {
   initSoroban,
   refreshStreamStatuses,
   syncStreams,
+  updateStreamStartAt,
   StreamInput,
 } from "./services/streamStore";
 
@@ -136,6 +137,33 @@ app.post("/api/streams/:id/cancel", async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error("Failed to cancel stream:", err);
     res.status(500).json({ error: err.message || "Failed to cancel stream." });
+  }
+});
+
+app.patch("/api/streams/:id/start-time", (req: Request, res: Response) => {
+  const newStartAt = toNumber(req.body?.startAt);
+
+  if (newStartAt === null || newStartAt <= 0) {
+    res.status(400).json({ error: "startAt must be a valid UNIX timestamp in seconds." });
+    return;
+  }
+
+  if (Math.floor(newStartAt) <= Math.floor(Date.now() / 1000)) {
+    res.status(400).json({ error: "startAt must be in the future." });
+    return;
+  }
+
+  try {
+    const stream = updateStreamStartAt(req.params.id, Math.floor(newStartAt));
+    res.json({
+      data: {
+        ...stream,
+        progress: calculateProgress(stream),
+      },
+    });
+  } catch (err: any) {
+    const statusCode = (err as any).statusCode ?? 500;
+    res.status(statusCode).json({ error: err.message || "Failed to update stream start time." });
   }
 });
 

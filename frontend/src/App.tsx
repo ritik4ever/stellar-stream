@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { CreateStreamForm } from "./components/CreateStreamForm";
+import { EditStartTimeModal } from "./components/EditStartTimeModal";
 import { IssueBacklog } from "./components/IssueBacklog";
 import { StreamsTable } from "./components/StreamsTable";
-import { cancelStream, createStream, listOpenIssues, listStreams } from "./services/api";
+import {
+  cancelStream,
+  createStream,
+  listOpenIssues,
+  listStreams,
+  updateStreamStartAt,
+} from "./services/api";
 import { OpenIssue, Stream } from "./types/stream";
 
 // Derive a user-friendly hint string for global (non-form) errors.
@@ -25,6 +32,8 @@ function App() {
   const [issues, setIssues] = useState<OpenIssue[]>([]);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  // The stream whose start-time is currently being edited (null = modal closed)
+  const [editingStream, setEditingStream] = useState<Stream | null>(null);
 
   async function refreshStreams(): Promise<void> {
     const data = await listStreams();
@@ -43,7 +52,7 @@ function App() {
       } catch (err) {
         if (!active) return;
         setGlobalError(
-          err instanceof Error ? describeGlobalError(err.message) : "Failed to load initial data."
+          err instanceof Error ? describeGlobalError(err.message) : "Failed to load initial data.",
         );
       }
     }
@@ -94,9 +103,14 @@ function App() {
       setGlobalError(
         err instanceof Error
           ? describeGlobalError(err.message)
-          : "Failed to cancel the stream. Please try again."
+          : "Failed to cancel the stream. Please try again.",
       );
     }
+  }
+
+  async function handleUpdateStartTime(streamId: string, newStartAt: number): Promise<void> {
+    await updateStreamStartAt(streamId, newStartAt);
+    await refreshStreams();
   }
 
   return (
@@ -105,7 +119,8 @@ function App() {
         <p className="eyebrow">Soroban-native MVP</p>
         <h1>StellarStream</h1>
         <p className="hero-copy">
-          Continuous on-chain style payments for salaries, subscriptions, and freelancer payouts on Stellar.
+          Continuous on-chain style payments for salaries, subscriptions, and freelancer payouts on
+          Stellar.
         </p>
       </header>
 
@@ -131,7 +146,9 @@ function App() {
       {/* Global (cancel / bootstrap) errors shown as a dismissible banner */}
       {globalError && (
         <div className="error-banner" role="alert" aria-live="assertive">
-          <span className="error-banner__icon" aria-hidden>✕</span>
+          <span className="error-banner__icon" aria-hidden>
+            ✕
+          </span>
           <span>{globalError}</span>
           <button
             className="error-banner__dismiss"
@@ -147,10 +164,23 @@ function App() {
       <section className="layout-grid">
         {/* formError is passed into the form so the create-stream card can show it inline */}
         <CreateStreamForm onCreate={handleCreate} apiError={formError} />
-        <StreamsTable streams={streams} onCancel={handleCancel} />
+        <StreamsTable
+          streams={streams}
+          onCancel={handleCancel}
+          onEditStartTime={(stream) => setEditingStream(stream)}
+        />
       </section>
 
       <IssueBacklog issues={issues} />
+
+      {/* Edit start-time modal — only rendered when a stream is being edited */}
+      {editingStream && (
+        <EditStartTimeModal
+          stream={editingStream}
+          onConfirm={handleUpdateStartTime}
+          onClose={() => setEditingStream(null)}
+        />
+      )}
     </div>
   );
 }

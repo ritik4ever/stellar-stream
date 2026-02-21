@@ -34,6 +34,19 @@ export async function cancelStream(streamId: string): Promise<Stream> {
   return body.data;
 }
 
+export async function updateStreamStartAt(
+  streamId: string,
+  startAt: number,
+): Promise<Stream> {
+  const response = await fetch(`${API_BASE}/streams/${streamId}/start-time`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ startAt }),
+  });
+  const body = await parseResponse<{ data: Stream }>(response);
+  return body.data;
+}
+
 export async function listOpenIssues(): Promise<OpenIssue[]> {
   const response = await fetch(`${API_BASE}/open-issues`);
   const body = await parseResponse<{ data: OpenIssue[] }>(response);

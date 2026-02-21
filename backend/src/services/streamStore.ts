@@ -243,4 +243,3 @@ export async function cancelStream(id: string): Promise<StreamRecord | undefined
   stream.canceledAt = nowInSeconds();
   streams.set(id, stream);
   return stream;
-}

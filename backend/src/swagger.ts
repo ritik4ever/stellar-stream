@@ -311,6 +311,89 @@ export const swaggerDocument = {
                 },
             },
         },
+        "/api/streams/{id}/start-time": {
+            patch: {
+                summary: "Update start time of a scheduled stream",
+                description:
+                    "Updates the startAt timestamp of a stream. Only streams with status **scheduled** can be edited. Active, completed, and canceled streams will be rejected with a 422 error.",
+                parameters: [
+                    {
+                        name: "id",
+                        in: "path",
+                        required: true,
+                        description: "The unique ID of the stream to update.",
+                        schema: {
+                            type: "string",
+                        },
+                    },
+                ],
+                requestBody: {
+                    required: true,
+                    content: {
+                        "application/json": {
+                            schema: {
+                                type: "object",
+                                required: ["startAt"],
+                                properties: {
+                                    startAt: {
+                                        type: "number",
+                                        description: "New start time as a UNIX timestamp in seconds. Must be in the future.",
+                                        example: 1716400000,
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+                responses: {
+                    "200": {
+                        description: "Start time updated successfully.",
+                        content: {
+                            "application/json": {
+                                schema: {
+                                    type: "object",
+                                    properties: {
+                                        data: {
+                                            $ref: "#/components/schemas/Stream",
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    "400": {
+                        description: "Missing or invalid startAt value.",
+                        content: {
+                            "application/json": {
+                                schema: {
+                                    $ref: "#/components/schemas/Error",
+                                },
+                            },
+                        },
+                    },
+                    "404": {
+                        description: "Stream not found.",
+                        content: {
+                            "application/json": {
+                                schema: {
+                                    $ref: "#/components/schemas/Error",
+                                },
+                            },
+                        },
+                    },
+                    "422": {
+                        description: "Stream is not in scheduled status and cannot be edited.",
+                        content: {
+                            "application/json": {
+                                schema: {
+                                    $ref: "#/components/schemas/Error",
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
         "/api/open-issues": {
             get: {
                 summary: "Get Open Issues",
