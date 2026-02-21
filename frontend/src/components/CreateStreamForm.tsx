@@ -1,138 +1,377 @@
-import { FormEvent, useEffect,useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { CreateStreamPayload } from "../types/stream";
+import {
+  FieldErrors,
+  FormValues,
+  isStellarAccount,
+  validateForm,
+  isFormValid,
+} from "../hooks/useFormValidation";
 
 interface CreateStreamFormProps {
   onCreate: (payload: CreateStreamPayload) => Promise<void>;
+  apiError?: string | null;
 }
 
-export function CreateStreamForm({ onCreate }: CreateStreamFormProps) {
-  const [sender, setSender] = useState("GDSENDEREXAMPLEDEMO0000000000000000000000000000000000");
-  const [recipient, setRecipient] = useState("GDRECIPIENTDEMO000000000000000000000000000000000000");
-  const [assetCode, setAssetCode] = useState("USDC");
-  const [totalAmount, setTotalAmount] = useState("150");
-  const [durationHours, setDurationHours] = useState("24");
-  const [startInMinutes, setStartInMinutes] = useState("0");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [allowedAssets, setAllowedAssets] = useState<string[]>([]);
+// Derive a user-friendly hint from a raw API error message.
+function humaniseApiError(raw: string): { title: string; hint: string } {
+  const lower = raw.toLowerCase();
 
+  if (lower.includes("sender") || lower.includes("recipient")) {
+    return {
+      title: "Invalid account ID",
+      hint: 'Double-check that both account IDs start with "G" and are exactly 56 characters. You can copy them from Stellar Laboratory.',
+    };
+  }
+  if (lower.includes("asset") || lower.includes("assetcode")) {
+    return {
+      title: "Invalid asset code",
+      hint: 'Asset codes must be 1–12 alphanumeric characters. Common examples: USDC, XLM, AQUA.',
+    };
+  }
+  if (lower.includes("amount")) {
+    return {
+      title: "Invalid amount",
+      hint: "The total amount must be a positive number. Check that you haven't entered zero or a negative value.",
+    };
+  }
+  if (lower.includes("duration") || lower.includes("seconds")) {
+    return {
+      title: "Invalid duration",
+      hint: "Stream duration must be at least 1 hour (3 600 seconds). Increase the duration and try again.",
+    };
+  }
+  if (lower.includes("not found")) {
+    return {
+      title: "Stream not found",
+      hint: "This stream may have already been cancelled or never existed. Refresh the page to see the latest state.",
+    };
+  }
+  if (lower.includes("network") || lower.includes("fetch")) {
+    return {
+      title: "Network error",
+      hint: "Could not reach the StellarStream API. Ensure the backend is running and your network connection is stable.",
+    };
+  }
+
+  return {
+    title: "Something went wrong",
+    hint: raw,
+  };
+}
+
+// StellarAccountStatus: live character-count + format hint shown under account fields.
+function AccountHint({ value }: { value: string }) {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+
+  const len = trimmed.length;
+  const valid = isStellarAccount(trimmed);
+
+  if (valid) {
+    return (
+      <span className="field-hint field-hint--ok" aria-live="polite">
+        ✓ Valid Stellar account ({len}/56)
+      </span>
+    );
+  }
+
+  if (!trimmed.startsWith("G")) {
+    return (
+      <span className="field-hint field-hint--warn" aria-live="polite">
+        Account IDs must start with the letter G ({len}/56 chars)
+      </span>
+    );
+  }
+
+  return (
+    <span className="field-hint field-hint--warn" aria-live="polite">
+      {len < 56 ? `${56 - len} more character${56 - len !== 1 ? "s" : ""} needed` : "Too long — must be exactly 56 characters"}{" "}
+      ({len}/56)
+    </span>
+  );
+}
+
+const INITIAL_VALUES: FormValues = {
+  sender: "",
+  recipient: "",
+  assetCode: "USDC",
+  totalAmount: "150",
+  durationHours: "24",
+  startInMinutes: "0",
+};
+
+export function CreateStreamForm({ onCreate, apiError }: CreateStreamFormProps) {
+  const [values, setValues] = useState<FormValues>(INITIAL_VALUES);
+  const [touched, setTouched] = useState<Partial<Record<keyof FormValues, boolean>>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+
+  // whitelist feature 
+  const [allowedAssets, setAllowedAssets] = useState<string[]>([]);
   useEffect(() => {
     fetch("/api/allowed-assets")
       .then((res) => res.json())
       .then((json) => {
         const assets: string[] = json.data ?? [];
         setAllowedAssets(assets);
-        if (assets.length > 0) setAssetCode(assets[0]);
+        if (assets.length > 0) {
+          setValues((prev) => ({ ...prev, assetCode: assets[0] }));
+        }
       })
       .catch(() => {
-        // fall back.
       });
   }, []);
 
+  // Run validation on current values
+  const errors: FieldErrors = validateForm(values);
+  const formValid = isFormValid(errors);
+
+  function set(field: keyof FormValues) {
+    return (e: React.ChangeEvent<HTMLInputElement>) => {
+      setValues((prev) => ({ ...prev, [field]: e.target.value }));
+    };
+  }
+
+  function blur(field: keyof FormValues) {
+    return () => setTouched((prev) => ({ ...prev, [field]: true }));
+  }
+
+  // Show an error for a field only after the user has touched it (or tried to submit)
+  function fieldError(field: keyof FormValues): string | undefined {
+    return (touched[field] || submitAttempted) ? errors[field] : undefined;
+  }
+
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    setIsSubmitting(true);
+    setSubmitAttempted(true);
 
+    if (!formValid) return;
+
+    setIsSubmitting(true);
     try {
       const now = Math.floor(Date.now() / 1000);
-      const offsetMinutes = Number(startInMinutes);
+      const offsetMinutes = Number(values.startInMinutes);
       const startAt = offsetMinutes > 0 ? now + Math.floor(offsetMinutes * 60) : undefined;
 
       await onCreate({
-        sender: sender.trim(),
-        recipient: recipient.trim(),
-        assetCode: assetCode.trim().toUpperCase(),
-        totalAmount: Number(totalAmount),
-        durationSeconds: Math.floor(Number(durationHours) * 3600),
+        sender: values.sender.trim(),
+        recipient: values.recipient.trim(),
+        assetCode: values.assetCode.trim().toUpperCase(),
+        totalAmount: Number(values.totalAmount),
+        durationSeconds: Math.floor(Number(values.durationHours) * 3600),
         startAt,
       });
+
+      // Reset on success
+      setValues(INITIAL_VALUES);
+      setTouched({});
+      setSubmitAttempted(false);
     } finally {
       setIsSubmitting(false);
     }
   }
 
- return (
-    <form className="card form-grid" onSubmit={handleSubmit}>
+  const parsedApiError = apiError ? humaniseApiError(apiError) : null;
+
+  return (
+    <form className="card form-grid" onSubmit={handleSubmit} noValidate>
       <h2>Create Stream</h2>
 
-      <label>
-        Sender Account
-        <input value={sender} onChange={(e) => setSender(e.target.value)} required />
-      </label>
+      {/* API error banner — only shown for API-level errors */}
+      {parsedApiError && (
+        <div className="api-error-box" role="alert" aria-live="assertive">
+          <div className="api-error-box__title">
+            <span className="api-error-box__icon" aria-hidden>⚠</span>
+            {parsedApiError.title}
+          </div>
+          <div className="api-error-box__hint">{parsedApiError.hint}</div>
+        </div>
+      )}
 
-      <label>
-        Recipient Account
-        <input value={recipient} onChange={(e) => setRecipient(e.target.value)} required />
-      </label>
+      {/* Sender */}
+      <div className={`field-group${fieldError("sender") ? " field-group--error" : ""}`}>
+        <label htmlFor="stream-sender">
+          Sender Account
+          <span className="field-required" aria-hidden> *</span>
+        </label>
+        <input
+          id="stream-sender"
+          type="text"
+          value={values.sender}
+          onChange={set("sender")}
+          onBlur={blur("sender")}
+          placeholder="G…  (56-character Stellar public key)"
+          aria-describedby={fieldError("sender") ? "sender-error" : "sender-hint"}
+          aria-invalid={!!fieldError("sender")}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <AccountHint value={values.sender} />
+        {fieldError("sender") && (
+          <span id="sender-error" className="field-error" role="alert">
+            {fieldError("sender")}
+          </span>
+        )}
+      </div>
+
+      {/* Recipient */}
+      <div className={`field-group${fieldError("recipient") ? " field-group--error" : ""}`}>
+        <label htmlFor="stream-recipient">
+          Recipient Account
+          <span className="field-required" aria-hidden> *</span>
+        </label>
+        <input
+          id="stream-recipient"
+          type="text"
+          value={values.recipient}
+          onChange={set("recipient")}
+          onBlur={blur("recipient")}
+          placeholder="G…  (56-character Stellar public key)"
+          aria-describedby={fieldError("recipient") ? "recipient-error" : "recipient-hint"}
+          aria-invalid={!!fieldError("recipient")}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <AccountHint value={values.recipient} />
+        {fieldError("recipient") && (
+          <span id="recipient-error" className="field-error" role="alert">
+            {fieldError("recipient")}
+          </span>
+        )}
+      </div>
 
       <div className="row">
-        <label>
-          Asset
-          {allowedAssets.length > 0 ? (
-            <>
-              <select
-                value={assetCode}
-                onChange={(e) => setAssetCode(e.target.value)}
-                required
-              >
-                {allowedAssets.map((a) => (
-                  <option key={a} value={a}>
-                    {a}
-                  </option>
-                ))}
-              </select>
-              <span className="field-hint">Allowed: {allowedAssets.join(", ")}</span>
-            </>
-          ) : (
-            <input
-              value={assetCode}
-              onChange={(e) => setAssetCode(e.target.value)}
-              placeholder="e.g. USDC"
-              required
-            />
-          )}
-        </label>
-
-        <label>
-          Total Amount
+        {/* Asset Code */}
+        <div className={`field-group${fieldError("assetCode") ? " field-group--error" : ""}`}>
+          <label htmlFor="stream-asset">
+            Asset Code
+            <span className="field-required" aria-hidden> *</span>
+          </label>
           <input
+            id="stream-asset"
+            type="text"
+            value={values.assetCode}
+            onChange={set("assetCode")}
+            onBlur={blur("assetCode")}
+            placeholder="USDC"
+            maxLength={12}
+            aria-describedby={fieldError("assetCode") ? "asset-error" : undefined}
+            aria-invalid={!!fieldError("assetCode")}
+          />
+          {fieldError("assetCode") && (
+            <span id="asset-error" className="field-error" role="alert">
+              {fieldError("assetCode")}
+            </span>
+          )}
+        </div>
+
+        {/* Total Amount */}
+        <div className={`field-group${fieldError("totalAmount") ? " field-group--error" : ""}`}>
+          <label htmlFor="stream-amount">
+            Total Amount
+            <span className="field-required" aria-hidden> *</span>
+          </label>
+          <input
+            id="stream-amount"
             type="number"
             min="0.000001"
             step="0.000001"
-            value={totalAmount}
-            onChange={(e) => setTotalAmount(e.target.value)}
-            required
+            value={values.totalAmount}
+            onChange={set("totalAmount")}
+            onBlur={blur("totalAmount")}
+            onKeyDown={(e) => {
+              // Block 'e', 'E', '+' which browsers allow in type=number
+              if (["e", "E", "+"].includes(e.key)) e.preventDefault();
+            }}
+            aria-describedby={fieldError("totalAmount") ? "amount-error" : undefined}
+            aria-invalid={!!fieldError("totalAmount")}
           />
-        </label>
+          {fieldError("totalAmount") && (
+            <span id="amount-error" className="field-error" role="alert">
+              {fieldError("totalAmount")}
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="row">
-        <label>
-          Duration (hours)
+        {/* Duration */}
+        <div className={`field-group${fieldError("durationHours") ? " field-group--error" : ""}`}>
+          <label htmlFor="stream-duration">
+            Duration (hours)
+            <span className="field-required" aria-hidden> *</span>
+          </label>
           <input
+            id="stream-duration"
             type="number"
             min="1"
             step="1"
-            value={durationHours}
-            onChange={(e) => setDurationHours(e.target.value)}
-            required
+            value={values.durationHours}
+            onChange={set("durationHours")}
+            onBlur={blur("durationHours")}
+            onKeyDown={(e) => {
+              if (["e", "E", "+", "-", "."].includes(e.key)) e.preventDefault();
+            }}
+            aria-describedby={fieldError("durationHours") ? "duration-error" : undefined}
+            aria-invalid={!!fieldError("durationHours")}
           />
-        </label>
-        <label>
-          Start In (minutes)
+          {fieldError("durationHours") && (
+            <span id="duration-error" className="field-error" role="alert">
+              {fieldError("durationHours")}
+            </span>
+          )}
+        </div>
+
+        {/* Start In */}
+        <div className={`field-group${fieldError("startInMinutes") ? " field-group--error" : ""}`}>
+          <label htmlFor="stream-start">
+            Start In (minutes)
+            <span className="field-required" aria-hidden> *</span>
+          </label>
           <input
+            id="stream-start"
             type="number"
             min="0"
             step="1"
-            value={startInMinutes}
-            onChange={(e) => setStartInMinutes(e.target.value)}
-            required
+            value={values.startInMinutes}
+            onChange={set("startInMinutes")}
+            onBlur={blur("startInMinutes")}
+            onKeyDown={(e) => {
+              if (["e", "E", "+", "-", "."].includes(e.key)) e.preventDefault();
+            }}
+            aria-describedby={
+              fieldError("startInMinutes") ? "start-error" : "start-hint"
+            }
+            aria-invalid={!!fieldError("startInMinutes")}
           />
-        </label>
+          <span id="start-hint" className="field-hint">
+            Enter 0 to start immediately
+          </span>
+          {fieldError("startInMinutes") && (
+            <span id="start-error" className="field-error" role="alert">
+              {fieldError("startInMinutes")}
+            </span>
+          )}
+        </div>
       </div>
 
-      <button className="btn-primary" type="submit" disabled={isSubmitting}>
-        {isSubmitting ? "Creating..." : "Create Stream"}
+      {/* Submit */}
+      <button
+        className="btn-primary"
+        type="submit"
+        disabled={isSubmitting || (submitAttempted && !formValid)}
+        aria-busy={isSubmitting}
+      >
+        {isSubmitting ? "Creating…" : "Create Stream"}
       </button>
+
+      {/* Summary validation notice shown after first submit attempt */}
+      {submitAttempted && !formValid && (
+        <p className="form-summary-error" role="alert">
+          Please fix the errors above before submitting.
+        </p>
+      )}
     </form>
   );
 }
