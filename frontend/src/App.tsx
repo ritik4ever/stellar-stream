@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { CreateStreamForm } from "./components/CreateStreamForm";
+import { EditStartTimeModal } from "./components/EditStartTimeModal";
 import { IssueBacklog } from "./components/IssueBacklog";
 import { StreamsTable } from "./components/StreamsTable";
-import { cancelStream, createStream, listOpenIssues, listStreams } from "./services/api";
+import {
+  cancelStream,
+  createStream,
+  listOpenIssues,
+  listStreams,
+  updateStreamStartAt,
+} from "./services/api";
 import { OpenIssue, Stream } from "./types/stream";
 
 // Derive a user-friendly hint string for global (non-form) errors.
@@ -99,13 +106,19 @@ function App() {
     }
   }
 
+  async function handleUpdateStartTime(streamId: string, newStartAt: number): Promise<void> {
+    await updateStreamStartAt(streamId, newStartAt);
+    await refreshStreams();
+  }
+
   return (
     <div className="app-shell">
       <header className="hero">
         <p className="eyebrow">Soroban-native MVP</p>
         <h1>StellarStream</h1>
         <p className="hero-copy">
-          Continuous on-chain style payments for salaries, subscriptions, and freelancer payouts on Stellar.
+          Continuous on-chain style payments for salaries, subscriptions, and freelancer payouts on
+          Stellar.
         </p>
       </header>
 
@@ -151,6 +164,15 @@ function App() {
       </section>
 
       <IssueBacklog issues={issues} />
+
+      {/* Edit start-time modal — only rendered when a stream is being edited */}
+      {editingStream && (
+        <EditStartTimeModal
+          stream={editingStream}
+          onConfirm={handleUpdateStartTime}
+          onClose={() => setEditingStream(null)}
+        />
+      )}
     </div>
   );
 }

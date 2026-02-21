@@ -13,6 +13,7 @@ import {
   initSoroban,
   refreshStreamStatuses,
   syncStreams,
+  updateStreamStartAt,
   StreamInput,
 } from "./services/streamStore";
 
@@ -148,8 +149,14 @@ app.get("/api/open-issues", async (_req: Request, res: Response) => {
   }
 });
 
-app.get("/api/allowed-assets", (_req: Request, res: Response) => {
-  res.json({ data: ALLOWED_ASSETS });
+app.get("/api/open-issues", async (_req: Request, res: Response) => {
+  try {
+    const data = await fetchOpenIssues();
+    res.json({ data });
+  } catch (err: any) {
+    console.error("Failed to fetch open issues from proxy:", err);
+    res.status(500).json({ error: err.message || "Failed to fetch open issues." });
+  }
 });
 
 
