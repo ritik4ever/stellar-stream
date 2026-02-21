@@ -9,6 +9,7 @@ import {
   getStream,
   listStreams,
   initSoroban,
+  refreshStreamStatuses,
   syncStreams,
   StreamInput,
 } from "./services/streamStore";
@@ -154,12 +155,18 @@ app.get("/api/open-issues", (_req: Request, res: Response) => {
   res.json({ data: openIssues });
 });
 
+const STATUS_REFRESH_INTERVAL_MS = 60 * 1000;
+
 async function startServer() {
   await initSoroban();
   await syncStreams();
 
   app.listen(port, () => {
     console.log(`StellarStream API listening on http://localhost:${port}`);
+    setInterval(() => {
+      const n = refreshStreamStatuses();
+      console.log(`Status refresh job run, ${n} stream(s) updated.`);
+    }, STATUS_REFRESH_INTERVAL_MS);
   });
 }
 
