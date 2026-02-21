@@ -21,6 +21,7 @@ export interface StreamRecord {
   startAt: number;
   createdAt: number;
   canceledAt?: number;
+  completedAt?: number;
 }
 
 export interface StreamProgress {
@@ -60,15 +61,15 @@ function computeStatus(stream: StreamRecord, at: number): StreamStatus {
   if (stream.canceledAt !== undefined) {
     return "canceled";
   }
-
+  if (stream.completedAt !== undefined) {
+    return "completed";
+  }
   if (at < stream.startAt) {
     return "scheduled";
   }
-
   if (at >= stream.startAt + stream.durationSeconds) {
     return "completed";
   }
-
   return "active";
 }
 
@@ -208,6 +209,20 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
 
   streams.set(stream.id, stream);
   return stream;
+}
+
+export function refreshStreamStatuses(): number {
+  const now = nowInSeconds();
+  let updated = 0;
+  for (const stream of streams.values()) {
+    if (stream.canceledAt !== undefined || stream.completedAt !== undefined) continue;
+    if (now >= stream.startAt + stream.durationSeconds) {
+      stream.completedAt = now;
+      streams.set(stream.id, stream);
+      updated += 1;
+    }
+  }
+  return updated;
 }
 
 export function listStreams(): StreamRecord[] {

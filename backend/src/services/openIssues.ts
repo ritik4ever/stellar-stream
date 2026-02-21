@@ -7,45 +7,48 @@ export interface OpenIssue {
   points: 100 | 150 | 200;
 }
 
-export const openIssues: OpenIssue[] = [
-  {
-    id: "soroban-onchain-persistence",
-    title: "Persist stream lifecycle on Soroban mainnet/testnet",
-    labels: ["stellar-wave", "enhancement", "soroban"],
-    summary: "Move stream creation and cancellation from in-memory API storage to on-chain contract calls.",
-    complexity: "High",
-    points: 200,
-  },
-  {
-    id: "freighter-wallet-signing",
-    title: "Add Freighter wallet signing flow",
-    labels: ["stellar-wave", "enhancement", "frontend", "wallet"],
-    summary: "Connect sender accounts and sign stream transactions directly from the UI.",
-    complexity: "Medium",
-    points: 150,
-  },
-  {
-    id: "claim-with-token-transfer",
-    title: "Enable token transfer claims in contract",
-    labels: ["stellar-wave", "enhancement", "smart-contract"],
-    summary: "Integrate token transfer client in `claim` and transfer vested balances to recipients.",
-    complexity: "High",
-    points: 200,
-  },
-  {
-    id: "indexer-history",
-    title: "Stream activity history with indexer",
-    labels: ["stellar-wave", "enhancement", "backend", "analytics"],
-    summary: "Track events for stream created, canceled, and claimed using a lightweight indexer service.",
-    complexity: "Medium",
-    points: 150,
-  },
-  {
-    id: "ui-form-validation-polish",
-    title: "Improve form validation and wallet address checks",
-    labels: ["good first issue", "frontend", "stellar-wave"],
-    summary: "Add client-side Stellar address validation and friendlier field errors.",
-    complexity: "Trivial",
-    points: 100,
-  },
-];
+export async function fetchOpenIssues(): Promise<OpenIssue[]> {
+  try {
+    const response = await fetch("https://api.github.com/repos/ritik4ever/stellar-stream/issues?state=open", {
+      headers: {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "StellarStream-Backend"
+      }
+    });
+
+    if (!response.ok) {
+      console.error(`Failed to fetch issues: ${response.status} ${response.statusText}`);
+      return [];
+    }
+
+    const issues = (await response.json()) as any[];
+
+    return issues.map((issue) => {
+      // Basic complexity mapping based on labels, default to "Medium"
+      let complexity: OpenIssue["complexity"] = "Medium";
+      let points: OpenIssue["points"] = 150;
+
+      const labels = issue.labels.map((l: any) => l.name?.toLowerCase() || "");
+
+      if (labels.includes("good first issue") || labels.includes("trivial")) {
+        complexity = "Trivial";
+        points = 100;
+      } else if (labels.includes("complex") || labels.includes("hard")) {
+        complexity = "High";
+        points = 200;
+      }
+
+      return {
+        id: issue.number.toString(),
+        title: issue.title,
+        labels: issue.labels.map((l: any) => l.name),
+        summary: issue.body ? issue.body.slice(0, 150) + "..." : "No description provided.",
+        complexity,
+        points,
+      };
+    });
+  } catch (error) {
+    console.error("Error fetching GitHub issues:", error);
+    return []; // Return empty array on failure so frontend doesn't crash completely
+  }
+}

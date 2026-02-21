@@ -61,13 +61,176 @@ body {
 
 .form-grid {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.85rem;
 }
 
 .row {
   display: grid;
   gap: 0.75rem;
 }
+
+/* ── Field groups ──────────────────────────────────────── */
+
+.field-group {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.field-group label {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #374151;
+}
+
+.field-required {
+  color: #dc2626;
+}
+
+.field-group input {
+  border: 1.5px solid #d1d5db;
+  border-radius: 8px;
+  min-height: 38px;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.9rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  outline: none;
+}
+
+.field-group input:focus {
+  border-color: #0ea5a5;
+  box-shadow: 0 0 0 3px rgba(14, 165, 165, 0.15);
+}
+
+/* Error state */
+.field-group--error input {
+  border-color: #dc2626;
+  background: #fff8f8;
+}
+
+.field-group--error input:focus {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+}
+
+/* ── Field-level error message ─────────────────────────── */
+
+.field-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: #dc2626;
+  line-height: 1.4;
+  padding-top: 0.1rem;
+}
+
+.field-error::before {
+  content: "⚠";
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  margin-top: 0.05rem;
+}
+
+/* ── Inline hint (account length tracker, start=0 note) ── */
+
+.field-hint {
+  font-size: 0.78rem;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+.field-hint--ok {
+  color: #059669;
+}
+
+.field-hint--warn {
+  color: #d97706;
+}
+
+/* ── Summary error shown at bottom of form ─────────────── */
+
+.form-summary-error {
+  margin: 0;
+  font-size: 0.83rem;
+  color: #dc2626;
+  background: #fff1f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+}
+
+/* ── API error box (inside the form card) ──────────────── */
+
+.api-error-box {
+  background: #fff7ed;
+  border: 1.5px solid #fed7aa;
+  border-radius: 8px;
+  padding: 0.65rem 0.8rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.api-error-box__title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: #92400e;
+}
+
+.api-error-box__icon {
+  font-size: 1rem;
+}
+
+.api-error-box__hint {
+  font-size: 0.82rem;
+  color: #78350f;
+  line-height: 1.5;
+}
+
+/* ── Global error banner (cancel failures, etc.) ───────── */
+
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  background: #fef2f2;
+  border: 1.5px solid #fca5a5;
+  color: #991b1b;
+  border-radius: 8px;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.88rem;
+}
+
+.error-banner__icon {
+  flex-shrink: 0;
+  font-style: normal;
+}
+
+.error-banner span:nth-child(2) {
+  flex: 1;
+}
+
+.error-banner__dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: #991b1b;
+  padding: 0 0.2rem;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.error-banner__dismiss:hover {
+  opacity: 1;
+}
+
+/* ── Legacy label (outside field-groups, e.g. future use) ── */
 
 label {
   display: grid;
@@ -91,6 +254,16 @@ input {
   color: white;
   background: #0ea5a5;
   cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #0c9191;
+}
+
+.btn-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .btn-ghost {
@@ -100,14 +273,16 @@ input {
   background: white;
   cursor: pointer;
   padding: 0.35rem 0.6rem;
+  transition: background 0.12s;
 }
 
-.error-banner {
-  margin-bottom: 1rem;
-  background: #dc2626;
-  color: white;
-  border-radius: 8px;
-  padding: 0.5rem 0.7rem;
+.btn-ghost:hover:not(:disabled) {
+  background: #f9fafb;
+}
+
+.btn-ghost:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .table-wrap {
@@ -202,7 +377,7 @@ td {
 
 @media (min-width: 920px) {
   .layout-grid {
-    grid-template-columns: 340px 1fr;
+    grid-template-columns: 380px 1fr;
   }
 
   .row {

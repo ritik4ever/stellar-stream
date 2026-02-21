@@ -1,8 +1,9 @@
 import cors from "cors";
 import "dotenv/config";
 import express, { Request, Response } from "express";
-import { openIssues } from "./services/openIssues";
-import "dotenv/config";
+import swaggerUi from "swagger-ui-express";
+import { swaggerDocument } from "./swagger";
+import { fetchOpenIssues } from "./services/openIssues";
 import {
   calculateProgress,
   cancelStream,
@@ -10,6 +11,7 @@ import {
   getStream,
   listStreams,
   initSoroban,
+  refreshStreamStatuses,
   syncStreams,
   StreamInput,
 } from "./services/streamStore";
@@ -22,6 +24,8 @@ const ALLOWED_ASSETS = (process.env.ALLOWED_ASSETS || 'USDC,XLM')
 
 app.use(cors());
 app.use(express.json());
+
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 function toNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -134,20 +138,27 @@ app.post("/api/streams/:id/cancel", async (req: Request, res: Response) => {
   }
 });
 
-app.get("/api/open-issues", (_req: Request, res: Response) => {
-  res.json({ data: openIssues });
+app.get("/api/open-issues", async (_req: Request, res: Response) => {
+  try {
+    const data = await fetchOpenIssues();
+    res.json({ data });
+  } catch (err: any) {
+    console.error("Failed to fetch open issues from proxy:", err);
+    res.status(500).json({ error: err.message || "Failed to fetch open issues." });
+  }
 });
 
 app.get("/api/allowed-assets", (_req: Request, res: Response) => {
   res.json({ data: ALLOWED_ASSETS });
 });
 
+
 async function startServer() {
   await initSoroban();
   await syncStreams();
   app.listen(port, () => {
     console.log(`StellarStream API listening on http://localhost:${port}`);
-    console.log(`Allowed assets: ${ALLOWED_ASSETS.join(", ")}`);
+
   });
 }
 
