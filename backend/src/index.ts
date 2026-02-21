@@ -4,7 +4,6 @@ import express, { Request, Response } from "express";
 import swaggerUi from "swagger-ui-express";
 import { swaggerDocument } from "./swagger";
 import { fetchOpenIssues } from "./services/openIssues";
-import "dotenv/config";
 import {
   calculateProgress,
   cancelStream,
@@ -140,30 +139,13 @@ app.post("/api/streams/:id/cancel", async (req: Request, res: Response) => {
   }
 });
 
-app.patch("/api/streams/:id/start-time", (req: Request, res: Response) => {
-  const newStartAt = toNumber(req.body?.startAt);
-
-  if (newStartAt === null || newStartAt <= 0) {
-    res.status(400).json({ error: "startAt must be a valid UNIX timestamp in seconds." });
-    return;
-  }
-
-  if (Math.floor(newStartAt) <= Math.floor(Date.now() / 1000)) {
-    res.status(400).json({ error: "startAt must be in the future." });
-    return;
-  }
-
+app.get("/api/open-issues", async (_req: Request, res: Response) => {
   try {
-    const stream = updateStreamStartAt(req.params.id, Math.floor(newStartAt));
-    res.json({
-      data: {
-        ...stream,
-        progress: calculateProgress(stream),
-      },
-    });
+    const data = await fetchOpenIssues();
+    res.json({ data });
   } catch (err: any) {
-    const statusCode = (err as any).statusCode ?? 500;
-    res.status(statusCode).json({ error: err.message || "Failed to update stream start time." });
+    console.error("Failed to fetch open issues from proxy:", err);
+    res.status(500).json({ error: err.message || "Failed to fetch open issues." });
   }
 });
 
@@ -176,7 +158,6 @@ app.get("/api/open-issues", async (_req: Request, res: Response) => {
     res.status(500).json({ error: err.message || "Failed to fetch open issues." });
   }
 });
-
 
 
 async function startServer() {

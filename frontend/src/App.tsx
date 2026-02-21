@@ -32,7 +32,6 @@ function App() {
   const [issues, setIssues] = useState<OpenIssue[]>([]);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  // The stream whose start-time is currently being edited (null = modal closed)
   const [editingStream, setEditingStream] = useState<Stream | null>(null);
 
   async function refreshStreams(): Promise<void> {
@@ -52,7 +51,7 @@ function App() {
       } catch (err) {
         if (!active) return;
         setGlobalError(
-          err instanceof Error ? describeGlobalError(err.message) : "Failed to load initial data.",
+          err instanceof Error ? describeGlobalError(err.message) : "Failed to load initial data."
         );
       }
     }
@@ -103,7 +102,7 @@ function App() {
       setGlobalError(
         err instanceof Error
           ? describeGlobalError(err.message)
-          : "Failed to cancel the stream. Please try again.",
+          : "Failed to cancel the stream. Please try again."
       );
     }
   }
@@ -146,9 +145,7 @@ function App() {
       {/* Global (cancel / bootstrap) errors shown as a dismissible banner */}
       {globalError && (
         <div className="error-banner" role="alert" aria-live="assertive">
-          <span className="error-banner__icon" aria-hidden>
-            ✕
-          </span>
+          <span className="error-banner__icon" aria-hidden>✕</span>
           <span>{globalError}</span>
           <button
             className="error-banner__dismiss"
@@ -164,11 +161,8 @@ function App() {
       <section className="layout-grid">
         {/* formError is passed into the form so the create-stream card can show it inline */}
         <CreateStreamForm onCreate={handleCreate} apiError={formError} />
-        <StreamsTable
-          streams={streams}
-          onCancel={handleCancel}
-          onEditStartTime={(stream) => setEditingStream(stream)}
-        />
+        <StreamsTable streams={streams} onCancel={handleCancel}
+        onEditStartTime={(stream) => setEditingStream(stream)} />
       </section>
 
       <IssueBacklog issues={issues} />
