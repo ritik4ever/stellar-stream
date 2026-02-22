@@ -73,10 +73,27 @@ Response:
 
 ### `GET /api/streams`
 Purpose:
-- List all streams sorted by newest first
+- List streams sorted by newest first, with optional filtering and pagination
+
+Query params (optional):
+- `status: scheduled | active | completed | canceled`
+- `sender: string` (exact sender match)
+- `recipient: string` (exact recipient match)
+- `page: number` (integer `>= 1`)
+- `limit: number` (integer `1..100`)
+
+Pagination behavior:
+- If both `page` and `limit` are omitted, legacy mode applies and all matching rows are returned.
+- If either `page` or `limit` is provided, pagination mode applies with defaults `page=1` and `limit=20`.
+
+Validation:
+- Invalid `status`, `page`, or `limit` returns `400`.
 
 Response:
 - `data: Stream[]` (includes computed `progress`)
+- `total: number` (filtered count before pagination)
+- `page: number` (applied page)
+- `limit: number` (applied page size)
 
 ### `GET /api/streams/:id`
 Purpose:
