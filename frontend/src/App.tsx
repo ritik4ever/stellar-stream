@@ -3,6 +3,8 @@ import { CreateStreamForm } from "./components/CreateStreamForm";
 import { EditStartTimeModal } from "./components/EditStartTimeModal";
 import { IssueBacklog } from "./components/IssueBacklog";
 import { StreamsTable } from "./components/StreamsTable";
+import { WalletButton } from "./components/WalletButton";
+import { useFreighter } from "./hooks/useFreighter";
 import {
   cancelStream,
   createStream,
@@ -28,6 +30,7 @@ function describeGlobalError(raw: string): string {
 }
 
 function App() {
+  const wallet = useFreighter();
   const [streams, setStreams] = useState<Stream[]>([]);
   const [issues, setIssues] = useState<OpenIssue[]>([]);
   const [globalError, setGlobalError] = useState<string | null>(null);
@@ -115,8 +118,13 @@ function App() {
   return (
     <div className="app-shell">
       <header className="hero">
-        <p className="eyebrow">Soroban-native MVP</p>
-        <h1>StellarStream</h1>
+        <div className="hero-top">
+          <div>
+            <p className="eyebrow">Soroban-native MVP</p>
+            <h1>StellarStream</h1>
+          </div>
+          <WalletButton wallet={wallet} />
+        </div>
         <p className="hero-copy">
           Continuous on-chain style payments for salaries, subscriptions, and freelancer payouts on
           Stellar.

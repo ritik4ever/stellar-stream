@@ -471,3 +471,91 @@ td {
   justify-content: flex-end;
   margin-top: 0.25rem;
 }
+
+/* ── Hero top bar (title + wallet button) ──────────────── */
+
+.hero-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+/* ── Wallet connect / status ───────────────────────────── */
+
+.wallet-btn {
+  white-space: nowrap;
+  font-size: 0.88rem;
+  padding: 0.4rem 0.85rem;
+  min-height: 36px;
+}
+
+.wallet-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.wallet-address {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #1f2937;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+}
+
+.wallet-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.wallet-dot--connected {
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.25);
+}
+
+.wallet-disconnect {
+  font-size: 0.82rem;
+  padding: 0.25rem 0.55rem;
+  min-height: 30px;
+}
+
+.wallet-error {
+  font-size: 0.8rem;
+  color: #dc2626;
+  max-width: 220px;
+}
+
+/* ── Wallet-required notice inside the form ────────────── */
+
+.wallet-required-notice {
+  margin: 0;
+  font-size: 0.83rem;
+  color: #0369a1;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+}
+
+/* ── Read-only sender input (auto-filled from wallet) ───── */
+
+.input-readonly {
+  background: #f9fafb !important;
+  color: #6b7280 !important;
+  cursor: default;
+}
+
+.input-readonly:focus {
+  border-color: #d1d5db !important;
+  box-shadow: none !important;
+}

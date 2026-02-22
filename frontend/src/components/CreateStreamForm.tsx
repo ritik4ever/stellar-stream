@@ -11,6 +11,8 @@ import {
 interface CreateStreamFormProps {
   onCreate: (payload: CreateStreamPayload) => Promise<void>;
   apiError?: string | null;
+  /** Public key from a connected Freighter wallet, or null if not connected. */
+  walletAddress?: string | null;
 }
 
 function humaniseApiError(raw: string): { title: string; hint: string } {
@@ -98,7 +100,7 @@ const INITIAL_VALUES: FormValues = {
   startInMinutes: "0",
 };
 
-export function CreateStreamForm({ onCreate, apiError }: CreateStreamFormProps) {
+export function CreateStreamForm({ onCreate, apiError, walletAddress }: CreateStreamFormProps) {
   const [values, setValues] = useState<FormValues>(INITIAL_VALUES);
   const [touched, setTouched] = useState<Partial<Record<keyof FormValues, boolean>>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -125,6 +127,7 @@ export function CreateStreamForm({ onCreate, apiError }: CreateStreamFormProps) 
     event.preventDefault();
     setSubmitAttempted(true);
 
+    if (!walletAddress) return; // wallet must be connected
     if (!formValid) return;
 
     setIsSubmitting(true);

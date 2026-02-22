@@ -1,4 +1,15 @@
-import { Keypair, rpc, Contract, nativeToScVal, scValToNative, Address, TimeoutInfinite, TransactionBuilder, Networks } from "@stellar/stellar-sdk";
+import {
+  Keypair,
+  rpc,
+  Contract,
+  nativeToScVal,
+  scValToNative,
+  Address,
+  TimeoutInfinite,
+  TransactionBuilder,
+  Networks,
+} from "@stellar/stellar-sdk";
+import { initDb, getDb } from "./db";
 
 export type StreamStatus = "scheduled" | "active" | "completed" | "canceled";
 
@@ -12,10 +23,10 @@ export interface StreamInput {
 }
 
 export interface StreamRecord {
-  id: string; // The on-chain stream_id as string
+  id: string;
   sender: string;
   recipient: string;
-  assetCode: string; // Stored natively on-chain token Address instead, but for MVP keep it simple
+  assetCode: string;
   totalAmount: number;
   durationSeconds: number;
   startAt: number;
@@ -33,19 +44,81 @@ export interface StreamProgress {
   percentComplete: number;
 }
 
-const streams = new Map<string, StreamRecord>();
+interface StreamRow {
+  id: string;
+  sender: string;
+  recipient: string;
+  asset_code: string;
+  total_amount: number;
+  duration_seconds: number;
+  start_at: number;
+  created_at: number;
+  canceled_at: number | null;
+  completed_at: number | null;
+}
+
+function rowToRecord(row: StreamRow): StreamRecord {
+  return {
+    id: row.id,
+    sender: row.sender,
+    recipient: row.recipient,
+    assetCode: row.asset_code,
+    totalAmount: row.total_amount,
+    durationSeconds: row.duration_seconds,
+    startAt: row.start_at,
+    createdAt: row.created_at,
+    canceledAt: row.canceled_at ?? undefined,
+    completedAt: row.completed_at ?? undefined,
+  };
+}
+
+function upsertStream(record: StreamRecord): void {
+  const db = getDb();
+  db.prepare(
+    `
+    INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at, canceled_at, completed_at)
+    VALUES (@id, @sender, @recipient, @assetCode, @totalAmount, @durationSeconds, @startAt, @createdAt, @canceledAt, @completedAt)
+    ON CONFLICT(id) DO UPDATE SET
+      sender = excluded.sender,
+      recipient = excluded.recipient,
+      asset_code = excluded.asset_code,
+      total_amount = excluded.total_amount,
+      duration_seconds = excluded.duration_seconds,
+      start_at = excluded.start_at,
+      created_at = excluded.created_at,
+      canceled_at = excluded.canceled_at,
+      completed_at = excluded.completed_at
+  `,
+  ).run({
+    id: record.id,
+    sender: record.sender,
+    recipient: record.recipient,
+    assetCode: record.assetCode,
+    totalAmount: record.totalAmount,
+    durationSeconds: record.durationSeconds,
+    startAt: record.startAt,
+    createdAt: record.createdAt,
+    canceledAt: record.canceledAt ?? null,
+    completedAt: record.completedAt ?? null,
+  });
+}
 
 let rpcServer: rpc.Server | null = null;
 let serverKeypair: Keypair | null = null;
 
 export async function initSoroban() {
-  const rpcUrl = process.env.RPC_URL || "https://soroban-testnet.stellar.org:443";
+  initDb();
+
+  const rpcUrl =
+    process.env.RPC_URL || "https://soroban-testnet.stellar.org:443";
   rpcServer = new rpc.Server(rpcUrl);
 
   if (process.env.SERVER_PRIVATE_KEY) {
     serverKeypair = Keypair.fromSecret(process.env.SERVER_PRIVATE_KEY);
   } else {
-    console.warn("SERVER_PRIVATE_KEY missing. Creating streams on-chain will fail.");
+    console.warn(
+      "SERVER_PRIVATE_KEY missing. Creating streams on-chain will fail.",
+    );
   }
 }
 
@@ -73,9 +146,15 @@ function computeStatus(stream: StreamRecord, at: number): StreamStatus {
   return "active";
 }
 
-export function calculateProgress(stream: StreamRecord, at = nowInSeconds()): StreamProgress {
+export function calculateProgress(
+  stream: StreamRecord,
+  at = nowInSeconds(),
+): StreamProgress {
   const streamEnd = stream.startAt + stream.durationSeconds;
-  const effectiveEnd = stream.canceledAt !== undefined ? Math.min(stream.canceledAt, streamEnd) : streamEnd;
+  const effectiveEnd =
+    stream.canceledAt !== undefined
+      ? Math.min(stream.canceledAt, streamEnd)
+      : streamEnd;
   const elapsed = Math.max(0, Math.min(at, effectiveEnd) - stream.startAt);
   const ratio = Math.min(1, elapsed / stream.durationSeconds);
   const vestedAmount = stream.totalAmount * ratio;
@@ -96,9 +175,14 @@ export async function syncStreams() {
   const contract = new Contract(contractId);
 
   try {
-    const pubKey = serverKeypair ? serverKeypair.publicKey() : "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+    const pubKey = serverKeypair
+      ? serverKeypair.publicKey()
+      : "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
     const sourceAccount = await rpcServer.getAccount(pubKey);
-    const tx = new TransactionBuilder(sourceAccount, { fee: "100", networkPassphrase: process.env.NETWORK_PASSPHRASE || Networks.TESTNET })
+    const tx = new TransactionBuilder(sourceAccount, {
+      fee: "100",
+      networkPassphrase: process.env.NETWORK_PASSPHRASE || Networks.TESTNET,
+    })
       .addOperation(contract.call("get_next_stream_id"))
       .setTimeout(30)
       .build();
@@ -113,21 +197,27 @@ export async function syncStreams() {
     const nextId = Number(nextIdVal);
 
     for (let i = 1; i <= nextId; i++) {
-      const simTx = new TransactionBuilder(sourceAccount, { fee: "100", networkPassphrase: process.env.NETWORK_PASSPHRASE || Networks.TESTNET })
-        .addOperation(contract.call("get_stream", nativeToScVal(i, { type: "u64" })))
+      const simTx = new TransactionBuilder(sourceAccount, {
+        fee: "100",
+        networkPassphrase: process.env.NETWORK_PASSPHRASE || Networks.TESTNET,
+      })
+        .addOperation(
+          contract.call("get_stream", nativeToScVal(i, { type: "u64" })),
+        )
         .setTimeout(30)
         .build();
       const simRes2 = await rpcServer.simulateTransaction(simTx);
       if (rpc.Api.isSimulationSuccess(simRes2) && simRes2.result) {
         const streamData = scValToNative(simRes2.result.retval);
 
-        streams.set(i.toString(), {
+        upsertStream({
           id: i.toString(),
           sender: streamData.sender,
           recipient: streamData.recipient,
           assetCode: streamData.token,
           totalAmount: Number(streamData.total_amount),
-          durationSeconds: Number(streamData.end_time) - Number(streamData.start_time),
+          durationSeconds:
+            Number(streamData.end_time) - Number(streamData.start_time),
           startAt: Number(streamData.start_time),
           createdAt: Number(streamData.start_time),
           canceledAt: streamData.canceled ? nowInSeconds() : undefined,
@@ -142,7 +232,8 @@ export async function syncStreams() {
 export async function createStream(input: StreamInput): Promise<StreamRecord> {
   const startAt = input.startAt ?? nowInSeconds();
   const contractId = process.env.CONTRACT_ID;
-  const netPass = process.env.NETWORK_PASSPHRASE || "Test SDF Network ; September 2015";
+  const netPass =
+    process.env.NETWORK_PASSPHRASE || "Test SDF Network ; September 2015";
 
   if (!contractId || !rpcServer || !serverKeypair) {
     throw new Error("Backend not configured for Soroban.");
@@ -156,21 +247,25 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
 
   const sourceAccount = await rpcServer.getAccount(serverKeypair.publicKey());
 
-  const tx = new Contract(contractId).call("create_stream",
+  const tx = new Contract(contractId).call(
+    "create_stream",
     new Address(input.sender).toScVal(),
     new Address(input.recipient).toScVal(),
     new Address(fakeToken).toScVal(),
     nativeToScVal(input.totalAmount, { type: "i128" }),
     nativeToScVal(startAt, { type: "u64" }),
-    nativeToScVal(endAt, { type: "u64" })
+    nativeToScVal(endAt, { type: "u64" }),
   );
 
   // We have to build and send this tx. Wait, doing this properly via building is long:
   const built = await rpcServer.prepareTransaction(
-    new TransactionBuilder(sourceAccount, { fee: "1000", networkPassphrase: netPass })
+    new TransactionBuilder(sourceAccount, {
+      fee: "1000",
+      networkPassphrase: netPass,
+    })
       .addOperation(tx)
       .setTimeout(30)
-      .build()
+      .build(),
   );
 
   built.sign(serverKeypair);
@@ -185,7 +280,7 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
   while (attempts < 10) {
     txResult = await rpcServer.getTransaction(sendRes.hash);
     if (txResult.status !== "NOT_FOUND") break;
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 1000));
     attempts++;
   }
 
@@ -207,60 +302,75 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
     createdAt: nowInSeconds(),
   };
 
-  streams.set(stream.id, stream);
+  upsertStream(stream);
   return stream;
 }
 
 export function refreshStreamStatuses(): number {
+  const db = getDb();
   const now = nowInSeconds();
-  let updated = 0;
-  for (const stream of streams.values()) {
-    if (stream.canceledAt !== undefined || stream.completedAt !== undefined) continue;
-    if (now >= stream.startAt + stream.durationSeconds) {
-      stream.completedAt = now;
-      streams.set(stream.id, stream);
-      updated += 1;
-    }
-  }
-  return updated;
+  const result = db
+    .prepare(
+      `
+    UPDATE streams SET completed_at = ?
+    WHERE canceled_at IS NULL AND completed_at IS NULL
+      AND (start_at + duration_seconds) <= ?
+  `,
+    )
+    .run(now, now);
+  return result.changes;
 }
 
 export function listStreams(): StreamRecord[] {
-  return Array.from(streams.values()).sort((a, b) => b.createdAt - a.createdAt);
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT * FROM streams ORDER BY created_at DESC")
+    .all() as StreamRow[];
+  return rows.map(rowToRecord);
 }
 
 export function getStream(id: string): StreamRecord | undefined {
-  return streams.get(id);
+  const db = getDb();
+  const row = db.prepare("SELECT * FROM streams WHERE id = ?").get(id) as
+    | StreamRow
+    | undefined;
+  return row ? rowToRecord(row) : undefined;
 }
 
-export async function cancelStream(id: string): Promise<StreamRecord | undefined> {
-  const stream = streams.get(id);
+export async function cancelStream(
+  id: string,
+): Promise<StreamRecord | undefined> {
+  const stream = getStream(id);
   if (!stream || stream.canceledAt !== undefined) {
     return stream;
   }
 
-  // Here we would call the contract cancel. For MVP we will just do local DB update
   stream.canceledAt = nowInSeconds();
-  streams.set(id, stream);
+  upsertStream(stream);
   return stream;
 }
 
-export function updateStreamStartAt(id: string, newStartAt: number): StreamRecord {
-  const stream = streams.get(id);
+export function updateStreamStartAt(
+  id: string,
+  newStartAt: number,
+): StreamRecord {
+  const stream = getStream(id);
   if (!stream) {
-    const err = new Error("Stream not found.");
-    (err as any).statusCode = 404;
+    const err: any = new Error("Stream not found.");
+    err.statusCode = 404;
     throw err;
   }
 
   const status = computeStatus(stream, nowInSeconds());
   if (status !== "scheduled") {
-    const err = new Error("Only scheduled streams can have their start time updated.");
-    (err as any).statusCode = 400;
+    const err: any = new Error(
+      "Can only update start time for scheduled streams.",
+    );
+    err.statusCode = 400;
     throw err;
   }
 
   stream.startAt = newStartAt;
-  streams.set(id, stream);
+  upsertStream(stream);
   return stream;
 }
