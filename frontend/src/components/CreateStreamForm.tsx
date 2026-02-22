@@ -1,4 +1,4 @@
-import { FormEvent, useEffect,useState } from "react";
+import { FormEvent, useState } from "react";
 import { CreateStreamPayload } from "../types/stream";
 import {
   FieldErrors,
@@ -105,7 +105,26 @@ export function CreateStreamForm({ onCreate, apiError }: CreateStreamFormProps) 
   const [values, setValues] = useState<FormValues>(INITIAL_VALUES);
   const [touched, setTouched] = useState<Partial<Record<keyof FormValues, boolean>>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
 
+  // Run validation on current values
+  const errors: FieldErrors = validateForm(values);
+  const formValid = isFormValid(errors);
+
+  function set(field: keyof FormValues) {
+    return (e: React.ChangeEvent<HTMLInputElement>) => {
+      setValues((prev) => ({ ...prev, [field]: e.target.value }));
+    };
+  }
+
+  function blur(field: keyof FormValues) {
+    return () => setTouched((prev) => ({ ...prev, [field]: true }));
+  }
+
+  // Show an error for a field only after the user has touched it (or tried to submit)
+  function fieldError(field: keyof FormValues): string | undefined {
+    return (touched[field] || submitAttempted) ? errors[field] : undefined;
+  }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -137,7 +156,10 @@ export function CreateStreamForm({ onCreate, apiError }: CreateStreamFormProps) 
     }
   }
 
+  const parsedApiError = apiError ? humaniseApiError(apiError) : null;
 
+  return (
+    <form className="card form-grid" onSubmit={handleSubmit} noValidate>
       <h2>Create Stream</h2>
 
       {/* API error banner — only shown for API-level errors */}
@@ -177,7 +199,63 @@ export function CreateStreamForm({ onCreate, apiError }: CreateStreamFormProps) 
         )}
       </div>
 
+      {/* Recipient */}
+      <div className={`field-group${fieldError("recipient") ? " field-group--error" : ""}`}>
+        <label htmlFor="stream-recipient">
+          Recipient Account
+          <span className="field-required" aria-hidden> *</span>
+        </label>
+        <input
+          id="stream-recipient"
+          type="text"
+          value={values.recipient}
+          onChange={set("recipient")}
+          onBlur={blur("recipient")}
+          placeholder="G…  (56-character Stellar public key)"
+          aria-describedby={fieldError("recipient") ? "recipient-error" : "recipient-hint"}
+          aria-invalid={!!fieldError("recipient")}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <AccountHint value={values.recipient} />
+        {fieldError("recipient") && (
+          <span id="recipient-error" className="field-error" role="alert">
+            {fieldError("recipient")}
+          </span>
+        )}
+      </div>
 
+      <div className="row">
+        {/* Asset Code */}
+        <div className={`field-group${fieldError("assetCode") ? " field-group--error" : ""}`}>
+          <label htmlFor="stream-asset">
+            Asset Code
+            <span className="field-required" aria-hidden> *</span>
+          </label>
+          <input
+            id="stream-asset"
+            type="text"
+            value={values.assetCode}
+            onChange={set("assetCode")}
+            onBlur={blur("assetCode")}
+            placeholder="USDC"
+            maxLength={12}
+            aria-describedby={fieldError("assetCode") ? "asset-error" : undefined}
+            aria-invalid={!!fieldError("assetCode")}
+          />
+          {fieldError("assetCode") && (
+            <span id="asset-error" className="field-error" role="alert">
+              {fieldError("assetCode")}
+            </span>
+          )}
+        </div>
+
+        {/* Total Amount */}
+        <div className={`field-group${fieldError("totalAmount") ? " field-group--error" : ""}`}>
+          <label htmlFor="stream-amount">
+            Total Amount
+            <span className="field-required" aria-hidden> *</span>
+          </label>
           <input
             id="stream-amount"
             type="number"

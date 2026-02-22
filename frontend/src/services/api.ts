@@ -16,6 +16,19 @@ export async function listStreams(): Promise<Stream[]> {
   return body.data;
 }
 
+export function getExportCsvUrl(filters?: Record<string, string>): string {
+  // If API_BASE is absolute (e.g. http://localhost:3000/api), we use that directly.
+  // Otherwise, we base it off window.location.origin
+  const base = API_BASE.startsWith("http") ? API_BASE : window.location.origin + API_BASE;
+  const url = new URL(`${base}/streams/export.csv`);
+  if (filters) {
+    Object.entries(filters).forEach(([k, v]) => {
+      if (v) url.searchParams.append(k, v);
+    });
+  }
+  return url.toString();
+}
+
 export async function createStream(payload: CreateStreamPayload): Promise<Stream> {
   const response = await fetch(`${API_BASE}/streams`, {
     method: "POST",

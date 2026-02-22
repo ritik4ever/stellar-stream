@@ -105,9 +105,51 @@ app.get("/api/health", (_req: Request, res: Response) => {
   });
 });
 
-app.get("/api/streams", (_req: Request, res: Response) => {
-  const data = listStreams().map((stream) => ({ ...stream, progress: calculateProgress(stream) }));
+app.get("/api/streams", (req: Request, res: Response) => {
+  let data = listStreams().map((stream) => ({ ...stream, progress: calculateProgress(stream) }));
+
+  const { status, asset, sender, recipient } = req.query;
+  if (status) {
+    data = data.filter(s => s.progress.status === status);
+  }
+  if (asset) {
+    data = data.filter(s => s.assetCode.toLowerCase() === (asset as string).toLowerCase());
+  }
+  if (sender) {
+    data = data.filter(s => s.sender.toLowerCase() === (sender as string).toLowerCase());
+  }
+  if (recipient) {
+    data = data.filter(s => s.recipient.toLowerCase() === (recipient as string).toLowerCase());
+  }
+
   res.json({ data });
+});
+
+app.get("/api/streams/export.csv", (req: Request, res: Response) => {
+  let data = listStreams().map((stream) => ({ ...stream, progress: calculateProgress(stream) }));
+
+  const { status, asset, sender, recipient } = req.query;
+  if (status) {
+    data = data.filter(s => s.progress.status === status);
+  }
+  if (asset) {
+    data = data.filter(s => s.assetCode.toLowerCase() === (asset as string).toLowerCase());
+  }
+  if (sender) {
+    data = data.filter(s => s.sender.toLowerCase() === (sender as string).toLowerCase());
+  }
+  if (recipient) {
+    data = data.filter(s => s.recipient.toLowerCase() === (recipient as string).toLowerCase());
+  }
+
+  const header = "id,sender,recipient,asset,total,status,startAt\n";
+  const rows = data.map(s => {
+    return `${s.id},${s.sender},${s.recipient},${s.assetCode},${s.totalAmount},${s.progress.status},${s.startAt}`;
+  }).join("\n");
+
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", 'attachment; filename="export.csv"');
+  res.send(header + rows);
 });
 
 app.get("/api/streams/:id", (req: Request, res: Response) => {

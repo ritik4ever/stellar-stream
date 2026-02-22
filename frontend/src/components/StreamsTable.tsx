@@ -1,4 +1,5 @@
 import { Stream } from "../types/stream";
+import { getExportCsvUrl } from "../services/api";
 
 interface StreamsTableProps {
   streams: Stream[];
@@ -29,7 +30,10 @@ export function StreamsTable({ streams, onCancel, onEditStartTime }: StreamsTabl
   if (streams.length === 0) {
     return (
       <div className="card">
-        <h2>Live Streams</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h2 style={{ margin: 0 }}>Live Streams</h2>
+          <a href={getExportCsvUrl()} className="btn-ghost" download>Export CSV</a>
+        </div>
         <p className="muted">No streams yet. Create your first Stellar payment stream.</p>
       </div>
     );
@@ -37,7 +41,10 @@ export function StreamsTable({ streams, onCancel, onEditStartTime }: StreamsTabl
 
   return (
     <div className="card">
-      <h2>Live Streams</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <h2 style={{ margin: 0 }}>Live Streams</h2>
+        <a href={getExportCsvUrl()} className="btn-ghost" download>Export CSV</a>
+      </div>
       <div className="table-wrap">
         <table>
           <thead>
