@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+
 import { CreateStreamPayload } from "../types/stream";
 import {
   FieldErrors,
@@ -104,26 +104,12 @@ export function CreateStreamForm({ onCreate, apiError }: CreateStreamFormProps) 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitAttempted, setSubmitAttempted] = useState(false);
 
-  // whitelist feature
-  const [allowedAssets, setAllowedAssets] = useState<string[]>([]);
-  useEffect(() => {
-    fetch("/api/allowed-assets")
-      .then((res) => res.json())
-      .then((json) => {
-        const assets: string[] = json.data ?? [];
-        setAllowedAssets(assets);
-        if (assets.length > 0) {
-          setValues((prev) => ({ ...prev, assetCode: assets[0] }));
-        }
-      })
-      .catch(() => {});
-  }, []);
 
   const errors: FieldErrors = validateForm(values);
   const formValid = isFormValid(errors);
 
   function set(field: keyof FormValues) {
-    return (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+
       setValues((prev) => ({ ...prev, [field]: e.target.value }));
     };
   }
@@ -132,8 +118,7 @@ export function CreateStreamForm({ onCreate, apiError }: CreateStreamFormProps) 
     return () => setTouched((prev) => ({ ...prev, [field]: true }));
   }
 
-  function fieldError(field: keyof FormValues): string | undefined {
-    return touched[field] || submitAttempted ? errors[field] : undefined;
+
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -166,15 +151,7 @@ export function CreateStreamForm({ onCreate, apiError }: CreateStreamFormProps) 
   }
 
   const parsedApiError = apiError ? humaniseApiError(apiError) : null;
-return (
-  <form className="card form-grid" onSubmit={handleSubmit} noValidate>
-    <h2>Create Stream</h2>
 
-    {parsedApiError && (
-      <div className="api-error-box" role="alert" aria-live="assertive">
-        <div className="api-error-box__title">
-          <span className="api-error-box__icon" aria-hidden>⚠</span>
-          {parsedApiError.title}
         </div>
         <div className="api-error-box__hint">{parsedApiError.hint}</div>
       </div>
@@ -303,30 +280,7 @@ return (
       </div>
     </div>
 
-    {/* Duration & Start */}
-    <div className="row">
-      <div className={`field-group${fieldError("durationHours") ? " field-group--error" : ""}`}>
-        <label htmlFor="stream-duration">
-          Duration (hours)<span className="field-required" aria-hidden>*</span>
-        </label>
-        <input
-          id="stream-duration"
-          type="number"
-          min="1"
-          step="1"
-          value={values.durationHours}
-          onChange={set("durationHours")}
-          onBlur={blur("durationHours")}
-          onKeyDown={(e) => { if (["e", "E", "+", "-", "."].includes(e.key)) e.preventDefault(); }}
-          aria-describedby={fieldError("durationHours") ? "duration-error" : undefined}
-          aria-invalid={!!fieldError("durationHours")}
-          required
-        />
-        {fieldError("durationHours") && (
-          <span id="duration-error" className="field-error" role="alert">
-            {fieldError("durationHours")}
-          </span>
-        )}
+
       </div>
 
       <div className={`field-group${fieldError("startInMinutes") ? " field-group--error" : ""}`}>
@@ -366,11 +320,5 @@ return (
       {isSubmitting ? "Creating…" : "Create Stream"}
     </button>
 
-    {submitAttempted && !formValid && (
-      <p className="form-summary-error" role="alert">
-        Please fix the errors above before submitting.
-      </p>
-    )}
-  </form>
-);
+
 }

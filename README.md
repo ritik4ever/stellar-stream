@@ -178,10 +178,61 @@ Build:
 npm run build
 ```
 
-## 7) Environment And Config
+## 7) Deploy Contract
+
+Deploy the Soroban contract to Stellar testnet.
+
+### Prerequisites
+
+- [soroban-cli](https://soroban.stellar.org/docs/getting-started/setup#install-the-soroban-cli) installed
+- Rust toolchain with `wasm32-unknown-unknown` target
+- Stellar testnet account with secret key
+
+### Deployment
+
+Set the `SECRET_KEY` environment variable and run:
+
+```bash
+SECRET_KEY="S..." npm run deploy:contract
+```
+
+Or use the script directly:
+
+```bash
+SECRET_KEY="S..." ./scripts/deploy.sh
+```
+
+The script will:
+1. Build the contract
+2. Deploy to Stellar testnet
+3. Output the contract ID
+4. Save the contract ID to `contracts/contract_id.txt`
+
+### Environment Variables for Deployment
+
+**Required:**
+- `SECRET_KEY` - Stellar account secret key for deployment (must have testnet XLM for fees)
+
+**Optional:**
+- `NETWORK_PASSPHRASE` - Network passphrase (defaults to testnet: `"Test SDF Network ; September 2015"`)
+- `RPC_URL` - RPC endpoint URL (defaults to `https://soroban-testnet.stellar.org:443`)
+
+### After Deployment
+
+1. Copy the contract ID from the output or `contracts/contract_id.txt`
+2. Set `CONTRACT_ID` in your backend `.env` file
+3. Ensure `SERVER_PRIVATE_KEY` is set in your backend `.env` file
+4. Restart your backend service
+
+## 8) Environment And Config
 
 Backend:
 - `PORT` (optional, defaults to `3001`)
+- `CONTRACT_ID` (required for on-chain operations) - Contract ID from deployment
+- `SERVER_PRIVATE_KEY` (required for on-chain operations) - Stellar account secret key
+- `RPC_URL` (optional, defaults to `https://soroban-testnet.stellar.org:443`) - Soroban RPC endpoint
+- `NETWORK_PASSPHRASE` (optional, defaults to testnet) - Network passphrase
+- `ALLOWED_ASSETS` (optional, defaults to `USDC,XLM`) - Comma-separated list of allowed asset codes
 
 Frontend:
 - `VITE_API_URL` (optional, defaults to `/api`)
@@ -189,7 +240,7 @@ Frontend:
 Ignored files:
 - `node_modules`, `dist`, logs, local env files, Soroban build outputs
 
-## 8) Project File Map
+## 9) Project File Map
 
 Root:
 - `.gitignore`: ignore rules for Node/Rust/local files.
@@ -230,7 +281,7 @@ Contract:
 
 
 
-## 9) Known Limitations
+## 10) Known Limitations
 
 - Backend storage is in memory (not persistent).
 - Contract is not connected to backend execution path yet.
@@ -238,7 +289,7 @@ Contract:
 - No authentication layer on write endpoints.
 - Test coverage and CI can be expanded.
 
-## 10) Suggested Next Steps
+## 11) Suggested Next Steps
 
 - Move stream source of truth from memory to Soroban state.
 - Add wallet-authenticated transaction signing flow.
