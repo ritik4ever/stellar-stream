@@ -23,8 +23,22 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return body;
 }
 
-export async function listStreams(): Promise<Stream[]> {
-  const response = await fetch(`${API_BASE}/streams`);
+export interface ListStreamsFilters {
+  recipient?: string;
+  sender?: string;
+  status?: string;
+  asset?: string;
+}
+
+export async function listStreams(filters?: ListStreamsFilters): Promise<Stream[]> {
+  const params = new URLSearchParams();
+  if (filters?.recipient) params.set("recipient", filters.recipient);
+  if (filters?.sender) params.set("sender", filters.sender);
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.asset) params.set("asset", filters.asset);
+  const q = params.toString();
+  const url = q ? `${API_BASE}/streams?${q}` : `${API_BASE}/streams`;
+  const response = await fetch(url);
   const body = await parseResponse<{ data: Stream[] }>(response);
   return body.data;
 }

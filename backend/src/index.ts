@@ -127,7 +127,32 @@ app.get("/api/health", (_req: Request, res: Response) => {
 });
 
 app.get("/api/streams", (req: Request, res: Response) => {
+  let data = listStreams().map((stream) => ({
+    ...stream,
+    progress: calculateProgress(stream),
+  }));
 
+  const { status, recipient, sender, asset } = req.query;
+  if (status && typeof status === "string" && STREAM_STATUSES.includes(status as StreamStatus)) {
+    data = data.filter((s) => s.progress.status === status);
+  }
+  if (recipient && typeof recipient === "string") {
+    data = data.filter(
+      (s) => s.recipient.toLowerCase() === recipient.toLowerCase(),
+    );
+  }
+  if (sender && typeof sender === "string") {
+    data = data.filter(
+      (s) => s.sender.toLowerCase() === sender.toLowerCase(),
+    );
+  }
+  if (asset && typeof asset === "string") {
+    data = data.filter(
+      (s) => s.assetCode.toLowerCase() === asset.toLowerCase(),
+    );
+  }
+
+  res.json({ data });
 });
 
 app.get("/api/streams/export.csv", (req: Request, res: Response) => {

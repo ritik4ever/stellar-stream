@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CreateStreamForm } from "./components/CreateStreamForm";
 import { EditStartTimeModal } from "./components/EditStartTimeModal";
 import { IssueBacklog } from "./components/IssueBacklog";
+import { RecipientDashboard } from "./components/RecipientDashboard";
 import { StreamsTable } from "./components/StreamsTable";
 import { StreamMetricsChart } from "./components/StreamMetricsChart";
 import { WalletButton } from "./components/WalletButton";
@@ -15,6 +16,8 @@ import {
 } from "./services/api";
 import { OpenIssue, Stream } from "./types/stream";
 import { useMetricsHistory } from "./hooks/useMetricsHistory";
+
+type ViewMode = "dashboard" | "recipient";
 
 // Derive a user-friendly hint string for global (non-form) errors.
 function describeGlobalError(raw: string): string {
@@ -37,6 +40,7 @@ function describeGlobalError(raw: string): string {
 
 function App() {
   const wallet = useFreighter();
+  const [viewMode, setViewMode] = useState<ViewMode>("dashboard");
   const [streams, setStreams] = useState<Stream[]>([]);
   const [issues, setIssues] = useState<OpenIssue[]>([]);
   const [globalError, setGlobalError] = useState<string | null>(null);
@@ -164,6 +168,27 @@ function App() {
         </p>
       </header>
 
+      <nav className="app-nav" aria-label="Main">
+        <button
+          type="button"
+          className={`app-nav-link ${viewMode === "dashboard" ? "app-nav-link--active" : ""}`}
+          onClick={() => setViewMode("dashboard")}
+        >
+          Dashboard
+        </button>
+        <button
+          type="button"
+          className={`app-nav-link ${viewMode === "recipient" ? "app-nav-link--active" : ""}`}
+          onClick={() => setViewMode("recipient")}
+        >
+          Recipient dashboard
+        </button>
+      </nav>
+
+      {viewMode === "recipient" ? (
+        <RecipientDashboard recipientAddress={wallet.address} />
+      ) : (
+        <>
       <section className="metric-grid">
         <article className="metric-card">
           <span>Total Streams</span>
@@ -229,6 +254,8 @@ function App() {
           onConfirm={handleUpdateStartTime}
           onClose={() => setEditingStream(null)}
         />
+      )}
+        </>
       )}
     </div>
   );
