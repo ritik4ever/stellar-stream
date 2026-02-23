@@ -471,3 +471,170 @@ td {
   justify-content: flex-end;
   margin-top: 0.25rem;
 }
+.chart-section {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.chart-section__title {
+  margin: 0 0 1.25rem 0;
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.chart-container {
+  width: 100%;
+  min-height: 400px;
+}
+
+.chart-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  background: #f9fafb;
+  border: 2px dashed #d1d5db;
+  border-radius: 10px;
+}
+
+.chart-empty-state__content {
+  text-align: center;
+  max-width: 320px;
+  padding: 2rem;
+}
+
+.chart-empty-state__icon {
+  font-size: 3rem;
+  display: block;
+  margin-bottom: 0.75rem;
+  opacity: 0.5;
+}
+
+.chart-empty-state__content h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.1rem;
+  color: #374151;
+}
+
+.chart-empty-state__content p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+@media (max-width: 768px) {
+  .chart-section {
+    padding: 1rem;
+  }
+
+  .chart-section__title {
+    font-size: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .chart-container {
+    min-height: 300px;
+  }
+
+  .chart-empty-state {
+    min-height: 300px;
+  }
+
+  .chart-empty-state__icon {
+    font-size: 2.5rem;
+  }
+}
+
+
+/* ── Hero top bar (title + wallet button) ──────────────── */
+
+.hero-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+/* ── Wallet connect / status ───────────────────────────── */
+
+.wallet-btn {
+  white-space: nowrap;
+  font-size: 0.88rem;
+  padding: 0.4rem 0.85rem;
+  min-height: 36px;
+}
+
+.wallet-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.wallet-address {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #1f2937;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+}
+
+.wallet-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.wallet-dot--connected {
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.25);
+}
+
+.wallet-disconnect {
+  font-size: 0.82rem;
+  padding: 0.25rem 0.55rem;
+  min-height: 30px;
+}
+
+.wallet-error {
+  font-size: 0.8rem;
+  color: #dc2626;
+  max-width: 220px;
+}
+
+/* ── Wallet-required notice inside the form ────────────── */
+
+.wallet-required-notice {
+  margin: 0;
+  font-size: 0.83rem;
+  color: #0369a1;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+}
+
+/* ── Read-only sender input (auto-filled from wallet) ───── */
+
+.input-readonly {
+  background: #f9fafb !important;
+  color: #6b7280 !important;
+  cursor: default;
+}
+
+.input-readonly:focus {
+  border-color: #d1d5db !important;
+  box-shadow: none !important;
+}

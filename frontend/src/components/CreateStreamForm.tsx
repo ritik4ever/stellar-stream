@@ -1,4 +1,4 @@
-import { FormEvent, useEffect,useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { CreateStreamPayload } from "../types/stream";
 import {
   FieldErrors,
@@ -11,6 +11,8 @@ import {
 interface CreateStreamFormProps {
   onCreate: (payload: CreateStreamPayload) => Promise<void>;
   apiError?: string | null;
+  /** Public key from a connected Freighter wallet, or null if not connected. */
+  walletAddress?: string | null;
 }
 
 // Derive a user-friendly hint from a raw API error message.
@@ -101,16 +103,42 @@ const INITIAL_VALUES: FormValues = {
   startInMinutes: "0",
 };
 
-export function CreateStreamForm({ onCreate, apiError }: CreateStreamFormProps) {
+export function CreateStreamForm({ onCreate, apiError, walletAddress }: CreateStreamFormProps) {
   const [values, setValues] = useState<FormValues>(INITIAL_VALUES);
   const [touched, setTouched] = useState<Partial<Record<keyof FormValues, boolean>>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
 
+  // Auto-fill sender from connected wallet; clear it when wallet disconnects.
+  useEffect(() => {
+    setValues((prev) => ({ ...prev, sender: walletAddress ?? "" }));
+    setTouched((prev) => ({ ...prev, sender: !!walletAddress }));
+  }, [walletAddress]);
+
+  // Run validation on current values
+  const errors: FieldErrors = validateForm(values);
+  const formValid = isFormValid(errors);
+
+  function set(field: keyof FormValues) {
+    return (e: React.ChangeEvent<HTMLInputElement>) => {
+      setValues((prev) => ({ ...prev, [field]: e.target.value }));
+    };
+  }
+
+  function blur(field: keyof FormValues) {
+    return () => setTouched((prev) => ({ ...prev, [field]: true }));
+  }
+
+  // Show an error for a field only after the user has touched it (or tried to submit)
+  function fieldError(field: keyof FormValues): string | undefined {
+    return (touched[field] || submitAttempted) ? errors[field] : undefined;
+  }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setSubmitAttempted(true);
 
+    if (!walletAddress) return; // wallet must be connected
     if (!formValid) return;
 
     setIsSubmitting(true);
@@ -128,16 +156,19 @@ export function CreateStreamForm({ onCreate, apiError }: CreateStreamFormProps) 
         startAt,
       });
 
-      // Reset on success
-      setValues(INITIAL_VALUES);
-      setTouched({});
+      // Reset on success — preserve auto-filled sender if wallet is still connected.
+      setValues({ ...INITIAL_VALUES, sender: walletAddress ?? "" });
+      setTouched(walletAddress ? { sender: true } : {});
       setSubmitAttempted(false);
     } finally {
       setIsSubmitting(false);
     }
   }
 
+  const parsedApiError = apiError ? humaniseApiError(apiError) : null;
 
+  return (
+    <form className="card form-grid" onSubmit={handleSubmit} noValidate>
       <h2>Create Stream</h2>
 
       {/* API error banner — only shown for API-level errors */}
@@ -156,18 +187,25 @@ export function CreateStreamForm({ onCreate, apiError }: CreateStreamFormProps) 
         <label htmlFor="stream-sender">
           Sender Account
           <span className="field-required" aria-hidden> *</span>
+          {walletAddress && (
+            <span className="field-hint field-hint--ok" style={{ fontWeight: "normal" }}>
+              {" "}— auto-filled from wallet
+            </span>
+          )}
         </label>
         <input
           id="stream-sender"
           type="text"
           value={values.sender}
-          onChange={set("sender")}
+          onChange={walletAddress ? undefined : set("sender")}
           onBlur={blur("sender")}
-          placeholder="G…  (56-character Stellar public key)"
+          placeholder="Connect wallet or paste a 56-character Stellar public key"
           aria-describedby={fieldError("sender") ? "sender-error" : "sender-hint"}
           aria-invalid={!!fieldError("sender")}
           autoComplete="off"
           spellCheck={false}
+          readOnly={!!walletAddress}
+          className={walletAddress ? "input-readonly" : undefined}
         />
         <AccountHint value={values.sender} />
         {fieldError("sender") && (
@@ -177,7 +215,63 @@ export function CreateStreamForm({ onCreate, apiError }: CreateStreamFormProps) 
         )}
       </div>
 
+      {/* Recipient */}
+      <div className={`field-group${fieldError("recipient") ? " field-group--error" : ""}`}>
+        <label htmlFor="stream-recipient">
+          Recipient Account
+          <span className="field-required" aria-hidden> *</span>
+        </label>
+        <input
+          id="stream-recipient"
+          type="text"
+          value={values.recipient}
+          onChange={set("recipient")}
+          onBlur={blur("recipient")}
+          placeholder="G…  (56-character Stellar public key)"
+          aria-describedby={fieldError("recipient") ? "recipient-error" : "recipient-hint"}
+          aria-invalid={!!fieldError("recipient")}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <AccountHint value={values.recipient} />
+        {fieldError("recipient") && (
+          <span id="recipient-error" className="field-error" role="alert">
+            {fieldError("recipient")}
+          </span>
+        )}
+      </div>
 
+      <div className="row">
+        {/* Asset Code */}
+        <div className={`field-group${fieldError("assetCode") ? " field-group--error" : ""}`}>
+          <label htmlFor="stream-asset">
+            Asset Code
+            <span className="field-required" aria-hidden> *</span>
+          </label>
+          <input
+            id="stream-asset"
+            type="text"
+            value={values.assetCode}
+            onChange={set("assetCode")}
+            onBlur={blur("assetCode")}
+            placeholder="USDC"
+            maxLength={12}
+            aria-describedby={fieldError("assetCode") ? "asset-error" : undefined}
+            aria-invalid={!!fieldError("assetCode")}
+          />
+          {fieldError("assetCode") && (
+            <span id="asset-error" className="field-error" role="alert">
+              {fieldError("assetCode")}
+            </span>
+          )}
+        </div>
+
+        {/* Total Amount */}
+        <div className={`field-group${fieldError("totalAmount") ? " field-group--error" : ""}`}>
+          <label htmlFor="stream-amount">
+            Total Amount
+            <span className="field-required" aria-hidden> *</span>
+          </label>
           <input
             id="stream-amount"
             type="number"
@@ -262,12 +356,20 @@ export function CreateStreamForm({ onCreate, apiError }: CreateStreamFormProps) 
         </div>
       </div>
 
+      {/* Wallet-not-connected guard */}
+      {!walletAddress && (
+        <p className="wallet-required-notice" role="alert">
+          Connect your Freighter wallet to create a stream.
+        </p>
+      )}
+
       {/* Submit */}
       <button
         className="btn-primary"
         type="submit"
-        disabled={isSubmitting || (submitAttempted && !formValid)}
+        disabled={isSubmitting || !walletAddress || (submitAttempted && !formValid)}
         aria-busy={isSubmitting}
+        title={!walletAddress ? "Connect your wallet first" : undefined}
       >
         {isSubmitting ? "Creating…" : "Create Stream"}
       </button>
