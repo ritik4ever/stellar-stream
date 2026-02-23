@@ -1,6 +1,9 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short,
+    token::Client as TokenClient, Address, Env,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,7 +65,7 @@ impl StellarStreamContract {
         start_time: u64,
         end_time: u64,
     ) -> u64 {
-        // sender.require_auth();
+        sender.require_auth();
 
         if total_amount <= 0 {
             panic!("total_amount must be positive");
@@ -70,6 +73,17 @@ impl StellarStreamContract {
         if end_time <= start_time {
             panic!("end_time must be greater than start_time");
         }
+
+        // checks sebder balance.
+        let token_client = TokenClient::new(&env, &token);
+        let sender_balance = token_client.balance(&sender);
+        if sender_balance < total_amount {
+            panic!("insufficient sender balance");
+        }
+
+        // escrow = transfer total_amount from sender into this contract
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&sender, &contract_address, &total_amount);
 
         let mut next_id: u64 = env
             .storage()
@@ -127,11 +141,7 @@ impl StellarStreamContract {
         let stream = read_stream(&env, stream_id);
         let vested = vested_amount(&stream, at_time);
         let claimable = vested - stream.claimed_amount;
-        if claimable < 0 {
-            0
-        } else {
-            claimable
-        }
+        if claimable < 0 { 0 } else { claimable }
     }
 
     pub fn claim(env: Env, stream_id: u64, recipient: Address, amount: i128) -> i128 {
@@ -143,14 +153,22 @@ impl StellarStreamContract {
         if stream.recipient != recipient {
             panic!("recipient mismatch");
         }
-        // recipient.require_auth();
+        recipient.require_auth();
 
         let now = env.ledger().timestamp();
         let claimable_now = Self::claimable(env.clone(), stream_id, now);
+
+        // amount claimed cannot exceed vested amount
         if amount > claimable_now {
             panic!("amount exceeds claimable");
         }
 
+        // transfer tokens from contract escrow to recipient
+        let token_client = TokenClient::new(&env, &stream.token);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&contract_address, &recipient, &amount);
+
+        // Update accounting after successful transfer
         stream.claimed_amount += amount;
         env.storage()
             .persistent()
@@ -162,7 +180,7 @@ impl StellarStreamContract {
                 stream_id,
                 recipient,
                 amount,
-            }
+            },
         );
 
         amount
@@ -173,22 +191,27 @@ impl StellarStreamContract {
         if stream.sender != sender {
             panic!("sender mismatch");
         }
-        // sender.require_auth();
+        sender.require_auth();
+
         if stream.canceled {
             return;
         }
 
         let now = env.ledger().timestamp();
-        let min_end = if now > stream.start_time {
-            now
-        } else {
-            stream.start_time + 1
-        };
+        let min_end = if now > stream.start_time { now } else { stream.start_time + 1 };
 
         if min_end < stream.end_time {
             stream.end_time = min_end;
         }
         stream.canceled = true;
+
+        // refunding unclaimed tokens back to sender
+        let unclaimed = stream.total_amount - stream.claimed_amount;
+        if unclaimed > 0 {
+            let token_client = TokenClient::new(&env, &stream.token);
+            let contract_address = env.current_contract_address();
+            token_client.transfer(&contract_address, &sender, &unclaimed);
+        }
 
         env.storage()
             .persistent()
@@ -196,10 +219,7 @@ impl StellarStreamContract {
 
         env.events().publish(
             (symbol_short!("Stream"), symbol_short!("Canceled")),
-            StreamCanceled {
-                stream_id,
-                sender,
-            }
+            StreamCanceled { stream_id, sender },
         );
     }
 }
