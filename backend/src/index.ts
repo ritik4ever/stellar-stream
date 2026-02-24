@@ -4,6 +4,9 @@ import express, { Request, Response } from "express";
 import swaggerUi from "swagger-ui-express";
 import { swaggerDocument } from "./swagger";
 import { fetchOpenIssues } from "./services/openIssues";
+import { authMiddleware, generateChallenge, verifyChallengeAndIssueToken } from "./services/auth";
+import { getStreamHistory } from "./services/eventHistory";
+import { initIndexer, startIndexer } from "./services/indexer";
 
 import {
   calculateProgress,
@@ -47,7 +50,7 @@ function toNumber(value: unknown): number | null {
   return null;
 }
 
-
+function parseInput(body: unknown): { ok: false; message: string } | { ok: true; value: StreamInput } {
   if (!body || typeof body !== "object") {
     return { ok: false, message: "Body must be a JSON object." };
   }
@@ -326,9 +329,34 @@ app.get("/api/open-issues", async (_req: Request, res: Response) => {
   }
 });
 
+app.get("/api/streams/:id/history", (req: Request, res: Response) => {
+  try {
+    const events = getStreamHistory(req.params.id);
+    res.json({ data: events });
+  } catch (err: any) {
+    console.error("Failed to fetch stream history:", err);
+    res
+      .status(500)
+      .json({ error: err.message || "Failed to fetch stream history." });
+  }
+});
 
+async function startServer() {
   await initSoroban();
   await syncStreams();
+  
+  // Initialize and start event indexer
+  const rpcUrl = process.env.RPC_URL || "https://soroban-testnet.stellar.org:443";
+  const contractId = process.env.CONTRACT_ID;
+  const networkPassphrase = process.env.NETWORK_PASSPHRASE;
+  
+  if (contractId) {
+    initIndexer(rpcUrl, contractId, networkPassphrase);
+    startIndexer(10000); // Poll every 10 seconds
+  } else {
+    console.warn("CONTRACT_ID not set, event indexer will not start");
+  }
+  
   app.listen(port, () => {
     console.log(`StellarStream API listening on http://localhost:${port}`);
   });

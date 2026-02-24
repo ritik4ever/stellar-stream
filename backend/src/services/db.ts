@@ -41,5 +41,19 @@ function migrate(): void {
       canceled_at     INTEGER,
       completed_at    INTEGER
     );
+
+    CREATE TABLE IF NOT EXISTS stream_events (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      stream_id       TEXT NOT NULL,
+      event_type      TEXT NOT NULL,
+      timestamp       INTEGER NOT NULL,
+      actor           TEXT,
+      amount          REAL,
+      metadata        TEXT,
+      FOREIGN KEY (stream_id) REFERENCES streams(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_stream_events_stream_id ON stream_events(stream_id);
+    CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp ON stream_events(timestamp);
   `);
 }

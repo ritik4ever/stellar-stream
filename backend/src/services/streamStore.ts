@@ -10,6 +10,7 @@ import {
   Networks,
 } from "@stellar/stellar-sdk";
 import { initDb, getDb } from "./db";
+import { recordEvent } from "./eventHistory";
 
 export type StreamStatus = "scheduled" | "active" | "completed" | "canceled";
 
@@ -303,6 +304,21 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
   };
 
   upsertStream(stream);
+  
+  // Record creation event
+  recordEvent(
+    streamIdStr,
+    "created",
+    stream.createdAt,
+    input.sender,
+    input.totalAmount,
+    {
+      recipient: input.recipient,
+      assetCode: input.assetCode,
+      durationSeconds: input.durationSeconds,
+    },
+  );
+  
   return stream;
 }
 
@@ -347,6 +363,10 @@ export async function cancelStream(
 
   stream.canceledAt = nowInSeconds();
   upsertStream(stream);
+  
+  // Record cancellation event
+  recordEvent(stream.id, "canceled", stream.canceledAt, stream.sender);
+  
   return stream;
 }
 
@@ -372,6 +392,17 @@ export function updateStreamStartAt(
 
   stream.startAt = newStartAt;
   upsertStream(stream);
+  
+  // Record start time update event
+  recordEvent(
+    stream.id,
+    "start_time_updated",
+    nowInSeconds(),
+    stream.sender,
+    undefined,
+    { oldStartAt: stream.startAt, newStartAt },
+  );
+  
   return stream;
 }
 

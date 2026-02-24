@@ -116,3 +116,19 @@ export async function listOpenIssues(): Promise<OpenIssue[]> {
   const body = await parseResponse<{ data: OpenIssue[] }>(response);
   return body.data;
 }
+
+export interface StreamEvent {
+  id: number;
+  streamId: string;
+  eventType: "created" | "claimed" | "canceled" | "start_time_updated";
+  timestamp: number;
+  actor?: string;
+  amount?: number;
+  metadata?: Record<string, any>;
+}
+
+export async function getStreamHistory(streamId: string): Promise<StreamEvent[]> {
+  const response = await fetch(`${API_BASE}/streams/${streamId}/history`);
+  const body = await parseResponse<{ data: StreamEvent[] }>(response);
+  return body.data;
+}
