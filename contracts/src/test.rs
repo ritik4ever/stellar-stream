@@ -229,7 +229,7 @@ fn test_cancel_refunds_unclaimed_to_sender() {
     env.ledger().with_mut(|l| l.timestamp = 500);
     client.cancel(&stream_id, &sender);
     let token_client = token::Client::new(&env, &token);
-    assert_eq!(token_client.balance(&sender), 500); 
+    assert_eq!(token_client.balance(&sender), 500);
 }
 
 #[test]
