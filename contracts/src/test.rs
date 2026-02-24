@@ -193,11 +193,8 @@ fn test_claimable_accounts_for_already_claimed() {
     let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000);
     env.ledger().with_mut(|l| l.timestamp = 500);
     client.claim(&stream_id, &recipient, &300);
-    // 500 vested - 300 claimed = 200 remaining
     assert_eq!(client.claimable(&stream_id, &500), 200);
 }
-
-// ── Claimable: after stream ends ─────────────────────────────────────────────
 
 #[test]
 fn test_claimable_after_stream_end_caps_at_total() {
@@ -212,12 +209,9 @@ fn test_claimable_after_stream_end_caps_at_total() {
     let token_admin = token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&sender, &1000);
     let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000);
-    // query well past end_time
     assert_eq!(client.claimable(&stream_id, &1000), 1000);
     assert_eq!(client.claimable(&stream_id, &9999), 1000);
 }
-
-// ── Cancel behavior ───────────────────────────────────────────────────────────
 
 #[test]
 fn test_cancel_refunds_unclaimed_to_sender() {
@@ -233,10 +227,9 @@ fn test_cancel_refunds_unclaimed_to_sender() {
     token_admin.mint(&sender, &1000);
     let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000);
     env.ledger().with_mut(|l| l.timestamp = 500);
-    // cancel at t=500: 500 vested (for recipient), 500 unvested (refund to sender)
     client.cancel(&stream_id, &sender);
     let token_client = token::Client::new(&env, &token);
-    assert_eq!(token_client.balance(&sender), 500); // unvested refund
+    assert_eq!(token_client.balance(&sender), 500); 
 }
 
 #[test]
@@ -271,7 +264,6 @@ fn test_cancel_idempotent_double_cancel_does_not_panic() {
     token_admin.mint(&sender, &1000);
     let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000);
     client.cancel(&stream_id, &sender);
-    // second cancel should be a no-op, not a panic
     client.cancel(&stream_id, &sender);
 }
 
@@ -287,11 +279,9 @@ fn test_cancel_recipient_cannot_claim_beyond_vested_at_cancel_time() {
     let token = create_token(&env, &admin);
     let token_admin = token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&sender, &1000);
-    // stream t=0..1000, cancel at t=500 (500 tokens vested)
     let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000);
     env.ledger().with_mut(|l| l.timestamp = 500);
     client.cancel(&stream_id, &sender);
-    // recipient can still claim the 500 that were vested at cancel time
     client.claim(&stream_id, &recipient, &500);
     let token_client = token::Client::new(&env, &token);
     assert_eq!(token_client.balance(&recipient), 500);
@@ -314,8 +304,6 @@ fn test_cancel_fails_with_wrong_sender() {
     let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000);
     client.cancel(&stream_id, &wrong_sender);
 }
-
-// ── Invalid claim attempts ────────────────────────────────────────────────────
 
 #[test]
 #[should_panic(expected = "amount must be positive")]
@@ -348,7 +336,6 @@ fn test_claim_before_stream_start_panics() {
     let token = create_token(&env, &admin);
     let token_admin = token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&sender, &1000);
-    // stream starts at t=1000, ledger is at t=0
     let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &1000, &2000);
     client.claim(&stream_id, &recipient, &1);
 }
@@ -363,8 +350,6 @@ fn test_claim_nonexistent_stream_panics() {
     let recipient = Address::generate(&env);
     client.claim(&999, &recipient, &100);
 }
-
-// ── create_stream validation ──────────────────────────────────────────────────
 
 #[test]
 #[should_panic(expected = "total_amount must be positive")]
