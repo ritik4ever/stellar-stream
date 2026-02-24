@@ -1,16 +1,14 @@
-/**
- * Stellar account IDs are base32-encoded Ed25519 public keys.
- * A valid public key starts with 'G', is exactly 56 characters long,
- * and uses the Stellar base32 alphabet (A-Z, 2-7).
- */
-export const STELLAR_ACCOUNT_REGEX = /^G[A-Z2-7]{55}$/;
+import {
+  STELLAR_ACCOUNT_REGEX,
+  assetCodeSchema,
+  createStreamPayloadSchema,
+  stellarAccountIdSchema,
+  totalAmountSchema,
+} from "../../../backend/src/validation/schemas";
 
 export function isStellarAccount(value: string): boolean {
   return STELLAR_ACCOUNT_REGEX.test(value.trim());
 }
-
-/** Asset codes: 1-12 alphanumeric chars per SEP-0001 / Stellar docs */
-export const ASSET_CODE_REGEX = /^[A-Za-z0-9]{1,12}$/;
 
 export interface FieldErrors {
   sender?: string;
@@ -37,44 +35,60 @@ export function validateForm(values: FormValues): FieldErrors {
   const senderTrimmed = values.sender.trim();
   if (!senderTrimmed) {
     errors.sender = "Sender account is required.";
-  } else if (!isStellarAccount(senderTrimmed)) {
-    errors.sender =
-      "Must be a valid Stellar account ID (starts with G, exactly 56 characters, alphanumeric).";
+  } else {
+    const senderResult = stellarAccountIdSchema.safeParse(senderTrimmed);
+    if (!senderResult.success) {
+      errors.sender = senderResult.error.issues[0]?.message;
+    }
   }
 
   // --- Recipient ---
   const recipientTrimmed = values.recipient.trim();
   if (!recipientTrimmed) {
     errors.recipient = "Recipient account is required.";
-  } else if (!isStellarAccount(recipientTrimmed)) {
-    errors.recipient =
-      "Must be a valid Stellar account ID (starts with G, exactly 56 characters, alphanumeric).";
+  } else {
+    const recipientResult = stellarAccountIdSchema.safeParse(recipientTrimmed);
+    if (!recipientResult.success) {
+      errors.recipient = recipientResult.error.issues[0]?.message;
+    }
   }
 
-  if (
-    senderTrimmed &&
-    recipientTrimmed &&
-    isStellarAccount(senderTrimmed) &&
-    isStellarAccount(recipientTrimmed) &&
-    senderTrimmed === recipientTrimmed
-  ) {
-    errors.recipient = "Recipient must differ from the sender account.";
+  const sameAccountCheck = createStreamPayloadSchema.safeParse({
+    sender: senderTrimmed,
+    recipient: recipientTrimmed,
+    assetCode: values.assetCode,
+    totalAmount: values.totalAmount,
+    durationSeconds: 3600,
+  });
+  if (!sameAccountCheck.success) {
+    const recipientIssue = sameAccountCheck.error.issues.find(
+      (issue) => issue.path.join(".") === "recipient",
+    );
+    if (recipientIssue) {
+      errors.recipient = recipientIssue.message;
+    }
   }
 
   // --- Asset code ---
   const assetTrimmed = values.assetCode.trim();
   if (!assetTrimmed) {
     errors.assetCode = "Asset code is required.";
-  } else if (!ASSET_CODE_REGEX.test(assetTrimmed)) {
-    errors.assetCode = "Asset code must be 1–12 alphanumeric characters (e.g. USDC, XLM).";
+  } else {
+    const assetResult = assetCodeSchema.safeParse(assetTrimmed);
+    if (!assetResult.success) {
+      errors.assetCode = assetResult.error.issues[0]?.message;
+    }
   }
 
   // --- Total amount ---
-  const amountNum = Number(values.totalAmount);
-  if (values.totalAmount === "" || isNaN(amountNum)) {
+  const amountRaw = values.totalAmount.trim();
+  if (amountRaw === "") {
     errors.totalAmount = "Total amount is required.";
-  } else if (amountNum <= 0) {
-    errors.totalAmount = "Amount must be greater than zero.";
+  } else {
+    const amountResult = totalAmountSchema.safeParse(amountRaw);
+    if (!amountResult.success) {
+      errors.totalAmount = amountResult.error.issues[0]?.message;
+    }
   }
 
   // --- Duration ---
