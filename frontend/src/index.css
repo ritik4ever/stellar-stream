@@ -638,3 +638,125 @@ td {
   border-color: #d1d5db !important;
   box-shadow: none !important;
 }
+
+/* ── Recipient dashboard ───────────────────────────────── */
+
+.recipient-dashboard {
+  margin-top: 0;
+}
+
+.recipient-dashboard-card {
+  display: grid;
+  gap: 1rem;
+}
+
+.recipient-dashboard-title {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.recipient-dashboard-subtitle {
+  margin: -0.5rem 0 0;
+}
+
+.recipient-dashboard-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+}
+
+.recipient-dashboard-section {
+  margin-top: 0.5rem;
+}
+
+.recipient-dashboard-section-title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #374151;
+}
+
+.recipient-dashboard-empty,
+.recipient-dashboard-loading {
+  padding: 1.5rem;
+  text-align: center;
+  background: #f9fafb;
+  border-radius: 8px;
+  border: 1px dashed #e5e7eb;
+}
+
+.recipient-dashboard-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.recipient-dashboard-error {
+  padding: 1rem;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  color: #991b1b;
+}
+
+.recipient-dashboard-error p {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #e5e7eb;
+  border-top-color: #0ea5a5;
+  border-radius: 50%;
+  animation: recipient-spin 0.7s linear infinite;
+}
+
+@keyframes recipient-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.truncate-address {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
+.progress-copy {
+  display: block;
+  font-size: 0.88rem;
+}
+
+/* ── Nav tabs (Dashboard vs Recipient) ────────────────── */
+
+.app-nav {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.app-nav-link {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #6b7280;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.app-nav-link:hover {
+  color: #374151;
+}
+
+.app-nav-link--active {
+  color: #0ea5a5;
+  border-bottom-color: #0ea5a5;
+}
