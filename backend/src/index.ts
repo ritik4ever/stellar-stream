@@ -322,6 +322,19 @@ app.get("/api/open-issues", async (_req: Request, res: Response) => {
 async function startServer() {
   await initSoroban();
   await syncStreams();
+  
+  // Initialize and start event indexer
+  const rpcUrl = process.env.RPC_URL || "https://soroban-testnet.stellar.org:443";
+  const contractId = process.env.CONTRACT_ID;
+  const networkPassphrase = process.env.NETWORK_PASSPHRASE;
+  
+  if (contractId) {
+    initIndexer(rpcUrl, contractId, networkPassphrase);
+    startIndexer(10000); // Poll every 10 seconds
+  } else {
+    console.warn("CONTRACT_ID not set, event indexer will not start");
+  }
+  
   app.listen(port, () => {
     console.log(`StellarStream API listening on http://localhost:${port}`);
   });

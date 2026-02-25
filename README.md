@@ -20,6 +20,7 @@ Current MVP behavior:
 - List streams with live progress
 - Cancel stream
 - Show computed metrics (active/completed/vested)
+- Track and display event history for stream lifecycle actions
 
 ## 2) Current Architecture
 
@@ -30,7 +31,8 @@ Frontend (`frontend`, port `3000`)
 
 Backend (`backend`, port `3001`)
 - Express REST API
-- In-memory stream storage (`Map`)
+- SQLite database for persistent storage
+- Event indexer worker for tracking stream lifecycle
 - Computes progress in real time from timestamps
 
 Contract (`contracts`)
@@ -143,6 +145,28 @@ Purpose:
 Response:
 - `data: OpenIssue[]`
 
+### `GET /api/streams/:id/history`
+Purpose:
+- Fetch event history timeline for a specific stream
+
+Response:
+- `data: StreamEvent[]` (ordered by timestamp ascending)
+
+Event types:
+- `created`: Stream was created
+- `claimed`: Tokens were claimed from the stream
+- `canceled`: Stream was canceled
+- `start_time_updated`: Start time was modified
+
+Each event includes:
+- `id`: Event ID
+- `streamId`: Associated stream ID
+- `eventType`: Type of event
+- `timestamp`: Unix timestamp when event occurred
+- `actor`: Account that triggered the event (optional)
+- `amount`: Amount involved (optional, for created/claimed)
+- `metadata`: Additional context (optional)
+
 ## 5) Smart Contract (Soroban) Behavior
 
 Contract file:
@@ -250,6 +274,7 @@ Backend:
 - `RPC_URL` (optional, defaults to `https://soroban-testnet.stellar.org:443`) - Soroban RPC endpoint
 - `NETWORK_PASSPHRASE` (optional, defaults to testnet) - Network passphrase
 - `ALLOWED_ASSETS` (optional, defaults to `USDC,XLM`) - Comma-separated list of allowed asset codes
+- `DB_PATH` (optional, defaults to `backend/data/streams.db`) - SQLite database file path
 
 Frontend:
 - `VITE_API_URL` (optional, defaults to `/api`)
@@ -272,7 +297,11 @@ Backend:
 - `backend/package.json`: backend dependencies and scripts.
 - `backend/tsconfig.json`: backend TypeScript compiler config.
 - `backend/src/index.ts`: API server, route handlers, request validation.
-- `backend/src/services/streamStore.ts`: in-memory stream store + progress math.
+- `backend/src/services/streamStore.ts`: stream store + progress math + Soroban integration.
+- `backend/src/services/db.ts`: SQLite database initialization and schema.
+- `backend/src/services/eventHistory.ts`: event recording and retrieval functions.
+- `backend/src/services/indexer.ts`: background worker for indexing contract events.
+- `backend/src/services/auth.ts`: authentication middleware and JWT handling.
 - `backend/src/services/openIssues.ts`: backlog entries returned by API.
 
 Frontend:
@@ -290,6 +319,7 @@ Frontend:
 - `frontend/src/types/stream.ts`: shared frontend data types.
 - `frontend/src/components/CreateStreamForm.tsx`: stream creation form.
 - `frontend/src/components/StreamsTable.tsx`: stream list and cancel actions.
+- `frontend/src/components/StreamTimeline.tsx`: event history timeline display.
 - `frontend/src/components/IssueBacklog.tsx`: backlog panel renderer.
 
 Contract:
@@ -300,17 +330,18 @@ Contract:
 
 ## 10) Known Limitations
 
-- Backend storage is in memory (not persistent).
-- Contract is not connected to backend execution path yet.
+- Contract is not fully connected to backend execution path yet.
 - Wallet sign/transaction flow is not active yet in UI.
 - No authentication layer on write endpoints.
 - Test coverage and CI can be expanded.
+- Event indexer polls every 10 seconds (configurable).
 
 ## 11) Suggested Next Steps
 
 - Move stream source of truth from memory to Soroban state.
 - Add wallet-authenticated transaction signing flow.
 - Add contract tests and backend integration tests.
-- Add persistent event/history storage for analytics.
+- Enhance event history with claim events from contract.
+- Add real-time event notifications via WebSockets.
 
 
