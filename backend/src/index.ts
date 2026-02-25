@@ -1,9 +1,11 @@
 import cors from "cors";
+import { requestLogger } from "./middleware/requestLogger";
 import "dotenv/config";
 import express, { Request, Response } from "express";
 import swaggerUi from "swagger-ui-express";
 import { swaggerDocument } from "./swagger";
 import { fetchOpenIssues } from "./services/openIssues";
+import { authMiddleware, generateChallenge, verifyChallengeAndIssueToken } from "./services/auth";
 
 import {
   calculateProgress,
@@ -31,6 +33,7 @@ const ALLOWED_ASSETS = (process.env.ALLOWED_ASSETS || "USDC,XLM")
 
 app.use(cors());
 app.use(express.json());
+app.use(requestLogger);
 
 app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
@@ -47,7 +50,9 @@ function toNumber(value: unknown): number | null {
   return null;
 }
 
-
+function parseInput(
+  body: unknown,
+): { ok: true; value: StreamInput } | { ok: false; message: string } {
   if (!body || typeof body !== "object") {
     return { ok: false, message: "Body must be a JSON object." };
   }
@@ -196,7 +201,7 @@ app.get("/api/streams/export.csv", (req: Request, res: Response) => {
 app.get("/api/streams/:id", (req: Request, res: Response) => {
   const stream = getStream(req.params.id);
   if (!stream) {
-    res.status(404).json({ error: "Stream not found." });
+    res.status(404).json({ error: "Stream not found.", requestId: req.requestId });
     return;
   }
   res.json({ data: { ...stream, progress: calculateProgress(stream) } });
@@ -205,7 +210,7 @@ app.get("/api/streams/:id", (req: Request, res: Response) => {
 app.get("/api/auth/challenge", (req: Request, res: Response) => {
   const accountId = req.query.accountId as string;
   if (!accountId) {
-    res.status(400).json({ error: "accountId query parameter is required." });
+    res.status(400).json({ error: "accountId query parameter is required.", requestId: req.requestId });
     return;
   }
 
@@ -214,16 +219,14 @@ app.get("/api/auth/challenge", (req: Request, res: Response) => {
     res.json({ transaction: challengeTransaction });
   } catch (error: any) {
     console.error("Failed to generate challenge:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to generate challenge transaction." });
+    res.status(500).json({ error: "Failed to generate challenge transaction.", requestId: req.requestId });
   }
 });
 
 app.post("/api/auth/token", (req: Request, res: Response) => {
   const { transaction } = req.body;
   if (!transaction) {
-    res.status(400).json({ error: "transaction in body is required." });
+    res.status(400).json({ error: "transaction in body is required.", requestId: req.requestId });
     return;
   }
 
@@ -231,7 +234,7 @@ app.post("/api/auth/token", (req: Request, res: Response) => {
     const token = verifyChallengeAndIssueToken(transaction);
     res.json({ token });
   } catch (error: any) {
-    res.status(401).json({ error: error.message });
+    res.status(401).json({ error: error.message, requestId: req.requestId });
   }
 });
 
@@ -241,7 +244,7 @@ app.post(
   async (req: Request, res: Response) => {
     const parsed = parseInput(req.body);
     if (!parsed.ok) {
-      res.status(400).json({ error: parsed.message });
+      res.status(400).json({ error: parsed.message, requestId: req.requestId });
       return;
     }
 
@@ -252,9 +255,7 @@ app.post(
         .json({ data: { ...stream, progress: calculateProgress(stream) } });
     } catch (err: any) {
       console.error("Failed to create stream:", err);
-      res
-        .status(500)
-        .json({ error: err.message || "Failed to create stream." });
+      res.status(500).json({ error: err.message || "Failed to create stream.", requestId: req.requestId });
     }
   },
 );
@@ -266,15 +267,13 @@ app.post(
     try {
       const stream = await cancelStream(req.params.id);
       if (!stream) {
-        res.status(404).json({ error: "Stream not found." });
+        res.status(404).json({ error: "Stream not found.", requestId: req.requestId });
         return;
       }
       res.json({ data: { ...stream, progress: calculateProgress(stream) } });
     } catch (err: any) {
       console.error("Failed to cancel stream:", err);
-      res
-        .status(500)
-        .json({ error: err.message || "Failed to cancel stream." });
+      res.status(500).json({ error: err.message || "Failed to cancel stream.", requestId: req.requestId });
     }
   },
 );
@@ -286,14 +285,12 @@ app.patch(
     const newStartAt = toNumber(req.body?.startAt);
 
     if (newStartAt === null || newStartAt <= 0) {
-      res
-        .status(400)
-        .json({ error: "startAt must be a valid UNIX timestamp in seconds." });
+      res.status(400).json({ error: "startAt must be a valid UNIX timestamp in seconds.", requestId: req.requestId });
       return;
     }
 
     if (Math.floor(newStartAt) <= Math.floor(Date.now() / 1000)) {
-      res.status(400).json({ error: "startAt must be in the future." });
+      res.status(400).json({ error: "startAt must be in the future.", requestId: req.requestId });
       return;
     }
 
@@ -307,9 +304,7 @@ app.patch(
       });
     } catch (err: any) {
       const statusCode = (err as any).statusCode ?? 500;
-      res
-        .status(statusCode)
-        .json({ error: err.message || "Failed to update stream start time." });
+      res.status(statusCode).json({ error: err.message || "Failed to update stream start time.", requestId: req.requestId });
     }
   },
 );
@@ -320,13 +315,11 @@ app.get("/api/open-issues", async (_req: Request, res: Response) => {
     res.json({ data });
   } catch (err: any) {
     console.error("Failed to fetch open issues from proxy:", err);
-    res
-      .status(500)
-      .json({ error: err.message || "Failed to fetch open issues." });
+    res.status(500).json({ error: err.message || "Failed to fetch open issues.", requestId: _req.requestId });
   }
 });
 
-
+async function startServer() {
   await initSoroban();
   await syncStreams();
   app.listen(port, () => {
