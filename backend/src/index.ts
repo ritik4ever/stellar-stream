@@ -1,4 +1,5 @@
 import cors from "cors";
+import { requestLogger } from "./middleware/requestLogger";
 import "dotenv/config";
 import express, { Request, Response } from "express";
 import swaggerUi from "swagger-ui-express";
@@ -201,7 +202,7 @@ app.get("/api/streams/:id", (req: Request, res: Response) => {
 
   const stream = getStream(parsedId.value);
   if (!stream) {
-    res.status(404).json({ error: "Stream not found." });
+    res.status(404).json({ error: "Stream not found.", requestId: req.requestId });
     return;
   }
   res.json({ data: { ...stream, progress: calculateProgress(stream) } });
@@ -234,7 +235,7 @@ app.post("/api/auth/token", (req: Request, res: Response) => {
     const token = verifyChallengeAndIssueToken(transaction);
     res.json({ token });
   } catch (error: any) {
-    res.status(401).json({ error: error.message });
+    res.status(401).json({ error: error.message, requestId: req.requestId });
   }
 });
 
@@ -270,7 +271,7 @@ app.post(
     try {
       const stream = await cancelStream(parsedId.value);
       if (!stream) {
-        res.status(404).json({ error: "Stream not found." });
+        res.status(404).json({ error: "Stream not found.", requestId: req.requestId });
         return;
       }
       res.json({ data: { ...stream, progress: calculateProgress(stream) } });
@@ -328,6 +329,19 @@ app.get("/api/open-issues", async (_req: Request, res: Response) => {
 async function startServer() {
   await initSoroban();
   await syncStreams();
+  
+  // Initialize and start event indexer
+  const rpcUrl = process.env.RPC_URL || "https://soroban-testnet.stellar.org:443";
+  const contractId = process.env.CONTRACT_ID;
+  const networkPassphrase = process.env.NETWORK_PASSPHRASE;
+  
+  if (contractId) {
+    initIndexer(rpcUrl, contractId, networkPassphrase);
+    startIndexer(10000); // Poll every 10 seconds
+  } else {
+    console.warn("CONTRACT_ID not set, event indexer will not start");
+  }
+  
   app.listen(port, () => {
     console.log(`StellarStream API listening on http://localhost:${port}`);
   });

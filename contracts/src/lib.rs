@@ -1,8 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short,
-    token::Client as TokenClient, Address, Env,
+    contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
 };
 
 #[contracttype]
@@ -141,7 +140,11 @@ impl StellarStreamContract {
         let stream = read_stream(&env, stream_id);
         let vested = vested_amount(&stream, at_time);
         let claimable = vested - stream.claimed_amount;
-        if claimable < 0 { 0 } else { claimable }
+        if claimable < 0 {
+            0
+        } else {
+            claimable
+        }
     }
 
     pub fn claim(env: Env, stream_id: u64, recipient: Address, amount: i128) -> i128 {
@@ -198,19 +201,26 @@ impl StellarStreamContract {
         }
 
         let now = env.ledger().timestamp();
-        let min_end = if now > stream.start_time { now } else { stream.start_time + 1 };
+        stream.canceled = true;
 
+        // compute vested BEFORE truncating end_time
+        let vested = vested_amount(&stream, now);
+        let sender_refund = stream.total_amount - vested;
+
+        // truncate end_time so recipient can't claim past cancel point
+        let min_end = if now > stream.start_time {
+            now
+        } else {
+            stream.start_time + 1
+        };
         if min_end < stream.end_time {
             stream.end_time = min_end;
         }
-        stream.canceled = true;
 
-        // refunding unclaimed tokens back to sender
-        let unclaimed = stream.total_amount - stream.claimed_amount;
-        if unclaimed > 0 {
+        if sender_refund > 0 {
             let token_client = TokenClient::new(&env, &stream.token);
             let contract_address = env.current_contract_address();
-            token_client.transfer(&contract_address, &sender, &unclaimed);
+            token_client.transfer(&contract_address, &sender, &sender_refund);
         }
 
         env.storage()
