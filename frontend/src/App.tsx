@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { CreateStreamForm } from "./components/CreateStreamForm";
 import { EditStartTimeModal } from "./components/EditStartTimeModal";
 import { IssueBacklog } from "./components/IssueBacklog";
+import { RecipientDashboard } from "./components/RecipientDashboard";
 import { StreamsTable } from "./components/StreamsTable";
+import { StreamMetricsChart } from "./components/StreamMetricsChart";
 import { WalletButton } from "./components/WalletButton";
 import { useFreighter } from "./hooks/useFreighter";
 import {
@@ -13,11 +15,18 @@ import {
   updateStreamStartAt,
 } from "./services/api";
 import { OpenIssue, Stream } from "./types/stream";
+import { useMetricsHistory } from "./hooks/useMetricsHistory";
+
+type ViewMode = "dashboard" | "recipient";
 
 // Derive a user-friendly hint string for global (non-form) errors.
 function describeGlobalError(raw: string): string {
   const lower = raw.toLowerCase();
-  if (lower.includes("network") || lower.includes("fetch") || lower.includes("failed to fetch")) {
+  if (
+    lower.includes("network") ||
+    lower.includes("fetch") ||
+    lower.includes("failed to fetch")
+  ) {
     return "Network error — check that the StellarStream backend is running and reachable.";
   }
   if (lower.includes("not found")) {
@@ -31,6 +40,7 @@ function describeGlobalError(raw: string): string {
 
 function App() {
   const wallet = useFreighter();
+  const [viewMode, setViewMode] = useState<ViewMode>("dashboard");
   const [streams, setStreams] = useState<Stream[]>([]);
   const [issues, setIssues] = useState<OpenIssue[]>([]);
   const [globalError, setGlobalError] = useState<string | null>(null);
@@ -47,14 +57,17 @@ function App() {
 
     async function bootstrap() {
       try {
-        const [streamData, issueData] = await Promise.all([listStreams(), listOpenIssues()]);
+        const [streamData, issueData] = await Promise.all([
+          listStreams(),
+          listOpenIssues(),
+        ]);
         if (!active) return;
         setStreams(streamData);
         setIssues(issueData);
       } catch (err) {
         if (!active) return;
         setGlobalError(
-          err instanceof Error ? describeGlobalError(err.message) : "Failed to load initial data."
+
         );
       }
     }
@@ -71,9 +84,16 @@ function App() {
   }, []);
 
   const metrics = useMemo(() => {
-    const activeCount = streams.filter((s) => s.progress.status === "active").length;
-    const completedCount = streams.filter((s) => s.progress.status === "completed").length;
-    const totalVested = streams.reduce((sum, s) => sum + s.progress.vestedAmount, 0);
+    const activeCount = streams.filter(
+      (s) => s.progress.status === "active",
+    ).length;
+    const completedCount = streams.filter(
+      (s) => s.progress.status === "completed",
+    ).length;
+    const totalVested = streams.reduce(
+      (sum, s) => sum + s.progress.vestedAmount,
+      0,
+    );
 
     return {
       total: streams.length,
@@ -83,7 +103,16 @@ function App() {
     };
   }, [streams]);
 
-  async function handleCreate(payload: Parameters<typeof createStream>[0]): Promise<void> {
+  const metricsHistory = useMetricsHistory(
+    metrics.active,
+    metrics.completed,
+    metrics.vested,
+    5000,
+  );
+
+  async function handleCreate(
+    payload: Parameters<typeof createStream>[0],
+  ): Promise<void> {
     setFormError(null);
     setGlobalError(null);
     try {
@@ -91,7 +120,9 @@ function App() {
       await refreshStreams();
     } catch (err) {
       // Surface form/create errors inline in the form, not as a global banner
-      setFormError(err instanceof Error ? err.message : "Failed to create stream.");
+      setFormError(
+        err instanceof Error ? err.message : "Failed to create stream.",
+      );
     }
   }
 
@@ -110,7 +141,10 @@ function App() {
     }
   }
 
-  async function handleUpdateStartTime(streamId: string, newStartAt: number): Promise<void> {
+  async function handleUpdateStartTime(
+    streamId: string,
+    newStartAt: number,
+  ): Promise<void> {
     await updateStreamStartAt(streamId, newStartAt);
     await refreshStreams();
   }
@@ -126,11 +160,32 @@ function App() {
           <WalletButton wallet={wallet} />
         </div>
         <p className="hero-copy">
-          Continuous on-chain style payments for salaries, subscriptions, and freelancer payouts on
-          Stellar.
+          Continuous on-chain style payments for salaries, subscriptions, and
+          freelancer payouts on Stellar.
         </p>
       </header>
 
+      <nav className="app-nav" aria-label="Main">
+        <button
+          type="button"
+          className={`app-nav-link ${viewMode === "dashboard" ? "app-nav-link--active" : ""}`}
+          onClick={() => setViewMode("dashboard")}
+        >
+          Dashboard
+        </button>
+        <button
+          type="button"
+          className={`app-nav-link ${viewMode === "recipient" ? "app-nav-link--active" : ""}`}
+          onClick={() => setViewMode("recipient")}
+        >
+          Recipient dashboard
+        </button>
+      </nav>
+
+      {viewMode === "recipient" ? (
+        <RecipientDashboard recipientAddress={wallet.address} />
+      ) : (
+        <>
       <section className="metric-grid">
         <article className="metric-card">
           <span>Total Streams</span>
@@ -148,6 +203,11 @@ function App() {
           <span>Total Vested</span>
           <strong>{metrics.vested}</strong>
         </article>
+      </section>
+
+      <section className="chart-section">
+        <h2 className="chart-section__title">Stream Metrics Trends</h2>
+        <StreamMetricsChart data={metricsHistory} />
       </section>
 
       {/* Global (cancel / bootstrap) errors shown as a dismissible banner */}
@@ -182,6 +242,8 @@ function App() {
           onConfirm={handleUpdateStartTime}
           onClose={() => setEditingStream(null)}
         />
+      )}
+        </>
       )}
     </div>
   );

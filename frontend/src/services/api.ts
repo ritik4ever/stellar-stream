@@ -2,16 +2,43 @@ import { CreateStreamPayload, OpenIssue, Stream } from "../types/stream";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "/api";
 
+let authToken: string | null = null;
+export function setAuthToken(token: string | null) {
+  authToken = token;
+}
+export function getAuthToken(): string | null {
+  return authToken;
+}
+
 async function parseResponse<T>(response: Response): Promise<T> {
-  const body = (await response.json()) as T & { error?: string };
+  const body = (await response.json().catch(() => ({}))) as T & {
+    error?: string;
+  };
   if (!response.ok) {
+    if (response.status === 401) {
+      setAuthToken(null);
+    }
     throw new Error(body.error ?? "Unexpected API error");
   }
   return body;
 }
 
-export async function listStreams(): Promise<Stream[]> {
-  const response = await fetch(`${API_BASE}/streams`);
+export interface ListStreamsFilters {
+  recipient?: string;
+  sender?: string;
+  status?: string;
+  asset?: string;
+}
+
+export async function listStreams(filters?: ListStreamsFilters): Promise<Stream[]> {
+  const params = new URLSearchParams();
+  if (filters?.recipient) params.set("recipient", filters.recipient);
+  if (filters?.sender) params.set("sender", filters.sender);
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.asset) params.set("asset", filters.asset);
+  const q = params.toString();
+  const url = q ? `${API_BASE}/streams?${q}` : `${API_BASE}/streams`;
+  const response = await fetch(url);
   const body = await parseResponse<{ data: Stream[] }>(response);
   return body.data;
 }
@@ -19,7 +46,9 @@ export async function listStreams(): Promise<Stream[]> {
 export function getExportCsvUrl(filters?: Record<string, string>): string {
   // If API_BASE is absolute (e.g. http://localhost:3000/api), we use that directly.
   // Otherwise, we base it off window.location.origin
-  const base = API_BASE.startsWith("http") ? API_BASE : window.location.origin + API_BASE;
+  const base = API_BASE.startsWith("http")
+    ? API_BASE
+    : window.location.origin + API_BASE;
   const url = new URL(`${base}/streams/export.csv`);
   if (filters) {
     Object.entries(filters).forEach(([k, v]) => {
@@ -29,10 +58,19 @@ export function getExportCsvUrl(filters?: Record<string, string>): string {
   return url.toString();
 }
 
-export async function createStream(payload: CreateStreamPayload): Promise<Stream> {
+export async function createStream(
+  payload: CreateStreamPayload,
+): Promise<Stream> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (authToken) {
+    headers["Authorization"] = `Bearer ${authToken}`;
+  }
+
   const response = await fetch(`${API_BASE}/streams`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(payload),
   });
   const body = await parseResponse<{ data: Stream }>(response);
@@ -40,8 +78,14 @@ export async function createStream(payload: CreateStreamPayload): Promise<Stream
 }
 
 export async function cancelStream(streamId: string): Promise<Stream> {
+  const headers: Record<string, string> = {};
+  if (authToken) {
+    headers["Authorization"] = `Bearer ${authToken}`;
+  }
+
   const response = await fetch(`${API_BASE}/streams/${streamId}/cancel`, {
     method: "POST",
+    headers,
   });
   const body = await parseResponse<{ data: Stream }>(response);
   return body.data;
@@ -51,9 +95,16 @@ export async function updateStreamStartAt(
   streamId: string,
   startAt: number,
 ): Promise<Stream> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (authToken) {
+    headers["Authorization"] = `Bearer ${authToken}`;
+  }
+
   const response = await fetch(`${API_BASE}/streams/${streamId}/start-time`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ startAt }),
   });
   const body = await parseResponse<{ data: Stream }>(response);
@@ -63,5 +114,21 @@ export async function updateStreamStartAt(
 export async function listOpenIssues(): Promise<OpenIssue[]> {
   const response = await fetch(`${API_BASE}/open-issues`);
   const body = await parseResponse<{ data: OpenIssue[] }>(response);
+  return body.data;
+}
+
+export interface StreamEvent {
+  id: number;
+  streamId: string;
+  eventType: "created" | "claimed" | "canceled" | "start_time_updated";
+  timestamp: number;
+  actor?: string;
+  amount?: number;
+  metadata?: Record<string, any>;
+}
+
+export async function getStreamHistory(streamId: string): Promise<StreamEvent[]> {
+  const response = await fetch(`${API_BASE}/streams/${streamId}/history`);
+  const body = await parseResponse<{ data: StreamEvent[] }>(response);
   return body.data;
 }

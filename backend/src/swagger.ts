@@ -139,10 +139,64 @@ export const swaggerDocument = {
         "/api/streams": {
             get: {
                 summary: "List all streams",
-                description: "Retrieves an array of all money streams.",
+                description:
+                    "Retrieves streams with optional filtering by status/sender/recipient and optional pagination.",
+                parameters: [
+                    {
+                        name: "status",
+                        in: "query",
+                        required: false,
+                        description: "Filter by stream status.",
+                        schema: {
+                            type: "string",
+                            enum: ["scheduled", "active", "completed", "canceled"],
+                        },
+                    },
+                    {
+                        name: "sender",
+                        in: "query",
+                        required: false,
+                        description: "Exact sender account ID match.",
+                        schema: {
+                            type: "string",
+                        },
+                    },
+                    {
+                        name: "recipient",
+                        in: "query",
+                        required: false,
+                        description: "Exact recipient account ID match.",
+                        schema: {
+                            type: "string",
+                        },
+                    },
+                    {
+                        name: "page",
+                        in: "query",
+                        required: false,
+                        description:
+                            "Page number (>=1). Pagination is enabled when either page or limit is provided.",
+                        schema: {
+                            type: "integer",
+                            minimum: 1,
+                        },
+                    },
+                    {
+                        name: "limit",
+                        in: "query",
+                        required: false,
+                        description:
+                            "Page size (1..100). Defaults to 20 in pagination mode.",
+                        schema: {
+                            type: "integer",
+                            minimum: 1,
+                            maximum: 100,
+                        },
+                    },
+                ],
                 responses: {
                     "200": {
-                        description: "A list of streams.",
+                        description: "A list of streams with pagination metadata.",
                         content: {
                             "application/json": {
                                 schema: {
@@ -154,7 +208,32 @@ export const swaggerDocument = {
                                                 $ref: "#/components/schemas/Stream",
                                             },
                                         },
+                                        total: {
+                                            type: "number",
+                                            description: "Total streams matching filters (before pagination).",
+                                            example: 42,
+                                        },
+                                        page: {
+                                            type: "number",
+                                            description: "Applied page number.",
+                                            example: 1,
+                                        },
+                                        limit: {
+                                            type: "number",
+                                            description: "Applied page size.",
+                                            example: 20,
+                                        },
                                     },
+                                },
+                            },
+                        },
+                    },
+                    "400": {
+                        description: "Invalid query parameter.",
+                        content: {
+                            "application/json": {
+                                schema: {
+                                    $ref: "#/components/schemas/Error",
                                 },
                             },
                         },

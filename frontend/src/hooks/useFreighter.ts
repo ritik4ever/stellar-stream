@@ -4,7 +4,10 @@ import {
   isAllowed,
   requestAccess,
   getPublicKey,
+  signAuthEntry,
 } from "@stellar/freighter-api";
+import { getAuthChallenge, verifyAuthToken } from "../services/auth";
+import { setAuthToken } from "../services/api";
 
 export type WalletStatus = "idle" | "connecting" | "connected" | "error";
 
@@ -21,6 +24,9 @@ export interface FreighterState {
   connect: () => Promise<void>;
   disconnect: () => void;
 }
+
+const STORAGE_KEY = "stellar_stream_auth_token";
+const NETWORK = "TESTNET";
 
 export function useFreighter(): FreighterState {
   const [installed, setInstalled] = useState(false);
@@ -49,8 +55,10 @@ export function useFreighter(): FreighterState {
 
         if (permitted) {
           const pk = await getPublicKey();
+          const storedToken = localStorage.getItem(STORAGE_KEY);
           if (cancelled) return;
-          if (pk) {
+          if (pk && storedToken) {
+            setAuthToken(storedToken);
             setAllowed(true);
             setAddress(pk);
             setStatus("connected");
@@ -73,7 +81,22 @@ export function useFreighter(): FreighterState {
     try {
       const pk = await requestAccess();
       if (!pk) throw new Error("Freighter did not return an account address.");
+
       setInstalled(true);
+
+      // 1. Fetch challenge
+      const challengeXdr = await getAuthChallenge(pk);
+
+      // 2. Sign auth entry challenge using Freighter
+      // Note: signAuthEntry is the modern way to sign SEP-10 txs in Freighter
+      const signedChallenge = await signAuthEntry(challengeXdr);
+
+      // 3. Trade signed challenge for real JWT
+      const token = await verifyAuthToken(signedChallenge);
+
+      localStorage.setItem(STORAGE_KEY, token);
+      setAuthToken(token);
+
       setAllowed(true);
       setAddress(pk);
       setStatus("connected");
@@ -84,12 +107,17 @@ export function useFreighter(): FreighterState {
       const friendly = msg.toLowerCase().includes("user declined")
         ? "Connection cancelled — please approve the request in Freighter."
         : msg;
+
+      localStorage.removeItem(STORAGE_KEY);
+      setAuthToken(null);
       setError(friendly);
       setStatus("error");
     }
   }, []);
 
   const disconnect = useCallback(() => {
+    localStorage.removeItem(STORAGE_KEY);
+    setAuthToken(null);
     setAddress(null);
     setAllowed(false);
     setStatus("idle");
