@@ -11,6 +11,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { initDb, getDb } from "./db";
 import { recordEvent } from "./eventHistory";
+import { triggerWebhook } from "./webhook";
 
 export type StreamStatus = "scheduled" | "active" | "completed" | "canceled";
 
@@ -319,21 +320,36 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
     },
   );
   
+  triggerWebhook("created", stream);
   return stream;
 }
 
 export function refreshStreamStatuses(): number {
   const db = getDb();
   const now = nowInSeconds();
-  const result = db
-    .prepare(
-      `
+
+  
+  const toComplete = db.prepare(`
+    SELECT * FROM streams 
+    WHERE canceled_at IS NULL AND completed_at IS NULL
+      AND (start_at + duration_seconds) <= ?
+  `).all() as StreamRow[];
+
+  
+  const result = db.prepare(`
     UPDATE streams SET completed_at = ?
     WHERE canceled_at IS NULL AND completed_at IS NULL
       AND (start_at + duration_seconds) <= ?
-  `,
-    )
-    .run(now, now);
+  `).run(now, now);
+
+  
+  toComplete.forEach(row => {
+    const record = rowToRecord(row);
+    
+    record.completedAt = now; 
+    triggerWebhook("completed", record);
+  });
+
   return result.changes;
 }
 
@@ -366,7 +382,7 @@ export async function cancelStream(
   
   // Record cancellation event
   recordEvent(stream.id, "canceled", stream.canceledAt, stream.sender);
-  
+  triggerWebhook("canceled", stream);
   return stream;
 }
 
