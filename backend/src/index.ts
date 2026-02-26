@@ -239,22 +239,7 @@ app.post("/api/auth/token", (req: Request, res: Response) => {
   }
 });
 
-app.post("/api/streams", authMiddleware, async (req: Request, res: Response) => {
-  const parsedPayload = createStreamPayloadWithAllowedAssetsSchema(
-    ALLOWED_ASSETS,
-  ).safeParse(req.body);
 
-  if (!parsedPayload.success) {
-    sendValidationError(res, parsedPayload.error.issues);
-    return;
-  }
-
-  try {
-    const stream = await createStream(parsedPayload.data);
-    res.status(201).json({ data: { ...stream, progress: calculateProgress(stream) } });
-  } catch (error: any) {
-    console.error("Failed to create stream:", error);
-    res.status(500).json({ error: error.message || "Failed to create stream." });
   }
 });
 
@@ -325,6 +310,7 @@ app.get("/api/open-issues", async (_req: Request, res: Response) => {
     res.status(500).json({ error: error.message || "Failed to fetch open issues." });
   }
 });
+
 
 async function startServer() {
   await initSoroban();
