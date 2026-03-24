@@ -2,8 +2,8 @@
 extern crate std;
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
-    token, Address, Env,
+    testutils::{Address as _, Events, Ledger},
+    token, Address, Env, IntoVal,
 };
 
 fn create_token(env: &Env, admin: &Address) -> Address {
@@ -379,4 +379,82 @@ fn test_create_stream_invalid_time_range_panics() {
     let token_admin = token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&sender, &1000);
     client.create_stream(&sender, &recipient, &token, &1000, &1000, &1000);
+}
+
+#[test]
+fn test_event_emissions() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000);
+    let last_event = env.events().all().last().unwrap();
+
+    assert_eq!(last_event.0, contract_id);
+    assert_eq!(
+        last_event.1,
+        (symbol_short!("Stream"), symbol_short!("Created")).into_val(&env)
+    );
+
+    let event_data: StreamCreated = last_event.2.into_val(&env);
+    assert_eq!(
+        event_data,
+        StreamCreated {
+            stream_id: 1,
+            sender: sender.clone(),
+            recipient: recipient.clone(),
+            token: token.clone(),
+            total_amount: 1000,
+            start_time: 0,
+            end_time: 1000,
+        }
+    );
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.claim(&stream_id, &recipient, &500);
+
+    let last_event = env.events().all().last().unwrap();
+    assert_eq!(last_event.0, contract_id);
+    assert_eq!(
+        last_event.1,
+        (symbol_short!("Stream"), symbol_short!("Claimed")).into_val(&env)
+    );
+
+    let event_data: StreamClaimed = last_event.2.into_val(&env);
+    assert_eq!(
+        event_data,
+        StreamClaimed {
+            stream_id,
+            recipient: recipient.clone(),
+            amount: 500,
+        }
+    );
+
+    client.cancel(&stream_id, &sender);
+
+    let last_event = env.events().all().last().unwrap();
+    assert_eq!(last_event.0, contract_id);
+    assert_eq!(
+        last_event.1,
+        (symbol_short!("Stream"), symbol_short!("Canceled")).into_val(&env)
+    );
+
+    let event_data: StreamCanceled = last_event.2.into_val(&env);
+    assert_eq!(
+        event_data,
+        StreamCanceled {
+            stream_id,
+            sender: sender.clone(),
+        }
+    );
 }
