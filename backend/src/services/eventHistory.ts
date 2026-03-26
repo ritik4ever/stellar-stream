@@ -75,3 +75,34 @@ export function getAllEvents(limit = 100, offset = 0): StreamEvent[] {
     .all(limit, offset) as EventRow[];
   return rows.map(rowToEvent);
 }
+
+export function getGlobalEvents(
+  limit: number,
+  offset: number,
+  eventType?: StreamEventType,
+): StreamEvent[] {
+  const db = getDb();
+  if (eventType) {
+    const rows = db
+      .prepare(
+        `SELECT * FROM stream_events WHERE event_type = ? ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?`,
+      )
+      .all(eventType, limit, offset) as EventRow[];
+    return rows.map(rowToEvent);
+  }
+  return getAllEvents(limit, offset);
+}
+
+export function countAllEvents(eventType?: StreamEventType): number {
+  const db = getDb();
+  if (eventType) {
+    const row = db
+      .prepare(`SELECT COUNT(*) as count FROM stream_events WHERE event_type = ?`)
+      .get(eventType) as { count: number };
+    return row.count;
+  }
+  const row = db
+    .prepare(`SELECT COUNT(*) as count FROM stream_events`)
+    .get() as { count: number };
+  return row.count;
+}

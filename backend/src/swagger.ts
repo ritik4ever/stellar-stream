@@ -110,9 +110,126 @@ export const swaggerDocument = {
                     },
                 },
             },
+            StreamEvent: {
+                type: "object",
+                properties: {
+                    id: {
+                        type: "integer",
+                        description: "Unique event row ID.",
+                        example: 42,
+                    },
+                    streamId: {
+                        type: "string",
+                        description: "ID of the associated stream.",
+                        example: "stream-uuid-abc",
+                    },
+                    eventType: {
+                        type: "string",
+                        enum: ["created", "claimed", "canceled", "start_time_updated"],
+                        description: "Type of stream lifecycle event.",
+                        example: "created",
+                    },
+                    timestamp: {
+                        type: "integer",
+                        description: "Unix timestamp (seconds) when the event occurred.",
+                        example: 1716382000,
+                    },
+                    actor: {
+                        type: "string",
+                        nullable: true,
+                        description: "Account that triggered the event.",
+                        example: "GSENDERAAAA",
+                    },
+                    amount: {
+                        type: "number",
+                        nullable: true,
+                        description: "Token amount involved (for created/claimed events).",
+                        example: 500,
+                    },
+                    metadata: {
+                        type: "object",
+                        nullable: true,
+                        description: "Additional context for the event.",
+                    },
+                },
+            },
         },
     },
     paths: {
+        "/api/events": {
+            get: {
+                summary: "List global event history",
+                description:
+                    "Returns a paginated timeline of all stream lifecycle events across every stream, ordered by most recent first.",
+                parameters: [
+                    {
+                        name: "eventType",
+                        in: "query",
+                        required: false,
+                        description: "Filter by event type.",
+                        schema: {
+                            type: "string",
+                            enum: ["created", "claimed", "canceled", "start_time_updated"],
+                        },
+                    },
+                    {
+                        name: "page",
+                        in: "query",
+                        required: false,
+                        description: "Page number (>=1). Pagination is enabled when either page or limit is provided.",
+                        schema: { type: "integer", minimum: 1 },
+                    },
+                    {
+                        name: "limit",
+                        in: "query",
+                        required: false,
+                        description: "Page size (1..100). Defaults to 20 in pagination mode.",
+                        schema: { type: "integer", minimum: 1, maximum: 100 },
+                    },
+                ],
+                responses: {
+                    "200": {
+                        description: "A paginated list of events with metadata.",
+                        content: {
+                            "application/json": {
+                                schema: {
+                                    type: "object",
+                                    properties: {
+                                        data: {
+                                            type: "array",
+                                            items: { $ref: "#/components/schemas/StreamEvent" },
+                                        },
+                                        total: {
+                                            type: "integer",
+                                            description: "Total events matching filter (before pagination).",
+                                            example: 87,
+                                        },
+                                        page: {
+                                            type: "integer",
+                                            description: "Applied page number.",
+                                            example: 1,
+                                        },
+                                        limit: {
+                                            type: "integer",
+                                            description: "Applied page size.",
+                                            example: 20,
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    "400": {
+                        description: "Invalid query parameter.",
+                        content: {
+                            "application/json": {
+                                schema: { $ref: "#/components/schemas/Error" },
+                            },
+                        },
+                    },
+                },
+            },
+        },
         "/api/health": {
             get: {
                 summary: "Check API Health",

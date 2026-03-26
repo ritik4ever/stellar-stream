@@ -11,7 +11,16 @@ const streamStoreMocks = vi.hoisted(() => ({
   updateStreamStartAt: vi.fn(),
 }));
 
+const eventHistoryMocks = vi.hoisted(() => ({
+  getStreamHistory: vi.fn(),
+  getAllEvents: vi.fn(),
+  getGlobalEvents: vi.fn(),
+  countAllEvents: vi.fn(),
+  recordEvent: vi.fn(),
+}));
+
 vi.mock("./services/streamStore", () => streamStoreMocks);
+vi.mock("./services/eventHistory", () => eventHistoryMocks);
 
 import { app } from "./index";
 
@@ -155,6 +164,10 @@ beforeEach(() => {
   streamStoreMocks.calculateProgress.mockReset();
   streamStoreMocks.listStreams.mockReturnValue(streams);
   streamStoreMocks.calculateProgress.mockImplementation((stream: TestStream) => progressById[stream.id]);
+
+  eventHistoryMocks.getGlobalEvents.mockReset();
+  eventHistoryMocks.countAllEvents.mockReset();
+  eventHistoryMocks.getStreamHistory.mockReset();
 });
 
 describe("GET /api/streams", () => {
@@ -267,5 +280,173 @@ describe("GET /api/streams", () => {
     expect(body.page).toBe(2);
     expect(body.limit).toBe(1);
     expect(body.data).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/events
+// ---------------------------------------------------------------------------
+
+type TestEvent = {
+  id: number;
+  streamId: string;
+  eventType: "created" | "claimed" | "canceled" | "start_time_updated";
+  timestamp: number;
+  actor?: string;
+  amount?: number;
+};
+
+const sampleEvents: TestEvent[] = [
+  { id: 4, streamId: "stream-1", eventType: "claimed",  timestamp: 400, actor: "GSENDER", amount: 50 },
+  { id: 3, streamId: "stream-2", eventType: "canceled", timestamp: 300, actor: "GSENDER" },
+  { id: 2, streamId: "stream-1", eventType: "created",  timestamp: 200, actor: "GSENDER", amount: 100 },
+  { id: 1, streamId: "stream-2", eventType: "created",  timestamp: 100, actor: "GSENDER", amount: 200 },
+];
+
+function invokeGlobalEventsRoute(
+  query: Record<string, unknown> = {},
+): { status: number; body: any } {
+  const layer = (app as any)?._router?.stack?.find(
+    (entry: any) => entry.route?.path === "/api/events" && entry.route?.methods?.get,
+  );
+
+  if (!layer) {
+    throw new Error("GET /api/events route not found");
+  }
+
+  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+
+  let statusCode = 200;
+  let jsonBody: any;
+
+  const req = { query };
+  const res = {
+    status(code: number) { statusCode = code; return this; },
+    json(payload: any) { jsonBody = payload; return this; },
+  };
+
+  handler(req, res);
+  return { status: statusCode, body: jsonBody };
+}
+
+describe("GET /api/events", () => {
+  beforeEach(() => {
+    eventHistoryMocks.countAllEvents.mockReturnValue(sampleEvents.length);
+    eventHistoryMocks.getGlobalEvents.mockReturnValue(sampleEvents);
+  });
+
+  it("returns all events and correct metadata in legacy mode", () => {
+    const { status, body } = invokeGlobalEventsRoute();
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(4);
+    expect(body.page).toBe(1);
+    expect(body.limit).toBe(4);
+    expect(body.data).toHaveLength(4);
+    expect(body.data[0].streamId).toBe("stream-1");
+  });
+
+  it("filters by eventType – passes it to getGlobalEvents and countAllEvents", () => {
+    const createdEvents = sampleEvents.filter((e) => e.eventType === "created");
+    eventHistoryMocks.countAllEvents.mockReturnValue(createdEvents.length);
+    eventHistoryMocks.getGlobalEvents.mockReturnValue(createdEvents);
+
+    const { status, body } = invokeGlobalEventsRoute({ eventType: "created" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith("created");
+    expect(eventHistoryMocks.getGlobalEvents).toHaveBeenCalledWith(
+      expect.any(Number),
+      expect.any(Number),
+      "created",
+    );
+  });
+
+  it("paginates correctly when page and limit are provided", () => {
+    const page2Events = sampleEvents.slice(2);
+    eventHistoryMocks.getGlobalEvents.mockReturnValue(page2Events);
+
+    const { status, body } = invokeGlobalEventsRoute({ page: "2", limit: "2" });
+
+    expect(status).toBe(200);
+    expect(body.page).toBe(2);
+    expect(body.limit).toBe(2);
+    expect(body.total).toBe(4);
+    expect(body.data).toHaveLength(2);
+    // offset should be (2-1)*2 = 2
+    expect(eventHistoryMocks.getGlobalEvents).toHaveBeenCalledWith(2, 2, undefined);
+  });
+
+  it("uses default limit of 20 when only page is provided", () => {
+    eventHistoryMocks.getGlobalEvents.mockReturnValue([]);
+
+    const { status, body } = invokeGlobalEventsRoute({ page: "2" });
+
+    expect(status).toBe(200);
+    expect(body.page).toBe(2);
+    expect(body.limit).toBe(20);
+  });
+
+  it("uses default page of 1 when only limit is provided", () => {
+    eventHistoryMocks.getGlobalEvents.mockReturnValue(sampleEvents.slice(0, 2));
+
+    const { status, body } = invokeGlobalEventsRoute({ limit: "2" });
+
+    expect(status).toBe(200);
+    expect(body.page).toBe(1);
+    expect(body.limit).toBe(2);
+    expect(eventHistoryMocks.getGlobalEvents).toHaveBeenCalledWith(2, 0, undefined);
+  });
+
+  it("returns 400 for an invalid eventType", () => {
+    const { status, body } = invokeGlobalEventsRoute({ eventType: "unknown" });
+
+    expect(status).toBe(400);
+    expect(body.error).toContain("eventType must be one of");
+  });
+
+  it("returns 400 for page < 1", () => {
+    const { status, body } = invokeGlobalEventsRoute({ page: "0" });
+
+    expect(status).toBe(400);
+    expect(body.error).toContain("page must be greater than or equal to 1");
+  });
+
+  it("returns 400 for limit > 100", () => {
+    const { status, body } = invokeGlobalEventsRoute({ limit: "101" });
+
+    expect(status).toBe(400);
+    expect(body.error).toContain("limit must be less than or equal to 100");
+  });
+
+  it("returns empty data array for out-of-range page with metadata intact", () => {
+    eventHistoryMocks.countAllEvents.mockReturnValue(2);
+    eventHistoryMocks.getGlobalEvents.mockReturnValue([]);
+
+    const { status, body } = invokeGlobalEventsRoute({ page: "5", limit: "1" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+    expect(body.page).toBe(5);
+    expect(body.limit).toBe(1);
+    expect(body.data).toEqual([]);
+  });
+
+  it("includes streamId and eventType fields in each event", () => {
+    eventHistoryMocks.getGlobalEvents.mockReturnValue([sampleEvents[0]]);
+    eventHistoryMocks.countAllEvents.mockReturnValue(1);
+
+    const { status, body } = invokeGlobalEventsRoute({ page: "1", limit: "1" });
+
+    expect(status).toBe(200);
+    expect(body.data[0]).toMatchObject({
+      id: 4,
+      streamId: "stream-1",
+      eventType: "claimed",
+      timestamp: 400,
+      actor: "GSENDER",
+      amount: 50,
+    });
   });
 });
