@@ -107,6 +107,22 @@ Response:
 Error:
 - `404` if stream does not exist
 
+### `GET /api/recipients/:accountId/streams`
+Purpose:
+- Fetch all streams for a specific recipient account
+
+Path parameters:
+- `accountId: string` (Stellar account ID starting with G, exactly 56 characters)
+
+Validation:
+- Account ID must be a valid Stellar account ID format
+
+Response:
+- `data: Stream[]` (includes computed `progress` for each stream)
+
+Error:
+- `400` if account ID is invalid
+
 ### `POST /api/streams`
 Purpose:
 - Create a new stream

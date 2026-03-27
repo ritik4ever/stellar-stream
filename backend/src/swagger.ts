@@ -412,7 +412,7 @@ export const swaggerDocument = {
                 $ref: "#/components/schemas/StreamInput",
               },
             },
-
+          },
         },
         responses: {
           "201": {
@@ -453,13 +453,44 @@ export const swaggerDocument = {
         },
       },
     },
-
+    "/api/recipients/{accountId}/streams": {
+      get: {
+        summary: "Get streams for a recipient",
+        description:
+          "Retrieves all streams where the specified account is the recipient. Returns streams with progress data.",
+        parameters: [
+          {
+            name: "accountId",
+            in: "path",
+            required: true,
+            description: "Stellar account ID of the recipient (must start with G and be 56 characters).",
+            schema: {
+              type: "string",
+              pattern: "^G[A-Z2-7]{55}$",
+            },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "List of streams for the recipient.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: {
+                        $ref: "#/components/schemas/Stream",
+                      },
+                    },
+                  },
                 },
               },
             },
           },
-          "404": {
-            description: "Stream not found.",
+          "400": {
+            description: "Invalid Stellar account ID.",
             content: {
               "application/json": {
                 schema: {

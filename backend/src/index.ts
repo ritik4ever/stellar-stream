@@ -10,6 +10,12 @@ import { fetchOpenIssues } from "./services/openIssues";
 import { initIndexer, startIndexer } from "./services/indexer";
 import { startWebhookWorker } from "./services/webhookWorker";
 import {
+  countAllEvents,
+  getAllEvents,
+  getGlobalEvents,
+  getStreamHistory,
+} from "./services/eventHistory";
+import {
   calculateProgress,
   cancelStream,
   createStream,
@@ -28,6 +34,7 @@ import {
 import {
   createStreamPayloadWithAllowedAssetsSchema,
   listEventsQuerySchema,
+  recipientAccountIdSchema,
   streamIdSchema,
   updateStreamStartAtSchema,
   zodIssuesToErrorMessage,
@@ -250,6 +257,28 @@ app.get("/api/streams/:id", (req: Request, res: Response) => {
     return;
   }
   res.json({ data: { ...stream, progress: calculateProgress(stream) } });
+});
+
+app.get("/api/recipients/:accountId/streams", (req: Request, res: Response) => {
+  const parsedParams = recipientAccountIdSchema.safeParse({
+    accountId: req.params.accountId,
+  });
+  
+  if (!parsedParams.success) {
+    sendValidationError(res, parsedParams.error.issues);
+    return;
+  }
+
+  const accountId = parsedParams.data.accountId;
+  
+  let data = listStreams()
+    .filter((stream) => stream.recipient.toLowerCase() === accountId.toLowerCase())
+    .map((stream) => ({
+      ...stream,
+      progress: calculateProgress(stream),
+    }));
+
+  res.json({ data });
 });
 
 app.get("/api/auth/challenge", (req: Request, res: Response) => {

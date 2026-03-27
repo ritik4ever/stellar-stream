@@ -43,6 +43,12 @@ export async function listStreams(filters?: ListStreamsFilters): Promise<Stream[
   return body.data;
 }
 
+export async function listRecipientStreams(accountId: string): Promise<Stream[]> {
+  const response = await fetch(`${API_BASE}/recipients/${accountId}/streams`);
+  const body = await parseResponse<{ data: Stream[] }>(response);
+  return body.data;
+}
+
 export function getExportCsvUrl(filters?: Record<string, string>): string {
   // If API_BASE is absolute (e.g. http://localhost:3000/api), we use that directly.
   // Otherwise, we base it off window.location.origin

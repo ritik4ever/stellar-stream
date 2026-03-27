@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listStreams } from "../services/api";
+import { listRecipientStreams } from "../services/api";
 import { Stream } from "../types/stream";
 
 interface RecipientDashboardProps {
@@ -45,7 +45,7 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
       if (!active) return;
       
       try {
-        const data = await listStreams({ recipient: recipientAddress });
+        const data = await listRecipientStreams(recipientAddress);
         if (!active) return;
         setStreams(data);
       } catch (err) {

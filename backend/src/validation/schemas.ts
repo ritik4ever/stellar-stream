@@ -107,6 +107,10 @@ export const listEventsQuerySchema = z.object({
     .optional(),
 });
 
+export const recipientAccountIdSchema = z.object({
+  accountId: stellarAccountIdSchema,
+});
+
 export type CreateStreamPayload = z.infer<typeof createStreamPayloadSchema>;
 
 export type ValidationIssue = {
