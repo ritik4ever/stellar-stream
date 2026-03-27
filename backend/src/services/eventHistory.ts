@@ -123,3 +123,17 @@ export function countAllEvents(eventType?: StreamEventType): number {
     .get() as { count: number };
   return row.count;
 }
+
+export function streamHasEvent(
+  streamId: string,
+  eventType: StreamEventType,
+): boolean {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT 1 as present FROM stream_events WHERE stream_id = ? AND event_type = ? LIMIT 1`,
+    )
+    .get(streamId, eventType) as { present: number } | undefined;
+
+  return row !== undefined;
+}

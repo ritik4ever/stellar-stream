@@ -8,6 +8,7 @@ import { swaggerDocument } from "./swagger";
 
 import { fetchOpenIssues } from "./services/openIssues";
 import { initIndexer, startIndexer } from "./services/indexer";
+import { startReconciliationJob } from "./services/reconciliationJob";
 import { startWebhookWorker } from "./services/webhookWorker";
 import {
   calculateProgress,
@@ -437,6 +438,9 @@ async function startServer() {
   if (contractId) {
     initIndexer(rpcUrl, contractId, networkPassphrase);
     startIndexer(10000); // Poll every 10 seconds
+    startReconciliationJob(
+      Number(process.env.RECONCILIATION_INTERVAL_MS ?? 60000),
+    );
   } else {
     console.warn("CONTRACT_ID not set, event indexer will not start");
   }

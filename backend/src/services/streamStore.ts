@@ -11,6 +11,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { initDb, getDb } from "./db";
 import { recordEventWithDb } from "./eventHistory";
+import { streamHasEvent } from "./eventHistory";
 import { triggerWebhook } from "./webhook";
 
 export type StreamStatus = "scheduled" | "active" | "completed" | "canceled";
@@ -105,6 +106,12 @@ function upsertStream(record: StreamRecord): void {
   });
 }
 
+function listLocalStreamIds(): Set<string> {
+  const db = getDb();
+  const rows = db.prepare("SELECT id FROM streams").all() as Array<{ id: string }>;
+  return new Set(rows.map((row) => row.id));
+}
+
 let rpcServer: rpc.Server | null = null;
 let serverKeypair: Keypair | null = null;
 
@@ -130,6 +137,121 @@ function nowInSeconds(): number {
 
 function round(value: number): number {
   return Number(value.toFixed(6));
+}
+
+function getSorobanContext():
+  | {
+      contract: Contract;
+      sourceAccountPromise: Promise<rpc.Api.GetAccountResponse>;
+    }
+  | undefined {
+  const contractId = process.env.CONTRACT_ID;
+  if (!contractId || !rpcServer) {
+    return undefined;
+  }
+
+  const pubKey = serverKeypair
+    ? serverKeypair.publicKey()
+    : "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+
+  return {
+    contract: new Contract(contractId),
+    sourceAccountPromise: rpcServer.getAccount(pubKey),
+  };
+}
+
+async function simulateContractCall(
+  contract: Contract,
+  sourceAccount: rpc.Api.GetAccountResponse,
+  method: string,
+  ...args: any[]
+): Promise<rpc.Api.SimulateTransactionResponse> {
+  if (!rpcServer) {
+    throw new Error("Soroban RPC server is not initialized.");
+  }
+
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: "100",
+    networkPassphrase: process.env.NETWORK_PASSPHRASE || Networks.TESTNET,
+  })
+    .addOperation(contract.call(method, ...args))
+    .setTimeout(30)
+    .build();
+
+  return rpcServer.simulateTransaction(tx);
+}
+
+async function fetchNextOnChainStreamId(
+  contract: Contract,
+  sourceAccount: rpc.Api.GetAccountResponse,
+): Promise<number | null> {
+  const simRes = await simulateContractCall(
+    contract,
+    sourceAccount,
+    "get_next_stream_id",
+  );
+
+  if (!rpc.Api.isSimulationSuccess(simRes) || !simRes.result) {
+    console.warn("[reconciliation] failed to simulate get_next_stream_id", simRes);
+    return null;
+  }
+
+  return Number(scValToNative(simRes.result.retval));
+}
+
+async function fetchOnChainStreamRecord(
+  contract: Contract,
+  sourceAccount: rpc.Api.GetAccountResponse,
+  id: number,
+): Promise<StreamRecord | null> {
+  const simRes = await simulateContractCall(
+    contract,
+    sourceAccount,
+    "get_stream",
+    nativeToScVal(id, { type: "u64" }),
+  );
+
+  if (!rpc.Api.isSimulationSuccess(simRes) || !simRes.result) {
+    return null;
+  }
+
+  const streamData = scValToNative(simRes.result.retval);
+
+  return {
+    id: id.toString(),
+    sender: streamData.sender,
+    recipient: streamData.recipient,
+    assetCode: streamData.token,
+    totalAmount: Number(streamData.total_amount),
+    durationSeconds: Number(streamData.end_time) - Number(streamData.start_time),
+    startAt: Number(streamData.start_time),
+    createdAt: Number(streamData.start_time),
+    canceledAt: streamData.canceled ? nowInSeconds() : undefined,
+  };
+}
+
+function recordBackfilledCreatedEvent(stream: StreamRecord): void {
+  if (streamHasEvent(stream.id, "created")) {
+    return;
+  }
+
+  const db = getDb();
+  db.transaction(() => {
+    recordEventWithDb(
+      db,
+      stream.id,
+      "created",
+      stream.createdAt,
+      stream.sender,
+      stream.totalAmount,
+      {
+        recipient: stream.recipient,
+        assetCode: stream.assetCode,
+        durationSeconds: stream.durationSeconds,
+        source: "reconciliation",
+      },
+    );
+  })();
 }
 
 function computeStatus(stream: StreamRecord, at: number): StreamStatus {
@@ -172,62 +294,104 @@ export function calculateProgress(
 }
 
 export async function syncStreams() {
-  const contractId = process.env.CONTRACT_ID;
-  if (!contractId || !rpcServer) return;
-  const contract = new Contract(contractId);
+  const sorobanContext = getSorobanContext();
+  if (!sorobanContext) return;
 
   try {
-    const pubKey = serverKeypair
-      ? serverKeypair.publicKey()
-      : "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
-    const sourceAccount = await rpcServer.getAccount(pubKey);
-    const tx = new TransactionBuilder(sourceAccount, {
-      fee: "100",
-      networkPassphrase: process.env.NETWORK_PASSPHRASE || Networks.TESTNET,
-    })
-      .addOperation(contract.call("get_next_stream_id"))
-      .setTimeout(30)
-      .build();
-
-    const simRes = await rpcServer.simulateTransaction(tx);
-    if (!rpc.Api.isSimulationSuccess(simRes) || !simRes.result) {
-      console.warn("Failed to simulate get_next_stream_id", simRes);
+    const sourceAccount = await sorobanContext.sourceAccountPromise;
+    const nextId = await fetchNextOnChainStreamId(
+      sorobanContext.contract,
+      sourceAccount,
+    );
+    if (nextId === null) {
       return;
     }
 
-    const nextIdVal = scValToNative(simRes.result.retval);
-    const nextId = Number(nextIdVal);
-
-    for (let i = 1; i <= nextId; i++) {
-      const simTx = new TransactionBuilder(sourceAccount, {
-        fee: "100",
-        networkPassphrase: process.env.NETWORK_PASSPHRASE || Networks.TESTNET,
-      })
-        .addOperation(
-          contract.call("get_stream", nativeToScVal(i, { type: "u64" })),
-        )
-        .setTimeout(30)
-        .build();
-      const simRes2 = await rpcServer.simulateTransaction(simTx);
-      if (rpc.Api.isSimulationSuccess(simRes2) && simRes2.result) {
-        const streamData = scValToNative(simRes2.result.retval);
-
-        upsertStream({
-          id: i.toString(),
-          sender: streamData.sender,
-          recipient: streamData.recipient,
-          assetCode: streamData.token,
-          totalAmount: Number(streamData.total_amount),
-          durationSeconds:
-            Number(streamData.end_time) - Number(streamData.start_time),
-          startAt: Number(streamData.start_time),
-          createdAt: Number(streamData.start_time),
-          canceledAt: streamData.canceled ? nowInSeconds() : undefined,
-        });
+    for (let i = 1; i < nextId; i++) {
+      const stream = await fetchOnChainStreamRecord(
+        sorobanContext.contract,
+        sourceAccount,
+        i,
+      );
+      if (stream) {
+        upsertStream(stream);
       }
     }
   } catch (err) {
     console.error("Failed to sync streams", err);
+  }
+}
+
+export async function reconcileMissingStreams(): Promise<number> {
+  const sorobanContext = getSorobanContext();
+  if (!sorobanContext) {
+    return 0;
+  }
+
+  try {
+    const sourceAccount = await sorobanContext.sourceAccountPromise;
+    const nextId = await fetchNextOnChainStreamId(
+      sorobanContext.contract,
+      sourceAccount,
+    );
+
+    if (nextId === null || nextId <= 1) {
+      console.log("[reconciliation] no on-chain streams available to reconcile");
+      return 0;
+    }
+
+    const localStreamIds = listLocalStreamIds();
+    const missingIds: number[] = [];
+
+    for (let id = 1; id < nextId; id++) {
+      if (!localStreamIds.has(id.toString())) {
+        missingIds.push(id);
+      }
+    }
+
+    if (missingIds.length === 0) {
+      console.log("[reconciliation] no missing local streams detected");
+      return 0;
+    }
+
+    console.warn(
+      `[reconciliation] detected ${missingIds.length} missing local stream(s): ${missingIds.join(", ")}`,
+    );
+
+    let repairedCount = 0;
+    for (const missingId of missingIds) {
+      try {
+        const stream = await fetchOnChainStreamRecord(
+          sorobanContext.contract,
+          sourceAccount,
+          missingId,
+        );
+
+        if (!stream) {
+          console.error(
+            `[reconciliation] missing stream ${missingId} could not be fetched from chain`,
+          );
+          continue;
+        }
+
+        upsertStream(stream);
+        recordBackfilledCreatedEvent(stream);
+        repairedCount += 1;
+      } catch (err) {
+        console.error(
+          `[reconciliation] failed to backfill missing stream ${missingId}:`,
+          err,
+        );
+      }
+    }
+
+    console.log(
+      `[reconciliation] repaired ${repairedCount} missing local stream(s) out of ${missingIds.length}`,
+    );
+    return repairedCount;
+  } catch (err) {
+    console.error("[reconciliation] reconciliation failed:", err);
+    return 0;
   }
 }
 
