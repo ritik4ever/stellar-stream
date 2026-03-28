@@ -129,7 +129,7 @@ describe(
   () => {
     it("each button's pressed state matches membership in activeFilters", () => {
       fc.assert(
-        fc.property(arbFilterSet, (activeFilters) => {
+        fc.property(arbFilterSet, (activeFilters: Set<EventType>) => {
           // For every button, aria-pressed should equal activeFilters.has(type)
           return FILTER_BUTTONS.every(({ type }) => {
             const shouldBePressed = activeFilters.has(type);
@@ -144,7 +144,7 @@ describe(
 
     it("no button is pressed when activeFilters is empty", () => {
       fc.assert(
-        fc.property(fc.constant(new Set<EventType>()), (activeFilters) => {
+        fc.property(fc.constant(new Set<EventType>()), (activeFilters: Set<EventType>) => {
           return FILTER_BUTTONS.every(({ type }) => !activeFilters.has(type));
         }),
         { numRuns: 10 },
@@ -153,7 +153,7 @@ describe(
 
     it("every active filter type has its button pressed", () => {
       fc.assert(
-        fc.property(arbNonEmptyFilterSet, (activeFilters) => {
+        fc.property(arbNonEmptyFilterSet, (activeFilters: Set<EventType>) => {
           // Every type in activeFilters must have a corresponding pressed button
           for (const type of activeFilters) {
             const button = FILTER_BUTTONS.find((b) => b.type === type);
@@ -168,7 +168,7 @@ describe(
 
     it("clear button visibility matches activeFilters.size > 0", () => {
       fc.assert(
-        fc.property(arbFilterSet, (activeFilters) => {
+        fc.property(arbFilterSet, (activeFilters: Set<EventType>) => {
           const shouldShowClear = activeFilters.size > 0;
           // The component renders clear button iff activeFilters.size > 0
           return shouldShowClear === (activeFilters.size > 0);

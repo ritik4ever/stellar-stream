@@ -1,4 +1,5 @@
 import { useState, FormEvent } from "react";
+import { useDraftAutosave } from "../hooks/useDraftAutosave";
 import { CreateStreamPayload } from "../types/stream";
 import {
   FieldErrors,
@@ -110,7 +111,10 @@ export function CreateStreamForm({
   apiError,
   walletAddress,
 }: CreateStreamFormProps) {
-  const [values, setValues] = useState<FormValues>(INITIAL_VALUES);
+  const [values, setValues, hasDraft, clearDraft] = useDraftAutosave<FormValues>(
+    "stellar-stream:create-draft",
+    INITIAL_VALUES
+  );
   const [touched, setTouched] = useState<
     Partial<Record<keyof FormValues, boolean>>
   >({});
@@ -153,7 +157,7 @@ export function CreateStreamForm({
         startAt,
       });
 
-      setValues(INITIAL_VALUES);
+      clearDraft();
       setTouched({});
       setSubmitAttempted(false);
     } finally {
@@ -336,14 +340,32 @@ export function CreateStreamForm({
         )}
       </div>
 
-      <button
-        className="btn-primary"
-        type="submit"
-        disabled={isSubmitting || (submitAttempted && !formValid)}
-        aria-busy={isSubmitting}
-      >
-        {isSubmitting ? "Creating…" : "Create Stream"}
-      </button>
+      <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginTop: "1rem" }}>
+        <button
+          className="btn-primary"
+          type="submit"
+          disabled={isSubmitting || (submitAttempted && !formValid)}
+          aria-busy={isSubmitting}
+        >
+          {isSubmitting ? "Creating…" : "Create Stream"}
+        </button>
+        {hasDraft && (
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => {
+              if (window.confirm("Discard your unsaved stream draft?")) {
+                clearDraft();
+                setTouched({});
+                setSubmitAttempted(false);
+              }
+            }}
+            disabled={isSubmitting}
+          >
+            Discard Draft
+          </button>
+        )}
+      </div>
     </form>
   );
 }

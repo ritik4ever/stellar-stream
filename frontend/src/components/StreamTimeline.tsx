@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getStreamHistory, listAllEvents, StreamEvent } from "../services/api";
-import { CopyableAddress } from "./CopyableAddress";
 
 interface StreamTimelineProps {
   streamId?: string;
 }
+
+import { CopyableAddress } from "./CopyableAddress";
 
 export type EventType = StreamEvent["eventType"];
 
@@ -89,16 +90,11 @@ function timeAgo(timestamp: number): string {
 
 function getEventIcon(eventType: string): string {
   switch (eventType) {
-    case "created":
-      return "CR";
-    case "claimed":
-      return "CL";
-    case "canceled":
-      return "CX";
-    case "start_time_updated":
-      return "ST";
-    default:
-      return "EV";
+    case "created":            return "🚀";
+    case "claimed":            return "💸";
+    case "canceled":           return "❌";
+    case "start_time_updated": return "🕐";
+    default:                   return "📋";
   }
 }
 
@@ -157,8 +153,8 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
         : await listAllEvents();
       setEvents(data);
       setLastUpdatedAt(Date.now());
-    } catch (err: any) {
-      setError(err.message || "Failed to load stream history");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load stream history.");
     } finally {
       setLoading(false);
     }

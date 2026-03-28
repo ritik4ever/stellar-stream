@@ -498,6 +498,50 @@ export const swaggerDocument = {
         },
       },
     },
+    "/api/streams/{id}": {
+      get: {
+        summary: "Get a specific stream",
+        description: "Retrieves a stream by its unique ID.",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "The unique ID of the stream.",
+            schema: {
+              type: "string",
+            },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Stream data.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      $ref: "#/components/schemas/Stream",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "404": {
+            description: "Stream not found.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     "/api/recipients/{accountId}/streams": {
       get: {
         summary: "Get recipient streams",
@@ -532,8 +576,8 @@ export const swaggerDocument = {
               },
             },
           },
-          "400": {
-            description: "Invalid Stellar account ID.",
+          "404": {
+            description: "Stream not found.",
             content: {
               "application/json": {
                 schema: {
