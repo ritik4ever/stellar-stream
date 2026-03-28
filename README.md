@@ -130,6 +130,13 @@ Response:
 Error:
 - `400` if account ID is invalid
 
+### `GET /api/assets`
+Purpose:
+- Fetch the current allowed asset allowlist
+
+Response:
+- `data: string[]` (normalized asset codes)
+
 ### `POST /api/streams`
 Purpose:
 - Create a new stream
@@ -298,9 +305,17 @@ Backend:
 - `NETWORK_PASSPHRASE` (optional, defaults to testnet) - Network passphrase
 - `ALLOWED_ASSETS` (optional, defaults to `USDC,XLM`) - Comma-separated list of allowed asset codes
 - `DB_PATH` (optional, defaults to `backend/data/streams.db`) - SQLite database file path
+- `WEBHOOK_DESTINATION_URL` (optional) - If set, stream lifecycle webhooks are delivered to this URL
+- `WEBHOOK_SIGNING_SECRET` (optional) - If set, webhook payloads are HMAC-signed
 
 Frontend:
 - `VITE_API_URL` (optional, defaults to `/api`)
+
+Webhook signing:
+- Header: `X-Webhook-Signature`
+- Format: `sha256=<hex-digest>`
+- Digest input: raw JSON request body string
+- Algorithm: HMAC-SHA256 using `WEBHOOK_SIGNING_SECRET`
 
 Ignored files:
 - `node_modules`, `dist`, logs, local env files, Soroban build outputs

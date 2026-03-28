@@ -6,7 +6,76 @@ interface StreamTimelineProps {
   streamId?: string;
 }
 
-/** Simple "time ago" formatter */
+export type EventType = StreamEvent["eventType"];
+
+export function computeFilteredEvents(
+  events: StreamEvent[],
+  activeFilters: Set<EventType>,
+): StreamEvent[] {
+  if (activeFilters.size === 0) return events;
+  return events.filter((e) => activeFilters.has(e.eventType));
+}
+
+export function toggleFilter(prev: Set<EventType>, type: EventType): Set<EventType> {
+  const next = new Set(prev);
+  if (next.has(type)) {
+    next.delete(type);
+  } else {
+    next.add(type);
+  }
+  return next;
+}
+
+export function clearFilters(): Set<EventType> {
+  return new Set();
+}
+
+export interface FilterBarProps {
+  activeFilters: Set<EventType>;
+  onToggle: (type: EventType) => void;
+  onClear: () => void;
+}
+
+export const FILTER_BUTTONS: Array<{ type: EventType; label: string }> = [
+  { type: "created", label: "Created" },
+  { type: "claimed", label: "Claimed" },
+  { type: "canceled", label: "Canceled" },
+  { type: "start_time_updated", label: "Start Time Updated" },
+];
+
+export function FilterBar({ activeFilters, onToggle, onClear }: FilterBarProps) {
+  return (
+    <div className="flex flex-wrap gap-2 items-center p-3 bg-white border border-gray-200 rounded-lg">
+      <span className="text-sm font-medium text-gray-700">Filter by:</span>
+      {FILTER_BUTTONS.map(({ type, label }) => {
+        const isActive = activeFilters.has(type);
+        return (
+          <button
+            key={type}
+            onClick={() => onToggle(type)}
+            aria-pressed={isActive}
+            className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+              isActive
+                ? "bg-blue-600 text-white hover:bg-blue-700"
+                : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+            }`}
+          >
+            {label}
+          </button>
+        );
+      })}
+      {activeFilters.size > 0 && (
+        <button
+          onClick={onClear}
+          className="ml-2 px-3 py-1.5 text-sm font-medium text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors"
+        >
+          Clear filters
+        </button>
+      )}
+    </div>
+  );
+}
+
 function timeAgo(timestamp: number): string {
   const seconds = Math.floor(Date.now() / 1000 - timestamp);
   if (seconds < 60) return "just now";
@@ -71,20 +140,25 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+  const [activeFilters, setActiveFilters] = useState<Set<EventType>>(new Set());
 
   const isGlobalFeed = useMemo(() => !streamId, [streamId]);
+  const filteredEvents = useMemo(
+    () => computeFilteredEvents(events, activeFilters),
+    [events, activeFilters],
+  );
 
   const loadHistory = useCallback(async () => {
-    setLoading(true);
-    setError(null);
     try {
+      setLoading(true);
+      setError(null);
       const data = streamId
         ? await getStreamHistory(streamId)
         : await listAllEvents();
       setEvents(data);
       setLastUpdatedAt(Date.now());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load history.");
+    } catch (err: any) {
+      setError(err.message || "Failed to load stream history");
     } finally {
       setLoading(false);
     }
@@ -127,6 +201,20 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
     );
   }
 
+  if (filteredEvents.length === 0 && activeFilters.size > 0) {
+    return (
+      <div className="activity-empty">
+        <span className="activity-empty-icon" aria-hidden>
+          --
+        </span>
+        <p>No events match the selected filters. Clear filters to see all events.</p>
+        <button type="button" className="btn-ghost" onClick={() => setActiveFilters(clearFilters())}>
+          Clear filters
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="activity-feed">
       {isGlobalFeed && (
@@ -140,7 +228,12 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
           </button>
         </div>
       )}
-      {events.map((event) => (
+      <FilterBar
+        activeFilters={activeFilters}
+        onToggle={(type) => setActiveFilters((prev) => toggleFilter(prev, type))}
+        onClear={() => setActiveFilters(clearFilters())}
+      />
+      {filteredEvents.map((event) => (
         <div key={event.id} className="activity-item">
           <div className="activity-icon">{getEventIcon(event.eventType)}</div>
           <div className="activity-content">

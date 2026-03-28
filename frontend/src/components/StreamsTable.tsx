@@ -124,17 +124,13 @@ export function StreamsTable({
                         <div className="progress-copy">
                           <strong>{stream.progress.percentComplete}%</strong>
                           <span className="muted">
-                            Vested: {stream.progress.vestedAmount}{" "}
-                            {stream.assetCode}
+                            Vested: {stream.progress.vestedAmount} {stream.assetCode}
                           </span>
                         </div>
                         <div className="progress-bar" aria-hidden>
                           <div
                             style={{
-                              width: `${Math.min(
-                                stream.progress.percentComplete,
-                                100,
-                              )}%`,
+                              width: `${Math.min(stream.progress.percentComplete, 100)}%`,
                             }}
                           />
                         </div>
@@ -145,11 +141,7 @@ export function StreamsTable({
                             {stream.progress.status}
                           </span>
                           {healthBadges.length > 0 && (
-                            <div
-                              className="health-badge-row"
-                              role="list"
-                              aria-label="Health badges"
-                            >
+                            <div className="health-badge-row" role="list" aria-label="Health badges">
                               {healthBadges.map((badge) => (
                                 <span
                                   key={badge.key}

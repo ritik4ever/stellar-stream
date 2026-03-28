@@ -1,4 +1,5 @@
 import axios from "axios";
+import { createHmac } from "crypto";
 import { getDb } from "./db";
 
 let isProcessing = false;
@@ -35,11 +36,26 @@ export const processWebhookQueue = async () => {
       let errorMsg = null;
 
       try {
-        await axios.post(url, {
+        const timestamp = new Date().toISOString();
+        const body = {
           event,
           payload: parsedPayload,
-          timestamp: new Date().toISOString(),
-        });
+          timestamp,
+        };
+        const bodyString = JSON.stringify(body);
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+        };
+
+        const signingSecret = process.env.WEBHOOK_SIGNING_SECRET;
+        if (signingSecret) {
+          const signature = createHmac("sha256", signingSecret)
+            .update(bodyString)
+            .digest("hex");
+          headers["X-Webhook-Signature"] = `sha256=${signature}`;
+        }
+
+        await axios.post(url, bodyString, { headers });
         success = true;
       } catch (error: any) {
         errorMsg = error.message || "Unknown error";

@@ -5,16 +5,15 @@ import express, { Request, Response } from "express";
 import swaggerUi from "swagger-ui-express";
 import { z } from "zod";
 import { swaggerDocument } from "./swagger";
-import { getStreamHistory, getGlobalEvents, countAllEvents } from "./services/eventHistory";
-import { fetchOpenIssues } from "./services/openIssues";
-import { initIndexer, startIndexer } from "./services/indexer";
-import { startWebhookWorker } from "./services/webhookWorker";
 import {
   countAllEvents,
   getAllEvents,
   getGlobalEvents,
   getStreamHistory,
 } from "./services/eventHistory";
+import { fetchOpenIssues } from "./services/openIssues";
+import { initIndexer, startIndexer } from "./services/indexer";
+import { startWebhookWorker } from "./services/webhookWorker";
 import {
   calculateProgress,
   cancelStream,
@@ -35,6 +34,7 @@ import {
   createStreamPayloadWithAllowedAssetsSchema,
   listEventsQuerySchema,
   recipientAccountIdSchema,
+  senderAccountIdSchema,
   streamIdSchema,
   updateStreamStartAtSchema,
   zodIssuesToErrorMessage,
@@ -125,6 +125,12 @@ app.get("/api/health", (_req: Request, res: Response) => {
     service: "stellar-stream-backend",
     status: "ok",
     timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/api/assets", (_req: Request, res: Response) => {
+  res.json({
+    data: ALLOWED_ASSETS,
   });
 });
 
@@ -291,6 +297,75 @@ app.get("/api/recipients/:accountId/streams", (req: Request, res: Response) => {
     }));
 
   res.json({ data });
+});
+
+app.get("/api/senders/:accountId/streams", (req: Request, res: Response) => {
+  const parsedParams = senderAccountIdSchema.safeParse({
+    accountId: req.params.accountId,
+  });
+
+  if (!parsedParams.success) {
+    sendValidationError(res, parsedParams.error.issues);
+    return;
+  }
+
+  const accountId = parsedParams.data.accountId;
+
+  const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    sendValidationError(res, parsedQuery.error.issues);
+    return;
+  }
+  const query = parsedQuery.data;
+
+  let data = listStreams()
+    .filter((stream) => stream.sender.toLowerCase() === accountId.toLowerCase())
+    .map((stream) => ({
+      ...stream,
+      progress: calculateProgress(stream),
+    }));
+
+  if (query.status) {
+    data = data.filter((stream) => stream.progress.status === query.status);
+  }
+  if (query.recipient) {
+    data = data.filter(
+      (stream) => stream.recipient.toLowerCase() === query.recipient!.toLowerCase(),
+    );
+  }
+  if (query.asset) {
+    data = data.filter(
+      (stream) => stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
+    );
+  }
+  if (query.q && query.q.length > 0) {
+    const searchTerm = query.q.toLowerCase();
+    data = data.filter((stream) => {
+      return (
+        stream.id.toLowerCase().includes(searchTerm) ||
+        stream.sender.toLowerCase().includes(searchTerm) ||
+        stream.recipient.toLowerCase().includes(searchTerm) ||
+        stream.assetCode.toLowerCase().includes(searchTerm)
+      );
+    });
+  }
+
+  const hasPage = req.query.page !== undefined;
+  const hasLimit = req.query.limit !== undefined;
+
+  const total = data.length;
+  const page = query.page ?? PAGINATION_DEFAULT_PAGE;
+  const limit = !hasPage && !hasLimit ? total : (query.limit ?? PAGINATION_DEFAULT_LIMIT);
+
+  const offset = (page - 1) * limit;
+  const paginatedData = data.slice(offset, offset + limit);
+
+  res.json({
+    data: paginatedData,
+    total,
+    page,
+    limit,
+  });
 });
 
 app.get("/api/auth/challenge", (req: Request, res: Response) => {

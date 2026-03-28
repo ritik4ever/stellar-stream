@@ -296,6 +296,33 @@ export const swaggerDocument = {
         },
       },
     },
+    "/api/assets": {
+      get: {
+        summary: "List allowed assets",
+        description: "Returns the normalized list of allowed asset codes.",
+        responses: {
+          "200": {
+            description: "Allowed assets list.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                        example: "USDC",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     "/api/streams": {
       get: {
         summary: "List all streams",
@@ -471,20 +498,34 @@ export const swaggerDocument = {
         },
       },
     },
-
+    "/api/recipients/{accountId}/streams": {
+      get: {
+        summary: "Get recipient streams",
+        description: "Retrieves all streams for a specific recipient.",
+        parameters: [
+          {
+            name: "accountId",
+            in: "path",
+            required: true,
+            description: "The Stellar account ID of the recipient.",
+            schema: {
+              type: "string",
             },
           },
         ],
         responses: {
           "200": {
-
+            description: "A list of streams for the recipient.",
             content: {
               "application/json": {
                 schema: {
                   type: "object",
                   properties: {
                     data: {
-
+                      type: "array",
+                      items: {
+                        $ref: "#/components/schemas/Stream",
+                      },
                     },
                   },
                 },
@@ -493,6 +534,94 @@ export const swaggerDocument = {
           },
           "400": {
             description: "Invalid Stellar account ID.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/api/senders/{accountId}/streams": {
+      get: {
+        summary: "Get sender streams",
+        description: "Retrieves all streams for a specific sender with optional filtering and pagination.",
+        parameters: [
+          {
+            name: "accountId",
+            in: "path",
+            required: true,
+            description: "The Stellar account ID of the sender.",
+            schema: {
+              type: "string",
+            },
+          },
+          {
+            name: "status",
+            in: "query",
+            required: false,
+            description: "Filter by stream status.",
+            schema: {
+              type: "string",
+              enum: ["scheduled", "active", "completed", "canceled"],
+            },
+          },
+          {
+            name: "page",
+            in: "query",
+            required: false,
+            schema: {
+              type: "integer",
+              minimum: 1,
+            },
+          },
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            schema: {
+              type: "integer",
+              minimum: 1,
+              maximum: 100,
+            },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "A list of streams for the sender with pagination metadata.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: {
+                        $ref: "#/components/schemas/Stream",
+                      },
+                    },
+                    total: {
+                      type: "number",
+                      example: 10,
+                    },
+                    page: {
+                      type: "number",
+                      example: 1,
+                    },
+                    limit: {
+                      type: "number",
+                      example: 20,
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": {
+            description: "Invalid input or account ID.",
             content: {
               "application/json": {
                 schema: {

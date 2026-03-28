@@ -46,11 +46,17 @@ type TestProgress = {
   percentComplete: number;
 };
 
+const SENDER_A = "GA6W6AAAAAAAAAAW6AAAAAAAAAAW6AAAAAAAAAAW6AAAAAAAAAAW6AAA";
+const SENDER_B = "GA6W6BBBBBBBBBBW6BBBBBBBBBBW6BBBBBBBBBBW6BBBBBBBBBBW6BBB";
+const SENDER_C = "GA6W6CCCCCCCCCCW6CCCCCCCCCCW6CCCCCCCCCCW6CCCCCCCCCCW6CCC";
+const RECIPIENT_1 = "GA6W61111111111W61111111111W61111111111W61111111111W6111";
+const RECIPIENT_2 = "GA6W62222222222W62222222222W62222222222W62222222222W6222";
+
 const streams: TestStream[] = [
   {
     id: "4",
-    sender: "GSENDERAAAA",
-    recipient: "GRECIPIENT111",
+    sender: SENDER_A,
+    recipient: RECIPIENT_1,
     assetCode: "USDC",
     totalAmount: 100,
     durationSeconds: 100,
@@ -59,8 +65,8 @@ const streams: TestStream[] = [
   },
   {
     id: "3",
-    sender: "GSENDERBBBB",
-    recipient: "GRECIPIENT222",
+    sender: SENDER_B,
+    recipient: RECIPIENT_2,
     assetCode: "USDC",
     totalAmount: 100,
     durationSeconds: 100,
@@ -70,8 +76,8 @@ const streams: TestStream[] = [
   },
   {
     id: "2",
-    sender: "GSENDERAAAA",
-    recipient: "GRECIPIENT222",
+    sender: SENDER_A,
+    recipient: RECIPIENT_2,
     assetCode: "USDC",
     totalAmount: 100,
     durationSeconds: 100,
@@ -80,8 +86,8 @@ const streams: TestStream[] = [
   },
   {
     id: "1",
-    sender: "GSENDERCCCC",
-    recipient: "GRECIPIENT111",
+    sender: SENDER_C,
+    recipient: RECIPIENT_1,
     assetCode: "USDC",
     totalAmount: 100,
     durationSeconds: 100,
@@ -159,6 +165,40 @@ function invokeListStreamsRoute(
   return { status: statusCode, body: jsonBody };
 }
 
+function invokeSenderStreamsRoute(
+  accountId: string,
+  query: Record<string, unknown> = {},
+): { status: number; body: any } {
+  const layer = (app as any)?._router?.stack?.find(
+    (entry: any) => entry.route?.path === "/api/senders/:accountId/streams" && entry.route?.methods?.get,
+  );
+
+  if (!layer) {
+    throw new Error("GET /api/senders/:accountId/streams route not found");
+  }
+
+  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+
+  let statusCode = 200;
+  let jsonBody: any;
+
+  const req = { params: { accountId }, query };
+  const res = {
+    status(code: number) {
+      statusCode = code;
+      return this;
+    },
+    json(payload: any) {
+      jsonBody = payload;
+      return this;
+    },
+  };
+
+  handler(req, res);
+
+  return { status: statusCode, body: jsonBody };
+}
+
 beforeEach(() => {
   streamStoreMocks.listStreams.mockReset();
   streamStoreMocks.calculateProgress.mockReset();
@@ -190,7 +230,7 @@ describe("GET /api/streams", () => {
   });
 
   it("filters by sender exact match", () => {
-    const { status, body } = invokeListStreamsRoute({ sender: "GSENDERAAAA" });
+    const { status, body } = invokeListStreamsRoute({ sender: SENDER_A });
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
@@ -198,7 +238,7 @@ describe("GET /api/streams", () => {
   });
 
   it("filters by recipient exact match", () => {
-    const { status, body } = invokeListStreamsRoute({ recipient: "GRECIPIENT111" });
+    const { status, body } = invokeListStreamsRoute({ recipient: RECIPIENT_1 });
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
@@ -207,8 +247,8 @@ describe("GET /api/streams", () => {
 
   it("applies combined sender + recipient + status filtering", () => {
     const { status, body } = invokeListStreamsRoute({
-      sender: "GSENDERAAAA",
-      recipient: "GRECIPIENT222",
+      sender: SENDER_A,
+      recipient: RECIPIENT_2,
       status: "scheduled",
     });
 
@@ -280,6 +320,54 @@ describe("GET /api/streams", () => {
     expect(body.page).toBe(2);
     expect(body.limit).toBe(1);
     expect(body.data).toEqual([]);
+  });
+});
+
+describe("GET /api/senders/:accountId/streams", () => {
+  it("returns streams for a specific sender", () => {
+    const { status, body } = invokeSenderStreamsRoute(SENDER_A);
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+    expect(body.data.every((s: any) => s.sender === SENDER_A)).toBe(true);
+  });
+
+  it("filters by status", () => {
+    const { status, body } = invokeSenderStreamsRoute(SENDER_A, { status: "active" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(1);
+    expect(body.data[0].id).toBe("4");
+  });
+
+  it("filters by asset", () => {
+    const { status, body } = invokeSenderStreamsRoute(SENDER_A, { asset: "USDC" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+  });
+
+  it("filters by search term", () => {
+    const { status, body } = invokeSenderStreamsRoute(SENDER_A, { q: "GA6W6AAAAAAAAAAW6AAAAAAAAAAW6AAAAAAAAAAW6AAAAAAAAAAW6AAA" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+  });
+
+  it("returns 400 for invalid account ID", () => {
+    const { status, body } = invokeSenderStreamsRoute("invalid_account");
+
+    expect(status).toBe(400);
+    expect(body.error).toContain("Must be a valid Stellar account ID");
+  });
+
+  it("paginates correctly", () => {
+    const { status, body } = invokeSenderStreamsRoute(SENDER_A, { limit: "1" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+    expect(body.data).toHaveLength(1);
+    expect(body.limit).toBe(1);
   });
 });
 

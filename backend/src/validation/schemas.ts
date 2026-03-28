@@ -111,6 +111,10 @@ export const recipientAccountIdSchema = z.object({
   accountId: stellarAccountIdSchema,
 });
 
+export const senderAccountIdSchema = z.object({
+  accountId: stellarAccountIdSchema,
+});
+
 export type CreateStreamPayload = z.infer<typeof createStreamPayloadSchema>;
 
 export type ValidationIssue = {
