@@ -8,6 +8,11 @@ import { swaggerDocument } from "./swagger";
 
 import { fetchOpenIssues } from "./services/openIssues";
 import { initIndexer, startIndexer } from "./services/indexer";
+import { 
+  getStreamHistory, 
+  getGlobalEvents, 
+  countAllEvents 
+} from "./services/eventHistory";
 import { startWebhookWorker } from "./services/webhookWorker";
 import {
   calculateProgress,
@@ -249,7 +254,11 @@ app.get("/api/streams/:id", (req: Request, res: Response) => {
     res.status(404).json({ error: "Stream not found.", requestId: req.requestId });
     return;
   }
-  res.json({ data: { ...stream, progress: calculateProgress(stream) } });
+
+  res.json({ data: { 
+    ...stream, 
+    progress: calculateProgress(stream) 
+  } });
 });
 
 app.get("/api/auth/challenge", (req: Request, res: Response) => {
@@ -263,7 +272,7 @@ app.get("/api/auth/challenge", (req: Request, res: Response) => {
     const challengeTransaction = generateChallenge(accountId.trim());
     res.json({ transaction: challengeTransaction });
   } catch (error: any) {
-    console.error("Failed to generate challenge:", error);
+    console.error(`[Auth] Failed to generate challenge for ${accountId}:`, error);
     res.status(500).json({ error: "Failed to generate challenge transaction." });
   }
 });
@@ -289,6 +298,15 @@ app.post("/api/streams", authMiddleware, async (req: Request, res: Response) => 
   );
   if (!parsedBody.success) {
     sendValidationError(res, parsedBody.error.issues);
+    return;
+  }
+
+  const user = (req as any).user;
+  if (parsedBody.data.sender !== user.accountId) {
+    res.status(403).json({
+      error: "You can only create streams where you are the sender.",
+      requestId: req.requestId,
+    });
     return;
   }
 
@@ -319,13 +337,24 @@ app.post(
       return;
     }
 
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      res.status(404).json({ error: "Stream not found.", requestId: req.requestId });
+      return;
+    }
+
+    const user = (req as any).user;
+    if (stream.sender !== user.accountId) {
+      res.status(403).json({
+        error: "Only the sender can cancel this stream.",
+        requestId: req.requestId,
+      });
+      return;
+    }
+
     try {
-      const stream = await cancelStream(parsedId.value);
-      if (!stream) {
-        res.status(404).json({ error: "Stream not found.", requestId: req.requestId });
-        return;
-      }
-      res.json({ data: { ...stream, progress: calculateProgress(stream) } });
+      const canceledStream = await cancelStream(parsedId.value);
+      res.json({ data: { ...canceledStream, progress: calculateProgress(canceledStream!) } });
     } catch (error: any) {
       console.error("Failed to cancel stream:", error);
       res.status(500).json({ error: error.message || "Failed to cancel stream." });
@@ -349,15 +378,32 @@ app.patch(
       return;
     }
 
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      res.status(404).json({ error: "Stream not found.", requestId: req.requestId });
+      return;
+    }
+
+    const user = (req as any).user;
+    if (stream.sender !== user.accountId) {
+      res.status(403).json({
+        error: "Only the sender can update the start time.",
+        requestId: req.requestId,
+      });
+      return;
+    }
+
+    const now = Math.floor(Date.now() / 1000);
     const newStartAt = parsedBody.data.startAt;
-    if (newStartAt <= Math.floor(Date.now() / 1000)) {
+
+    if (newStartAt <= now) {
       res.status(400).json({ error: "startAt must be in the future." });
       return;
     }
 
     try {
-      const stream = updateStreamStartAt(parsedId.value, newStartAt);
-      res.json({ data: { ...stream, progress: calculateProgress(stream) } });
+      const updatedStream = updateStreamStartAt(parsedId.value, newStartAt);
+      res.json({ data: { ...updatedStream, progress: calculateProgress(updatedStream) } });
     } catch (error: any) {
       const statusCode = error.statusCode ?? 500;
       res
@@ -419,11 +465,6 @@ app.get("/api/open-issues", async (_req: Request, res: Response) => {
     res.status(500).json({ error: error.message || "Failed to fetch open issues." });
   }
 });
-
-app.get("/api/events", (_req: Request, res: Response) => {
-  res.json({ data: getAllEvents(50) });
-});
-
 
 async function startServer() {
   await initSoroban();

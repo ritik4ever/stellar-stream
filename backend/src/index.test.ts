@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Keypair, TransactionBuilder, WebAuth, Networks } from "@stellar/stellar-sdk";
 
 const streamStoreMocks = vi.hoisted(() => ({
   calculateProgress: vi.fn(),
@@ -448,5 +449,117 @@ describe("GET /api/events", () => {
       actor: "GSENDER",
       amount: 50,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AUTH ENDPOINTS
+// ---------------------------------------------------------------------------
+
+describe("Authentication Endpoints", () => {
+  const clientKp = Keypair.random();
+  const serverKp = Keypair.random();
+  
+  // We need to ensure the service uses our test server key
+  vi.stubEnv("SERVER_SIGNING_KEY", serverKp.secret());
+  vi.stubEnv("DOMAIN", "test.stellarstream.io");
+
+  function invokeAuthChallengeRoute(accountId: string) {
+    const layer = (app as any)?._router?.stack?.find(
+      (entry: any) => entry.route?.path === "/api/auth/challenge" && entry.route?.methods?.get,
+    );
+    const handler = layer.route.stack[0].handle;
+
+    let statusCode = 200;
+    let jsonBody: any;
+
+    const req = { query: { accountId } };
+    const res = {
+      status(code: number) { statusCode = code; return this; },
+      json(payload: any) { jsonBody = payload; return this; },
+    };
+
+    handler(req, res);
+    return { status: statusCode, body: jsonBody };
+  }
+
+  function invokeAuthTokenRoute(transaction: any) {
+    const layer = (app as any)?._router?.stack?.find(
+      (entry: any) => entry.route?.path === "/api/auth/token" && entry.route?.methods?.post,
+    );
+    const handler = layer.route.stack[0].handle;
+
+    let statusCode = 200;
+    let jsonBody: any;
+
+    const req = { body: { transaction }, requestId: "test-req-id" };
+    const res = {
+      status(code: number) { statusCode = code; return this; },
+      json(payload: any) { jsonBody = payload; return this; },
+    };
+
+    handler(req, res);
+    return { status: statusCode, body: jsonBody };
+  }
+
+  it("GET /api/auth/challenge returns a valid SEP-10 transaction", () => {
+    const { status, body } = invokeAuthChallengeRoute(clientKp.publicKey());
+
+    expect(status).toBe(200);
+    expect(body.transaction).toBeDefined();
+    
+    const tx = TransactionBuilder.fromXDR(body.transaction, Networks.TESTNET);
+    // SEP-10 challenges are ManageData operations
+    expect(tx.operations[0].type).toBe("manageData");
+  });
+
+  it("POST /api/auth/token issues a JWT for a valid signed challenge", () => {
+    // 1. Get challenge
+    const { body } = invokeAuthChallengeRoute(clientKp.publicKey());
+    
+    // 2. Client signs it
+    const tx = TransactionBuilder.fromXDR(body.transaction, Networks.TESTNET);
+    tx.sign(clientKp);
+    const signedXdr = tx.toXDR();
+
+    // 3. Verify
+    const result = invokeAuthTokenRoute(signedXdr);
+    expect(result.status).toBe(200);
+    expect(result.body.token).toBeDefined();
+  });
+
+  it("POST /api/auth/token rejects if signature is missing", () => {
+    const { body } = invokeAuthChallengeRoute(clientKp.publicKey());
+    
+    // Send without client signature
+    const result = invokeAuthTokenRoute(body.transaction);
+    expect(result.status).toBe(401);
+    expect(result.body.error).toContain("verification failed");
+  });
+
+  it("POST /api/auth/token rejects if signed by wrong account", () => {
+    const { body } = invokeAuthChallengeRoute(clientKp.publicKey());
+    
+    const wrongKp = Keypair.random();
+    const tx = TransactionBuilder.fromXDR(body.transaction, Networks.TESTNET);
+    tx.sign(wrongKp);
+    
+    const result = invokeAuthTokenRoute(tx.toXDR());
+    expect(result.status).toBe(401);
+  });
+
+  it("POST /api/auth/token rejects expired transactions", () => {
+    const challenge = WebAuth.buildChallengeTx(
+      serverKp,
+      clientKp.publicKey(),
+      "test.stellarstream.io",
+      -60, // Expired 60 seconds ago
+      Networks.TESTNET,
+      "test.stellarstream.io"
+    );
+
+    const result = invokeAuthTokenRoute(challenge);
+    expect(result.status).toBe(401);
+    expect(result.body.error).toContain("expired");
   });
 });

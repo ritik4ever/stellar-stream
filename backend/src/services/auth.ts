@@ -9,8 +9,11 @@ import { Request, Response, NextFunction } from "express";
 
 const JWT_SECRET = process.env.JWT_SECRET || "default_local_dev_secret_key";
 const SERVER_SIGNING_KEY =
-  process.env.SERVER_SIGNING_KEY || Keypair.random().secret(); // Generate random for dev if not set
-const DOMAIN = process.env.DOMAIN || "localhost";
+  process.env.SERVER_SIGNING_KEY || (process.env.NODE_ENV === 'production' 
+    ? ((): string => { throw new Error("SERVER_SIGNING_KEY must be set in production") })() 
+    : Keypair.random().secret());
+
+const DOMAIN = (process.env.DOMAIN || "localhost").trim();
 const NETWORK_PASSPHRASE = process.env.NETWORK_PASSPHRASE || Networks.TESTNET;
 
 export interface AuthUser {
@@ -32,30 +35,43 @@ export function generateChallenge(accountId: string): string {
   return challenge;
 }
 
+/**
+ * Verifies a SEP-10 challenge transaction and issues a JWT.
+ * Rejects if:
+ * - Transaction is malformed or not a SEP-10 challenge
+ * - Transaction has expired (stale)
+ * - Domain/Network doesn't match
+ * - Client signature is missing or invalid
+ */
 export function verifyChallengeAndIssueToken(
   transactionBase64: string,
 ): string {
   const serverKeypair = Keypair.fromSecret(SERVER_SIGNING_KEY);
+  const serverAccountId = serverKeypair.publicKey();
 
   try {
+    // readChallengeTx validates the transaction structure and server signature
     const { clientAccountID } = WebAuth.readChallengeTx(
       transactionBase64,
-      serverKeypair.publicKey(),
+      serverAccountId,
       NETWORK_PASSPHRASE,
       DOMAIN,
       DOMAIN,
     );
 
+    // verifyChallengeTxSigners ensures the clientAccountID actually signed it
     const signersFound = WebAuth.verifyChallengeTxSigners(
       transactionBase64,
-      serverKeypair.publicKey(),
+      serverAccountId,
       NETWORK_PASSPHRASE,
       [clientAccountID],
       DOMAIN,
       DOMAIN,
     );
 
-    if (!signersFound.includes(clientAccountID)) {
+    const isSignedByClient = signersFound.some(signer => signer === clientAccountID);
+
+    if (!isSignedByClient) {
       throw new Error(
         "Challenge transaction verification failed (invalid signature).",
       );
@@ -66,6 +82,10 @@ export function verifyChallengeAndIssueToken(
     });
     return token;
   } catch (error: any) {
+    // Catch stale transaction errors specifically if needed
+    if (error.message?.includes("TimeBounds")) {
+      throw new Error("Challenge has expired. Please request a new one.");
+    }
     throw new Error(`Challenge verification failed: ${error.message}`);
   }
 }
