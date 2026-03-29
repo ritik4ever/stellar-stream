@@ -37,6 +37,7 @@ export function StreamsTable({
   onFiltersChange: _onFiltersChange,
   onCancel,
   onEditStartTime,
+  onViewDetail,
 }: StreamsTableProps) {
   const exportUrl = getExportCsvUrl(filters as Record<string, string>);
   const [expandedStreamId, setExpandedStreamId] = useState<string | null>(null);

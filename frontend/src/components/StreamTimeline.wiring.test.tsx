@@ -75,8 +75,9 @@ describe("StreamTimeline wiring: FilterBar is rendered", () => {
     // Never resolves during this test
     mockListAllEvents.mockReturnValue(new Promise(() => {}));
     render(<StreamTimeline />);
-    expect(screen.getByText("Loading history...")).toBeTruthy();
+    // Loading state renders skeleton divs, not text
     expect(screen.queryByText("Created")).toBeNull();
+    expect(screen.queryByText("Claimed")).toBeNull();
   });
 });
 
@@ -103,10 +104,10 @@ describe("StreamTimeline wiring: filtered empty-state message", () => {
   it("does NOT show filtered empty-state when events array is empty with no filters", async () => {
     resolveWith([]);
     render(<StreamTimeline />);
-    await waitFor(() => expect(screen.queryByText("Loading history...")).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/No activity to show yet/i)).toBeTruthy());
 
     expect(screen.queryByText(/No events match the selected filters/i)).toBeNull();
-    expect(screen.getByText("No events found")).toBeTruthy();
+    expect(screen.getByText(/No activity to show yet/i)).toBeTruthy();
   });
 
   it("filtered empty-state is distinct from the no-events message", async () => {

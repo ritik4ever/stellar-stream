@@ -146,3 +146,9 @@ export async function listAllEvents(): Promise<StreamEvent[]> {
   const body = await parseResponse<{ data: StreamEvent[] }>(response);
   return body.data;
 }
+
+export async function getStream(streamId: string): Promise<Stream> {
+  const response = await fetch(`${API_BASE}/streams/${encodeURIComponent(streamId)}`);
+  const body = await parseResponse<{ data: Stream }>(response);
+  return body.data;
+}

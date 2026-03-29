@@ -15,9 +15,24 @@ const mockStreams: Stream[] = [
     durationSeconds: 3600,
     startAt: 1670000000,
     createdAt: 1670000000,
-    progress: { status: 'active', vestedAmount: 20, remainingAmount: 80, percentComplete: 20 }
-  } as unknown as Stream
+    progress: {
+      status: 'active',
+      ratePerSecond: 0.01,
+      elapsedSeconds: 100,
+      vestedAmount: 20,
+      remainingAmount: 80,
+      percentComplete: 20,
+    },
+  },
 ];
+
+const defaultProps = {
+  streams: mockStreams,
+  filters: {},
+  onFiltersChange: noop,
+  onCancel: vi.fn().mockResolvedValue(undefined),
+  onEditStartTime: noop,
+};
 
 describe('StreamsTable Component', () => {
   afterEach(() => {
