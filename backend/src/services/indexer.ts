@@ -5,7 +5,8 @@ import {
   Networks,
   scValToNative,
 } from "@stellar/stellar-sdk";
-import { recordEvent } from "./eventHistory";
+import { recordEventWithDb } from "./eventHistory";
+import { getDb } from "./db";
 
 let rpcServer: rpc.Server | null = null;
 let contractId: string | null = null;
@@ -57,12 +58,22 @@ async function indexEvents(): Promise<void> {
   }
 
   try {
+    const db = getDb();
     const latestLedger = await rpcServer.getLatestLedger();
     const currentLedger = latestLedger.sequence;
 
     if (lastProcessedLedger === 0) {
-      // First run - start from recent history (last 100 ledgers)
-      lastProcessedLedger = Math.max(1, currentLedger - 100);
+      // First run - attempt to load last processed ledger from database
+      const row = db
+        .prepare("SELECT last_ledger FROM indexer_cursor WHERE id = ?")
+        .get(contractId) as { last_ledger: number } | undefined;
+
+      if (row) {
+        lastProcessedLedger = row.last_ledger;
+      } else {
+        // Fallback: start from recent history (last 100 ledgers)
+        lastProcessedLedger = Math.max(1, currentLedger - 100);
+      }
     }
 
     if (currentLedger <= lastProcessedLedger) {
@@ -80,17 +91,28 @@ async function indexEvents(): Promise<void> {
       ],
     });
 
-    for (const event of events.events || []) {
-      await processEvent(event);
-    }
+    // Use a transaction to ensure events and cursor are updated atomically.
+    // This prevents duplicate events if the process crashes mid-batch.
+    db.transaction(() => {
+      for (const event of events.events || []) {
+        processEvent(db, event);
+      }
 
-    lastProcessedLedger = currentLedger;
+      lastProcessedLedger = currentLedger;
+      db.prepare(
+        "INSERT INTO indexer_cursor (id, last_ledger) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET last_ledger = excluded.last_ledger",
+      ).run(contractId, lastProcessedLedger);
+    })();
   } catch (err) {
     console.error("Failed to index events:", err);
   }
 }
 
-async function processEvent(event: rpc.Api.EventResponse): Promise<void> {
+/**
+ * Processes a single contract event and records it in history.
+ * Note: This is now synchronous to support database transactions.
+ */
+function processEvent(db: any, event: rpc.Api.EventResponse): void {
   try {
     const topic = event.topic.map((t: any) => scValToNative(t));
     const value = scValToNative(event.value);
@@ -103,7 +125,8 @@ async function processEvent(event: rpc.Api.EventResponse): Promise<void> {
 
     switch (eventName) {
       case "Created":
-        recordEvent(
+        recordEventWithDb(
+          db,
           value.stream_id.toString(),
           "created",
           timestamp,
@@ -119,7 +142,8 @@ async function processEvent(event: rpc.Api.EventResponse): Promise<void> {
         break;
 
       case "Claimed":
-        recordEvent(
+        recordEventWithDb(
+          db,
           value.stream_id.toString(),
           "claimed",
           timestamp,
@@ -129,7 +153,8 @@ async function processEvent(event: rpc.Api.EventResponse): Promise<void> {
         break;
 
       case "Canceled":
-        recordEvent(
+        recordEventWithDb(
+          db,
           value.stream_id.toString(),
           "canceled",
           timestamp,

@@ -1,0 +1,1 @@
+/* Please delete this .js file and use the setupTests.ts file instead */

@@ -1,32 +1,163 @@
-import { useEffect, useState } from "react";
-import { listStreams } from "../services/api";
+import { useCallback, useEffect, useState } from "react";
+import { listRecipientStreams, StreamEvent } from "../services/api";
 import { Stream } from "../types/stream";
+import { CopyableAddress } from "./CopyableAddress";
+import { useClaimStream, ClaimState } from "../hooks/useClaimStream";
+import { ClaimResult } from "../services/soroban";
 
 interface RecipientDashboardProps {
   /** Connected wallet address (recipient account). When null, user must connect. */
   recipientAddress: string | null;
 }
 
-function statusClass(status: Stream["progress"]["status"]): string {
-  switch (status) {
-    case "active":
-      return "badge badge-active";
-    case "scheduled":
-      return "badge badge-scheduled";
-    case "completed":
-      return "badge badge-completed";
-    case "canceled":
-      return "badge badge-canceled";
-    default:
-      return "badge";
-  }
+// ---------------------------------------------------------------------------
+// Toast notification (lightweight, no external dep)
+// ---------------------------------------------------------------------------
+
+interface ToastProps {
+  message: string;
+  type: "success" | "error";
+  onDismiss: () => void;
 }
+
+function Toast({ message, type, onDismiss }: ToastProps) {
+  return (
+    <div
+      className={`claim-toast claim-toast--${type}`}
+      role="status"
+      aria-live="polite"
+    >
+      <span className="claim-toast__icon" aria-hidden="true">
+        {type === "success" ? "✓" : "✕"}
+      </span>
+      <span className="claim-toast__msg">{message}</span>
+      <button
+        type="button"
+        className="claim-toast__dismiss"
+        aria-label="Dismiss notification"
+        onClick={onDismiss}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Claim button — shows idle / pending / confirmed / failed states
+// ---------------------------------------------------------------------------
+
+interface ClaimButtonProps {
+  streamId: string;
+  claimableAmount: number;
+  assetCode: string;
+  claimState: ClaimState;
+  onClaim: () => void;
+}
+
+function ClaimButton({
+  streamId,
+  claimableAmount,
+  assetCode,
+  claimState,
+  onClaim,
+}: ClaimButtonProps) {
+  const isThisStream = claimState.streamId === streamId;
+  const isPending = isThisStream && claimState.status === "pending";
+  const isConfirmed = isThisStream && claimState.status === "confirmed";
+  const isFailed = isThisStream && claimState.status === "failed";
+  const disabled = isPending || claimableAmount <= 0;
+
+  let label = `Claim ${claimableAmount} ${assetCode}`;
+  if (isPending) label = "Claiming…";
+  if (isConfirmed) label = "Claimed ✓";
+
+  return (
+    <button
+      type="button"
+      className={`btn-claim${isPending ? " btn-claim--pending" : ""}${isConfirmed ? " btn-claim--confirmed" : ""}${isFailed ? " btn-claim--failed" : ""}`}
+      disabled={disabled}
+      aria-busy={isPending}
+      aria-label={`Claim ${claimableAmount} ${assetCode} from stream ${streamId}`}
+      onClick={onClaim}
+    >
+      {isPending && (
+        <span className="btn-claim__spinner" aria-hidden="true" />
+      )}
+      {label}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function statusClass(status: Stream["progress"]["status"]): string {
+  const map: Record<string, string> = {
+    active: "badge badge-active",
+    scheduled: "badge badge-scheduled",
+    completed: "badge badge-completed",
+    canceled: "badge badge-canceled",
+  };
+  return map[status] ?? "badge";
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
 
 export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps) {
   const [streams, setStreams] = useState<Stream[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
+  // Auto-dismiss toast after 5 s
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 5000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const refreshStreams = useCallback(async () => {
+    if (!recipientAddress) return;
+    try {
+      const data = await listRecipientStreams(recipientAddress);
+      setStreams(data);
+    } catch {
+      // Non-fatal refresh failure — keep stale data
+    }
+  }, [recipientAddress]);
+
+  /**
+   * On successful on-chain claim:
+   * 1. Refresh stream list so vested/remaining amounts are up-to-date.
+   * 2. Show success toast.
+   * The history parameter is available for callers that want to reconcile
+   * event logs — here we surface it via the toast message.
+   */
+  const handleClaimSuccess = useCallback(
+    async (streamId: string, result: ClaimResult, _history: StreamEvent[]) => {
+      await refreshStreams();
+      setToast({
+        message: `Successfully claimed ${result.claimedAmount} tokens from stream ${streamId}.`,
+        type: "success",
+      });
+    },
+    [refreshStreams],
+  );
+
+  const handleClaimFailure = useCallback((_streamId: string, message: string) => {
+    setToast({ message, type: "error" });
+  }, []);
+
+  const { claimState, claim, isPending } = useClaimStream(
+    handleClaimSuccess,
+    handleClaimFailure,
+  );
+
+  // Load streams on mount / address change
   useEffect(() => {
     if (!recipientAddress) {
       setLoading(false);
@@ -39,31 +170,25 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
     setLoading(true);
     setError(null);
 
-    // Artificial testing delay
-    const delayThenLoad = async () => {
-      await new Promise(r => setTimeout(r, 1200));
-      if (!active) return;
-      
-      try {
-        const data = await listStreams({ recipient: recipientAddress });
+    listRecipientStreams(recipientAddress)
+      .then((data) => {
         if (!active) return;
         setStreams(data);
-      } catch (err) {
+      })
+      .catch((err) => {
         if (!active) return;
         setError(err instanceof Error ? err.message : "Failed to load streams.");
-      } finally {
+      })
+      .finally(() => {
         if (active) setLoading(false);
-      }
-    };
-
-    delayThenLoad();
+      });
 
     return () => {
       active = false;
     };
   }, [recipientAddress]);
 
-  // Not connected: prompt to connect wallet
+  // ── Not connected ──────────────────────────────────────────────────────────
   if (!recipientAddress) {
     return (
       <div className="card recipient-dashboard-card">
@@ -71,7 +196,7 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
         <div className="activity-empty">
           <span className="activity-empty-icon">🔌</span>
           <p>Wallet Not Connected</p>
-          <p className="muted" style={{ fontSize: '0.85rem' }}>
+          <p className="muted" style={{ fontSize: "0.85rem" }}>
             Connect your wallet to see streams where you are the recipient.
           </p>
         </div>
@@ -79,21 +204,21 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
     );
   }
 
-  // Loading state
+  // ── Loading ────────────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Recipient Dashboard</h2>
         <div className="activity-feed">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="skeleton skeleton-item" style={{ height: '80px' }} />
+            <div key={i} className="skeleton skeleton-item" style={{ height: "80px" }} />
           ))}
         </div>
       </div>
     );
   }
 
-  // Error state
+  // ── Error ──────────────────────────────────────────────────────────────────
   if (error) {
     return (
       <div className="card recipient-dashboard-card">
@@ -123,7 +248,7 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
     0,
   );
 
-  // Empty state: no streams as recipient
+  // ── Empty ──────────────────────────────────────────────────────────────────
   if (streams.length === 0) {
     return (
       <div className="card recipient-dashboard-card">
@@ -131,7 +256,7 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
         <div className="activity-empty">
           <span className="activity-empty-icon">🌊</span>
           <p>No Streams Found</p>
-          <p className="muted" style={{ fontSize: '0.85rem' }}>
+          <p className="muted" style={{ fontSize: "0.85rem" }}>
             You have no active or completed streams as a recipient yet.
           </p>
         </div>
@@ -139,8 +264,18 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
     );
   }
 
+  // ── Main view ──────────────────────────────────────────────────────────────
   return (
     <div className="recipient-dashboard">
+      {/* Toast notification */}
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onDismiss={() => setToast(null)}
+        />
+      )}
+
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Recipient Dashboard</h2>
         <p className="muted recipient-dashboard-subtitle">
@@ -179,15 +314,14 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
                     <th>Total</th>
                     <th>Status</th>
                     <th>Progress</th>
+                    <th>Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {activeStreams.map((stream) => (
                     <tr key={stream.id}>
                       <td>
-                        <span className="truncate-address">
-                          {stream.sender.slice(0, 8)}…{stream.sender.slice(-4)}
-                        </span>
+                        <CopyableAddress address={stream.sender} truncationMode="end" />
                       </td>
                       <td>{stream.assetCode}</td>
                       <td>
@@ -215,6 +349,21 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
                           />
                         </div>
                       </td>
+                      <td>
+                        <ClaimButton
+                          streamId={stream.id}
+                          claimableAmount={stream.progress.vestedAmount}
+                          assetCode={stream.assetCode}
+                          claimState={claimState}
+                          onClaim={() =>
+                            claim({
+                              streamId: stream.id,
+                              recipientAddress: recipientAddress,
+                              amount: stream.progress.vestedAmount,
+                            })
+                          }
+                        />
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -225,9 +374,7 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
 
         {completedStreams.length > 0 && (
           <section className="recipient-dashboard-section">
-            <h3 className="recipient-dashboard-section-title">
-              Completed streams
-            </h3>
+            <h3 className="recipient-dashboard-section-title">Completed streams</h3>
             <div className="table-wrap">
               <table>
                 <thead>
@@ -243,9 +390,7 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
                   {completedStreams.map((stream) => (
                     <tr key={stream.id}>
                       <td>
-                        <span className="truncate-address">
-                          {stream.sender.slice(0, 8)}…{stream.sender.slice(-4)}
-                        </span>
+                        <CopyableAddress address={stream.sender} truncationMode="end" />
                       </td>
                       <td>{stream.assetCode}</td>
                       <td>
@@ -253,9 +398,7 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
                           {stream.progress.vestedAmount} {stream.assetCode}
                         </strong>
                       </td>
-                      <td>
-                        {stream.totalAmount} {stream.assetCode}
-                      </td>
+                      <td>{stream.totalAmount} {stream.assetCode}</td>
                       <td>
                         <span className={statusClass(stream.progress.status)}>
                           {stream.progress.status}
@@ -267,6 +410,14 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
               </table>
             </div>
           </section>
+        )}
+
+        {/* Global pending indicator — shown when any claim is in-flight */}
+        {isPending && (
+          <div className="claim-pending-banner" role="status" aria-live="polite">
+            <span className="btn-claim__spinner" aria-hidden="true" />
+            Waiting for on-chain confirmation…
+          </div>
         )}
       </div>
     </div>

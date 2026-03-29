@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Keypair, TransactionBuilder, WebAuth, Networks } from "@stellar/stellar-sdk";
 
 const streamStoreMocks = vi.hoisted(() => ({
   calculateProgress: vi.fn(),
@@ -46,11 +47,17 @@ type TestProgress = {
   percentComplete: number;
 };
 
+const SENDER_A = "GA6W6AAAAAAAAAAW6AAAAAAAAAAW6AAAAAAAAAAW6AAAAAAAAAAW6AAA";
+const SENDER_B = "GA6W6BBBBBBBBBBW6BBBBBBBBBBW6BBBBBBBBBBW6BBBBBBBBBBW6BBB";
+const SENDER_C = "GA6W6CCCCCCCCCCW6CCCCCCCCCCW6CCCCCCCCCCW6CCCCCCCCCCW6CCC";
+const RECIPIENT_1 = "GA6W61111111111W61111111111W61111111111W61111111111W6111";
+const RECIPIENT_2 = "GA6W62222222222W62222222222W62222222222W62222222222W6222";
+
 const streams: TestStream[] = [
   {
     id: "4",
-    sender: "GSENDERAAAA",
-    recipient: "GRECIPIENT111",
+    sender: SENDER_A,
+    recipient: RECIPIENT_1,
     assetCode: "USDC",
     totalAmount: 100,
     durationSeconds: 100,
@@ -59,8 +66,8 @@ const streams: TestStream[] = [
   },
   {
     id: "3",
-    sender: "GSENDERBBBB",
-    recipient: "GRECIPIENT222",
+    sender: SENDER_B,
+    recipient: RECIPIENT_2,
     assetCode: "USDC",
     totalAmount: 100,
     durationSeconds: 100,
@@ -70,8 +77,8 @@ const streams: TestStream[] = [
   },
   {
     id: "2",
-    sender: "GSENDERAAAA",
-    recipient: "GRECIPIENT222",
+    sender: SENDER_A,
+    recipient: RECIPIENT_2,
     assetCode: "USDC",
     totalAmount: 100,
     durationSeconds: 100,
@@ -80,8 +87,8 @@ const streams: TestStream[] = [
   },
   {
     id: "1",
-    sender: "GSENDERCCCC",
-    recipient: "GRECIPIENT111",
+    sender: SENDER_C,
+    recipient: RECIPIENT_1,
     assetCode: "USDC",
     totalAmount: 100,
     durationSeconds: 100,
@@ -159,6 +166,40 @@ function invokeListStreamsRoute(
   return { status: statusCode, body: jsonBody };
 }
 
+function invokeSenderStreamsRoute(
+  accountId: string,
+  query: Record<string, unknown> = {},
+): { status: number; body: any } {
+  const layer = (app as any)?._router?.stack?.find(
+    (entry: any) => entry.route?.path === "/api/senders/:accountId/streams" && entry.route?.methods?.get,
+  );
+
+  if (!layer) {
+    throw new Error("GET /api/senders/:accountId/streams route not found");
+  }
+
+  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+
+  let statusCode = 200;
+  let jsonBody: any;
+
+  const req = { params: { accountId }, query };
+  const res = {
+    status(code: number) {
+      statusCode = code;
+      return this;
+    },
+    json(payload: any) {
+      jsonBody = payload;
+      return this;
+    },
+  };
+
+  handler(req, res);
+
+  return { status: statusCode, body: jsonBody };
+}
+
 beforeEach(() => {
   streamStoreMocks.listStreams.mockReset();
   streamStoreMocks.calculateProgress.mockReset();
@@ -190,7 +231,7 @@ describe("GET /api/streams", () => {
   });
 
   it("filters by sender exact match", () => {
-    const { status, body } = invokeListStreamsRoute({ sender: "GSENDERAAAA" });
+    const { status, body } = invokeListStreamsRoute({ sender: SENDER_A });
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
@@ -198,7 +239,7 @@ describe("GET /api/streams", () => {
   });
 
   it("filters by recipient exact match", () => {
-    const { status, body } = invokeListStreamsRoute({ recipient: "GRECIPIENT111" });
+    const { status, body } = invokeListStreamsRoute({ recipient: RECIPIENT_1 });
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
@@ -207,8 +248,8 @@ describe("GET /api/streams", () => {
 
   it("applies combined sender + recipient + status filtering", () => {
     const { status, body } = invokeListStreamsRoute({
-      sender: "GSENDERAAAA",
-      recipient: "GRECIPIENT222",
+      sender: SENDER_A,
+      recipient: RECIPIENT_2,
       status: "scheduled",
     });
 
@@ -280,6 +321,54 @@ describe("GET /api/streams", () => {
     expect(body.page).toBe(2);
     expect(body.limit).toBe(1);
     expect(body.data).toEqual([]);
+  });
+});
+
+describe("GET /api/senders/:accountId/streams", () => {
+  it("returns streams for a specific sender", () => {
+    const { status, body } = invokeSenderStreamsRoute(SENDER_A);
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+    expect(body.data.every((s: any) => s.sender === SENDER_A)).toBe(true);
+  });
+
+  it("filters by status", () => {
+    const { status, body } = invokeSenderStreamsRoute(SENDER_A, { status: "active" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(1);
+    expect(body.data[0].id).toBe("4");
+  });
+
+  it("filters by asset", () => {
+    const { status, body } = invokeSenderStreamsRoute(SENDER_A, { asset: "USDC" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+  });
+
+  it("filters by search term", () => {
+    const { status, body } = invokeSenderStreamsRoute(SENDER_A, { q: "GA6W6AAAAAAAAAAW6AAAAAAAAAAW6AAAAAAAAAAW6AAAAAAAAAAW6AAA" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+  });
+
+  it("returns 400 for invalid account ID", () => {
+    const { status, body } = invokeSenderStreamsRoute("invalid_account");
+
+    expect(status).toBe(400);
+    expect(body.error).toContain("Must be a valid Stellar account ID");
+  });
+
+  it("paginates correctly", () => {
+    const { status, body } = invokeSenderStreamsRoute(SENDER_A, { limit: "1" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+    expect(body.data).toHaveLength(1);
+    expect(body.limit).toBe(1);
   });
 });
 
@@ -448,5 +537,117 @@ describe("GET /api/events", () => {
       actor: "GSENDER",
       amount: 50,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AUTH ENDPOINTS
+// ---------------------------------------------------------------------------
+
+describe("Authentication Endpoints", () => {
+  const clientKp = Keypair.random();
+  const serverKp = Keypair.random();
+  
+  // We need to ensure the service uses our test server key
+  vi.stubEnv("SERVER_SIGNING_KEY", serverKp.secret());
+  vi.stubEnv("DOMAIN", "test.stellarstream.io");
+
+  function invokeAuthChallengeRoute(accountId: string) {
+    const layer = (app as any)?._router?.stack?.find(
+      (entry: any) => entry.route?.path === "/api/auth/challenge" && entry.route?.methods?.get,
+    );
+    const handler = layer.route.stack[0].handle;
+
+    let statusCode = 200;
+    let jsonBody: any;
+
+    const req = { query: { accountId } };
+    const res = {
+      status(code: number) { statusCode = code; return this; },
+      json(payload: any) { jsonBody = payload; return this; },
+    };
+
+    handler(req, res);
+    return { status: statusCode, body: jsonBody };
+  }
+
+  function invokeAuthTokenRoute(transaction: any) {
+    const layer = (app as any)?._router?.stack?.find(
+      (entry: any) => entry.route?.path === "/api/auth/token" && entry.route?.methods?.post,
+    );
+    const handler = layer.route.stack[0].handle;
+
+    let statusCode = 200;
+    let jsonBody: any;
+
+    const req = { body: { transaction }, requestId: "test-req-id" };
+    const res = {
+      status(code: number) { statusCode = code; return this; },
+      json(payload: any) { jsonBody = payload; return this; },
+    };
+
+    handler(req, res);
+    return { status: statusCode, body: jsonBody };
+  }
+
+  it("GET /api/auth/challenge returns a valid SEP-10 transaction", () => {
+    const { status, body } = invokeAuthChallengeRoute(clientKp.publicKey());
+
+    expect(status).toBe(200);
+    expect(body.transaction).toBeDefined();
+    
+    const tx = TransactionBuilder.fromXDR(body.transaction, Networks.TESTNET);
+    // SEP-10 challenges are ManageData operations
+    expect(tx.operations[0].type).toBe("manageData");
+  });
+
+  it("POST /api/auth/token issues a JWT for a valid signed challenge", () => {
+    // 1. Get challenge
+    const { body } = invokeAuthChallengeRoute(clientKp.publicKey());
+    
+    // 2. Client signs it
+    const tx = TransactionBuilder.fromXDR(body.transaction, Networks.TESTNET);
+    tx.sign(clientKp);
+    const signedXdr = tx.toXDR();
+
+    // 3. Verify
+    const result = invokeAuthTokenRoute(signedXdr);
+    expect(result.status).toBe(200);
+    expect(result.body.token).toBeDefined();
+  });
+
+  it("POST /api/auth/token rejects if signature is missing", () => {
+    const { body } = invokeAuthChallengeRoute(clientKp.publicKey());
+    
+    // Send without client signature
+    const result = invokeAuthTokenRoute(body.transaction);
+    expect(result.status).toBe(401);
+    expect(result.body.error).toContain("verification failed");
+  });
+
+  it("POST /api/auth/token rejects if signed by wrong account", () => {
+    const { body } = invokeAuthChallengeRoute(clientKp.publicKey());
+    
+    const wrongKp = Keypair.random();
+    const tx = TransactionBuilder.fromXDR(body.transaction, Networks.TESTNET);
+    tx.sign(wrongKp);
+    
+    const result = invokeAuthTokenRoute(tx.toXDR());
+    expect(result.status).toBe(401);
+  });
+
+  it("POST /api/auth/token rejects expired transactions", () => {
+    const challenge = WebAuth.buildChallengeTx(
+      serverKp,
+      clientKp.publicKey(),
+      "test.stellarstream.io",
+      -60, // Expired 60 seconds ago
+      Networks.TESTNET,
+      "test.stellarstream.io"
+    );
+
+    const result = invokeAuthTokenRoute(challenge);
+    expect(result.status).toBe(401);
+    expect(result.body.error).toContain("expired");
   });
 });
