@@ -1,4 +1,4 @@
-import { Fragment, useRef, useState } from "react";
+
 import { Stream } from "../types/stream";
 import { getExportCsvUrl, ListStreamsFilters } from "../services/api";
 import { CopyableAddress } from "./CopyableAddress";
@@ -31,20 +31,6 @@ function formatTimestamp(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
-export function StreamsTable({
-  streams,
-  filters,
-  onFiltersChange: _onFiltersChange,
-  onCancel,
-  onEditStartTime,
-  onViewDetail,
-}: StreamsTableProps) {
-  const exportUrl = getExportCsvUrl(filters as Record<string, string>);
-  const [expandedStreamId, setExpandedStreamId] = useState<string | null>(null);
-
-  const toggleTimeline = (streamId: string) => {
-    setExpandedStreamId((prev) => (prev === streamId ? null : streamId));
-  };
 
   return (
     <div className="card">

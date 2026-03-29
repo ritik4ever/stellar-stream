@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ListStreamsFilters } from "../services/api";
 
-export type ViewMode = "dashboard" | "recipient";
+export type ViewMode = "dashboard" | "recipient" | "sender";
 
 const VALID_STATUSES = new Set(["active", "scheduled", "completed", "canceled"]);
-const VALID_VIEWS = new Set<ViewMode>(["dashboard", "recipient"]);
+const VALID_VIEWS = new Set<ViewMode>(["dashboard", "recipient", "sender"]);
 
 function sanitizeString(raw: string | null, maxLen = 64): string {
     if (!raw) return "";
