@@ -366,6 +366,22 @@ export function listStreams(): StreamRecord[] {
   return rows.map(rowToRecord);
 }
 
+export function listStreamsByRecipient(recipientAddress: string): StreamRecord[] {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT * FROM streams WHERE recipient = ? ORDER BY created_at DESC")
+    .all(recipientAddress) as StreamRow[];
+  return rows.map(rowToRecord);
+}
+
+export function listStreamsBySender(senderAddress: string): StreamRecord[] {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT * FROM streams WHERE sender = ? ORDER BY created_at DESC")
+    .all(senderAddress) as StreamRow[];
+  return rows.map(rowToRecord);
+}
+
 export function getStream(id: string): StreamRecord | undefined {
   const db = getDb();
   const row = db.prepare("SELECT * FROM streams WHERE id = ?").get(id) as

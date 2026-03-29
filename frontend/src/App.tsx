@@ -4,6 +4,7 @@ import { EditStartTimeModal } from "./components/EditStartTimeModal";
 import { IssueBacklog } from "./components/IssueBacklog";
 import { RecipientDashboard } from "./components/RecipientDashboard";
 import { StreamsTable } from "./components/StreamsTable";
+
 import { StreamMetricsChart } from "./components/StreamMetricsChart";
 import { WalletButton } from "./components/WalletButton";
 import { StreamTimeline } from "./components/StreamTimeline";
@@ -11,7 +12,6 @@ import { useFreighter } from "./hooks/useFreighter";
 import {
   cancelStream,
   createStream,
-  listOpenIssues,
   listStreams,
   updateStreamStartAt,
 } from "./services/api";
@@ -19,7 +19,7 @@ import { OpenIssue, Stream } from "./types/stream";
 import { useMetricsHistory } from "./hooks/useMetricsHistory";
 import { useUrlFilters } from "./hooks/useUrlFilters";
 
-type ViewMode = "dashboard" | "recipient";
+type ViewMode = "dashboard" | "recipient" | "sender";
 
 // Derive a user-friendly hint string for global (non-form) errors.
 function describeGlobalError(raw: string): string {
@@ -42,38 +42,27 @@ function describeGlobalError(raw: string): string {
 
 function App() {
   const wallet = useFreighter();
-  const { view: viewMode, filters, setView: setViewMode, setFilters } = useUrlFilters();
+  const {
+    view: viewMode,
+    filters,
+    streamId: detailStreamId,
+    setView: setViewMode,
+    setFilters,
+    openStream,
+    closeStream,
+  } = useUrlFilters();
   const [streams, setStreams] = useState<Stream[]>([]);
   const [issues, setIssues] = useState<OpenIssue[]>([]);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const [editingStream, setEditingStream] = useState<Stream | null>(null);
+  const [editingStream, setEditingStream] = useState<{
+    stream: Stream;
+    triggerRef: React.RefObject<HTMLButtonElement | null>;
+  } | null>(null);
   const [loadingDashboard, setLoadingDashboard] = useState(true);
-
-useEffect(() => {
-  let active = true;
+  const [initialLoading, setInitialLoading] = useState(true);
 
 
-    }
-  }
-
-  void bootstrap();
-
-  const timer = window.setInterval(async () => {
-    if (!active) return;
-    try {
-      const data = await listStreams(filters);
-      if (active) setStreams(data);
-    } catch {
-      // polling failures are silent — the global error covers bootstrap failures
-    }
-  }, 5000);
-
-  return () => {
-    active = false;
-    window.clearInterval(timer);
-  };
-}, [filters]); 
 
   const metrics = useMemo(() => {
     const activeCount = streams.filter(
@@ -102,42 +91,39 @@ useEffect(() => {
     5000,
   );
 
-async function handleCreate(payload: Parameters<typeof createStream>[0]): Promise<void> {
-  setFormError(null);
-  setGlobalError(null);
-  try {
-    await createStream(payload);
-    const data = await listStreams(filters);
-    setStreams(data);
-  } catch (err) {
-    setFormError(err instanceof Error ? err.message : "Failed to create stream.");
+  async function handleCreate(
+    payload: Parameters<typeof createStream>[0],
+  ): Promise<void> {
+    setFormError(null);
+    setGlobalError(null);
+    try {
+      await createStream(payload);
+      const data = await listStreams(filters);
+      setStreams(data);
+    } catch (err) {
+      setFormError(
+        err instanceof Error ? err.message : "Failed to create stream.",
+      );
+    }
   }
-}
 
-async function handleCancel(streamId: string): Promise<void> {
-  setGlobalError(null);
-  setFormError(null);
-  try {
-    await cancelStream(streamId);
-    const data = await listStreams(filters);
-    setStreams(data);
-  } catch (err) {
-    setGlobalError(
-      err instanceof Error
-        ? describeGlobalError(err.message)
-        : "Failed to cancel the stream. Please try again.",
-    );
+  async function handleCancel(streamId: string): Promise<void> {
+    setGlobalError(null);
+    setFormError(null);
+    try {
+      await cancelStream(streamId);
+      const data = await listStreams(filters);
+      setStreams(data);
+    } catch (err) {
+      setGlobalError(
+        err instanceof Error
+          ? describeGlobalError(err.message)
+          : "Failed to cancel the stream. Please try again.",
+      );
+    }
   }
-}
 
-  async function handleUpdateStartTime(
-  streamId: string,
-  newStartAt: number,
-): Promise<void> {
-  await updateStreamStartAt(streamId, newStartAt);
-  const data = await listStreams(filters); 
-  setStreams(data);
-}
+
 
   return (
     <div className="app-shell">
@@ -165,6 +151,13 @@ async function handleCancel(streamId: string): Promise<void> {
         </button>
         <button
           type="button"
+          className={`app-nav-link ${viewMode === "sender" ? "app-nav-link--active" : ""}`}
+          onClick={() => setViewMode("sender")}
+        >
+          Sender dashboard
+        </button>
+        <button
+          type="button"
           className={`app-nav-link ${viewMode === "recipient" ? "app-nav-link--active" : ""}`}
           onClick={() => setViewMode("recipient")}
         >
@@ -172,77 +165,96 @@ async function handleCancel(streamId: string): Promise<void> {
         </button>
       </nav>
 
-      {viewMode === "recipient" ? (
+      {viewMode === "sender" ? (
+        <SenderDashboard 
+          senderAddress={wallet.address} 
+          onEditStartTime={(stream) => setEditingStream(stream)}
+        />
+      ) : viewMode === "recipient" ? (
         <RecipientDashboard recipientAddress={wallet.address} />
       ) : (
         <>
-      <section className="metric-grid">
-        <article className="metric-card">
-          <span>Total Streams</span>
-          <strong>{metrics.total}</strong>
-        </article>
-        <article className="metric-card">
-          <span>Active</span>
-          <strong>{metrics.active}</strong>
-        </article>
-        <article className="metric-card">
-          <span>Completed</span>
-          <strong>{metrics.completed}</strong>
-        </article>
-        <article className="metric-card">
-          <span>Total Vested</span>
-          <strong>{metrics.vested}</strong>
-        </article>
-      </section>
+          <section className="metric-grid">
+            <article className="metric-card">
+              <span>Total Streams</span>
+              <strong>{metrics.total}</strong>
+            </article>
+            <article className="metric-card">
+              <span>Active</span>
+              <strong>{metrics.active}</strong>
+            </article>
+            <article className="metric-card">
+              <span>Completed</span>
+              <strong>{metrics.completed}</strong>
+            </article>
+            <article className="metric-card">
+              <span>Total Vested</span>
+              <strong>{metrics.vested}</strong>
+            </article>
+          </section>
 
-      <section className="chart-section">
-        <h2 className="chart-section__title">Stream Metrics Trends</h2>
-        <StreamMetricsChart data={metricsHistory} />
-      </section>
+          <section className="chart-section">
+            <h2 className="chart-section__title">Stream Metrics Trends</h2>
+            <StreamMetricsChart data={metricsHistory} />
+          </section>
 
-      {/* Global (cancel / bootstrap) errors shown as a dismissible banner */}
-      {globalError && (
-        <div className="error-banner" role="alert" aria-live="assertive">
-          <span className="error-banner__icon" aria-hidden>✕</span>
-          <span>{globalError}</span>
-          <button
-            className="error-banner__dismiss"
-            type="button"
-            aria-label="Dismiss error"
-            onClick={() => setGlobalError(null)}
-          >
-            ×
-          </button>
-        </div>
-      )}
+          {/* Global (cancel / bootstrap) errors shown as a dismissible banner */}
+          {globalError && (
+            <div className="error-banner" role="alert" aria-live="assertive">
+              <span className="error-banner__icon" aria-hidden>
+                ✕
+              </span>
+              <span>{globalError}</span>
+              <button
+                className="error-banner__dismiss"
+                type="button"
+                aria-label="Dismiss error"
+                onClick={() => setGlobalError(null)}
+              >
+                ×
+              </button>
+            </div>
+          )}
 
-      <section className="layout-grid">
-        {/* formError is passed into the form so the create-stream card can show it inline */}
-        <CreateStreamForm onCreate={handleCreate} apiError={formError} />
-        <StreamsTable
-  streams={streams}
-  filters={filters}
-  onFiltersChange={setFilters}
-  onCancel={handleCancel}
-  onEditStartTime={(stream) => setEditingStream(stream)}
-/>
-      </section>
+          <section className="layout-grid">
+            {/* formError is passed into the form so the create-stream card can show it inline */}
+            <CreateStreamForm onCreate={handleCreate} apiError={formError} />
+            <StreamsTable
+              streams={streams}
+              filters={filters}
+              onFiltersChange={setFilters}
+              onCancel={handleCancel}
+              onEditStartTime={(stream, triggerRef) =>
+                setEditingStream({ stream, triggerRef })
+              }
+            />
+          </section>
 
-      <IssueBacklog issues={issues} loading={loadingDashboard} />
+          <IssueBacklog issues={issues} loading={loadingDashboard} />
 
-      <section className="card" style={{ marginTop: '1rem' }}>
-        <h2 style={{ marginBottom: '1rem' }}>Recent Activity</h2>
-        <StreamTimeline />
-      </section>
+          <section className="card" style={{ marginTop: "1rem" }}>
+            <h2 style={{ marginBottom: "1rem" }}>Recent Activity</h2>
+            <StreamTimeline />
+          </section>
 
-      {/* Edit start-time modal — only rendered when a stream is being edited */}
-      {editingStream && (
-        <EditStartTimeModal
-          stream={editingStream}
-          onConfirm={handleUpdateStartTime}
-          onClose={() => setEditingStream(null)}
-        />
-      )}
+          {/* Edit start-time modal — only rendered when a stream is being edited */}
+          {editingStream && (
+            <EditStartTimeModal
+              stream={editingStream.stream}
+              triggerRef={editingStream.triggerRef}
+              onConfirm={handleUpdateStartTime}
+              onClose={() => setEditingStream(null)}
+            />
+          )}
+
+          {/* Stream detail drawer — URL-driven via ?streamId= */}
+          {detailStreamId && (
+            <StreamDetailDrawer
+              streamId={detailStreamId}
+              onClose={closeStream}
+              onCancel={handleCancel}
+            />
+          )}
         </>
       )}
     </div>

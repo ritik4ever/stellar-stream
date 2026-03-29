@@ -73,5 +73,10 @@ function migrate(): void {
 
     CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status ON webhook_deliveries(status);
     CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_next_retry ON webhook_deliveries(next_retry_at);
+
+    CREATE TABLE IF NOT EXISTS indexer_cursor (
+      id TEXT PRIMARY KEY,
+      last_ledger INTEGER NOT NULL
+    );
   `);
 }

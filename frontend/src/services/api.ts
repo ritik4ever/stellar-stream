@@ -28,6 +28,7 @@ export interface ListStreamsFilters {
   sender?: string;
   status?: string;
   asset?: string;
+  q?: string;
 }
 
 export async function listStreams(filters?: ListStreamsFilters): Promise<Stream[]> {
@@ -36,9 +37,16 @@ export async function listStreams(filters?: ListStreamsFilters): Promise<Stream[
   if (filters?.sender) params.set("sender", filters.sender);
   if (filters?.status) params.set("status", filters.status);
   if (filters?.asset) params.set("asset", filters.asset);
+  if (filters?.q) params.set("q", filters.q);
   const q = params.toString();
   const url = q ? `${API_BASE}/streams?${q}` : `${API_BASE}/streams`;
   const response = await fetch(url);
+  const body = await parseResponse<{ data: Stream[] }>(response);
+  return body.data;
+}
+
+export async function listRecipientStreams(accountId: string): Promise<Stream[]> {
+  const response = await fetch(`${API_BASE}/recipients/${accountId}/streams`);
   const body = await parseResponse<{ data: Stream[] }>(response);
   return body.data;
 }
@@ -136,5 +144,11 @@ export async function getStreamHistory(streamId: string): Promise<StreamEvent[]>
 export async function listAllEvents(): Promise<StreamEvent[]> {
   const response = await fetch(`${API_BASE}/events`);
   const body = await parseResponse<{ data: StreamEvent[] }>(response);
+  return body.data;
+}
+
+export async function getStream(streamId: string): Promise<Stream> {
+  const response = await fetch(`${API_BASE}/streams/${encodeURIComponent(streamId)}`);
+  const body = await parseResponse<{ data: Stream }>(response);
   return body.data;
 }
