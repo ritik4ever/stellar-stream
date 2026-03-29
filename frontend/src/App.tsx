@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CreateStreamForm } from "./components/CreateStreamForm";
 import { EditStartTimeModal } from "./components/EditStartTimeModal";
 import { IssueBacklog } from "./components/IssueBacklog";
@@ -56,6 +56,35 @@ function App() {
     triggerRef: React.RefObject<HTMLButtonElement | null>;
   } | null>(null);
   const [loadingDashboard, setLoadingDashboard] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
+
+  // Fetch initial data and react to filter changes
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      setLoadingDashboard(true);
+      try {
+        const data = await listStreams(filters);
+        if (active) {
+          setStreams(data);
+          setInitialLoading(false);
+          setLoadingDashboard(false);
+        }
+      } catch (err) {
+        if (active) {
+          setGlobalError(
+            err instanceof Error ? describeGlobalError(err.message) : "Failed to load streams."
+          );
+          setLoadingDashboard(false);
+          setInitialLoading(false);
+        }
+      }
+    }
+    load();
+    return () => {
+      active = false;
+    };
+  }, [filters]);
 
 
   const metrics = useMemo(() => {
