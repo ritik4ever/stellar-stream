@@ -9,3 +9,12 @@ frontend/.vite/
 contracts/target/
 contracts/.stellar/
 backend/data/
+
+# Generated Soroban contract bindings
+# Regenerate with: CONTRACT_ID=$(cat contracts/contract_id.txt) npm run gen:bindings
+# See docs/CONTRACT_BINDINGS.md for the full workflow.
+frontend/src/contracts/generated/*
+!frontend/src/contracts/generated/README.md
+
+# Deployed contract ID (changes per deployment, not committed)
+contracts/contract_id.txt
