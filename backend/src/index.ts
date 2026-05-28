@@ -1226,7 +1226,7 @@ async function startServer() {
     initIndexer(config.rpcUrl, config.contractId, config.networkPassphrase);
     startIndexer(config.indexerPollIntervalMs);
     startReconciliationJob(
-      Number(process.env.RECONCILIATION_INTERVAL_MS ?? 60000),
+      config.reconciliationIntervalMs,
     );
   } else {
     console.warn("CONTRACT_ID not set, event indexer will not start");

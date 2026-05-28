@@ -38,6 +38,14 @@ const indexerPollIntervalSchema = z
     message: "must be a valid number >= 5000 (minimum 5 seconds)",
   });
 
+// Reconciliation interval validation
+const reconciliationIntervalSchema = z
+  .string()
+  .transform((val: string) => parseInt(val, 10))
+  .refine((val: number) => !isNaN(val) && val >= 10000, {
+    message: "must be a valid number >= 10000 (minimum 10 seconds)",
+  });
+
 // Admin API key validation
 const adminApiKeySchema = z
   .string()
@@ -62,6 +70,7 @@ const envSchema = z.object({
   DOMAIN: z.string().optional().default("localhost"),
   SOROBAN_DISABLED: z.string().optional(),
   INDEXER_POLL_INTERVAL_MS: indexerPollIntervalSchema.optional().default(10000),
+  RECONCILIATION_INTERVAL_MS: reconciliationIntervalSchema.optional().default(60000),
 });
 
 export interface ValidatedConfig {
@@ -79,6 +88,7 @@ export interface ValidatedConfig {
   serverSigningKey: string | null;
   domain: string;
   indexerPollIntervalMs: number;
+  reconciliationIntervalMs: number;
   adminApiKey: string | null;
 }
 
@@ -242,6 +252,7 @@ export function validateEnv(): ValidatedConfig {
     serverSigningKey: env.SERVER_SIGNING_KEY || null,
     domain: env.DOMAIN,
     indexerPollIntervalMs: env.INDEXER_POLL_INTERVAL_MS,
+    reconciliationIntervalMs: env.RECONCILIATION_INTERVAL_MS,
     adminApiKey,
   };
 }
