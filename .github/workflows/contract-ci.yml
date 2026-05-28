@@ -41,6 +41,22 @@ jobs:
       - name: Check contract formatting
         run: cargo fmt --all -- --check
 
+      - name: Run cargo audit
+        run: |
+          cargo install cargo-audit --locked 2>/dev/null || true
+          cargo audit 2>/dev/null || echo "::warning::cargo audit found vulnerabilities - check audit report"
+        continue-on-error: true
+
+      - name: Upload cargo audit report
+        if: always()
+        run: cargo audit --json 2>/dev/null > cargo-audit-report.json || echo '{}' > cargo-audit-report.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cargo-audit-report
+          path: contracts/cargo-audit-report.json
+
       - name: Run contract tests
         env:
           RUSTFLAGS: "-D warnings"

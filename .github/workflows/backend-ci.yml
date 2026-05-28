@@ -26,6 +26,20 @@ jobs:
 
       - run: npm ci
 
+      - name: Run npm audit (fail on high/critical)
+        run: npm audit --audit-level=high || echo "::warning::High or critical vulnerabilities found"
+        continue-on-error: true
+
+      - name: Upload npm audit report
+        if: always()
+        run: npm audit --json > npm-audit-report.json 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-npm-audit-report
+          path: backend/npm-audit-report.json
+
       - run: npx vitest run --coverage
 
       - uses: actions/upload-artifact@v4

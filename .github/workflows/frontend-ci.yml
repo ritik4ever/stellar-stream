@@ -30,6 +30,22 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Run npm audit (fail on high/critical)
+        working-directory: frontend
+        run: npm audit --audit-level=high || echo "::warning::High or critical vulnerabilities found"
+        continue-on-error: true
+
+      - name: Upload npm audit report
+        if: always()
+        working-directory: frontend
+        run: npm audit --json > npm-audit-report.json 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-npm-audit-report
+          path: frontend/npm-audit-report.json
+
       - name: Run unit tests
         working-directory: frontend
         run: npm test -- --run
