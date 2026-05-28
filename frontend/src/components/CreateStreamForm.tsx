@@ -488,7 +488,7 @@ export function CreateStreamForm({
         <button
           className="btn-primary"
           type="submit"
-          disabled={isSubmitting || (submitAttempted && !formValid)}
+          disabled={isSubmitting || !formValid}
           aria-busy={isSubmitting}
         >
           {isSubmitting ? "Creating…" : "Create Stream"}

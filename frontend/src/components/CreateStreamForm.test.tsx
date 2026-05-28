@@ -72,16 +72,11 @@ describe('CreateStreamForm Component', () => {
     await user.type(durationInput, '0');
     await user.tab(); // trigger blur
 
-    // In CreateStreamForm, submitAttempted must be true or field must be touched for errors to show usually, 
-    // but here validateForm is called every render. 
-    // However, the button is disabled if (submitAttempted && !formValid) OR isSubmitting.
-    // Wait, the requirement says "assert inline error and submit disabled".
-    // Let's click submit first to set submitAttempted to true.
     const submitButton = screen.getByRole('button', { name: /Create Stream/i });
-    await user.click(submitButton);
 
+    // Button is already disabled because form is invalid
+    expect(submitButton).toBeDisabled();
     expect(screen.getByText(/Duration must be at least 1 minute/i)).toBeInTheDocument();
-    await waitFor(() => expect(submitButton).toBeDisabled());
   });
 
   it('shows error when total amount is 0 or negative', async () => {
@@ -93,10 +88,10 @@ describe('CreateStreamForm Component', () => {
     await user.type(amountInput, '0');
     
     const submitButton = screen.getByRole('button', { name: /Create Stream/i });
-    await user.click(submitButton);
 
+    // Button is already disabled because form is invalid
+    expect(submitButton).toBeDisabled();
     expect(screen.getByText(/greater than zero/i)).toBeInTheDocument();
-    await waitFor(() => expect(submitButton).toBeDisabled());
   });
 
   it('shows error for invalid Stellar address format', async () => {
@@ -108,10 +103,10 @@ describe('CreateStreamForm Component', () => {
     await user.type(senderInput, 'INVALID_ADDRESS');
     
     const submitButton = screen.getByRole('button', { name: /Create Stream/i });
-    await user.click(submitButton);
 
+    // Button is already disabled because sender address is invalid
+    expect(submitButton).toBeDisabled();
     expect(screen.getByText(/valid Stellar account ID/i)).toBeInTheDocument();
-    await waitFor(() => expect(submitButton).toBeDisabled());
   });
 
   it('shows loading state during submission', async () => {
