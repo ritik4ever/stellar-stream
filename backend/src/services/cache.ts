@@ -164,9 +164,9 @@ export function initCache(): CacheAdapter {
  */
 export function getCache(): CacheAdapter {
     if (!cacheInstance) {
-        throw new Error("Cache not initialized. Call initCache() first.");
+        initCache();
     }
-    return cacheInstance;
+    return cacheInstance!;
 }
 
 /**

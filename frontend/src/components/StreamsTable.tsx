@@ -1,4 +1,4 @@
-
+import { memo, useCallback, useMemo, useRef, useState, useEffect, RefObject } from "react";
 import { Stream } from "../types/stream";
 import { getExportCsvUrl, ListStreamsFilters, cancelStream } from "../services/api";
 import { CopyableAddress } from "./CopyableAddress";
@@ -12,8 +12,8 @@ interface StreamsTableProps {
   filters: ListStreamsFilters;
   onFiltersChange: (f: ListStreamsFilters) => void;
   onCancel: (streamId: string) => Promise<void>;
-  onPause: (streamId: string) => Promise<void>;
-  onResume: (streamId: string) => Promise<void>;
+  onPause?: (streamId: string) => Promise<void>;
+  onResume?: (streamId: string) => Promise<void>;
   onOpenStream?: (streamId: string) => void;
   /**
    * Called when the user clicks "Edit" for a scheduled stream.
@@ -60,6 +60,7 @@ type SortDirection = "asc" | "desc" | null;
 
 export function StreamsTable({
   streams,
+  loading,
   filters,
   onFiltersChange,
   onCancel,
@@ -81,8 +82,18 @@ export function StreamsTable({
 
   const exportUrl = useMemo(() => getExportCsvUrl(filters as Record<string, string>), [filters]);
 
-  const toggleTimeline = (streamId: string) => {
-    setExpandedStreamId((prev) => (prev === streamId ? null : streamId));
+  const handleHeaderClick = (column: SortColumn) => {
+    if (sortColumn === column) {
+      if (sortDirection === "asc") {
+        setSortDirection("desc");
+      } else if (sortDirection === "desc") {
+        setSortColumn(null);
+        setSortDirection(null);
+      }
+    } else {
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
   };
 
 
@@ -143,8 +154,13 @@ export function StreamsTable({
   }, [streams, sortColumn, sortDirection]);
 
   // Helper: determine if a stream is eligible for selection (active or scheduled)
-
-
+  const isStreamSelectable = useCallback((stream: Stream): boolean => {
+    return (
+      stream.progress.status === "active" ||
+      stream.progress.status === "paused" ||
+      stream.progress.status === "scheduled"
+    );
+  }, []);
   // Get all selectable streams on current page
   const selectableStreams = useMemo(() => streams.filter(isStreamSelectable), [streams, isStreamSelectable]);
   const selectableIds = useMemo(() => new Set(selectableStreams.map((s) => s.id)), [selectableStreams]);
@@ -204,7 +220,7 @@ export function StreamsTable({
       const streamId = idsToCancel[i];
       setBulkCancelProgress({ current: i + 1, total: idsToCancel.length });
       try {
-        await cancelStream(streamId);
+        await onCancel(streamId);
         successCount++;
       } catch (error) {
         console.error(`Failed to cancel stream ${streamId}:`, error);
@@ -216,7 +232,8 @@ export function StreamsTable({
     setIsBulkCanceling(false);
     setBulkCancelProgress({ current: 0, total: 0 });
     console.log(`Bulk cancellation complete: ${successCount} succeeded, ${failureCount} failed`);
-  }, [selectedStreamIds]);
+    onRefresh?.();
+  }, [selectedStreamIds, onCancel, onRefresh]);
 
   // Clear selections when streams change (e.g., after filter change)
   useEffect(() => {
@@ -231,14 +248,103 @@ export function StreamsTable({
   }, [streams]);
 
   return (
+    <div className="card">
+      <FilterBar filters={filters} onChange={onFiltersChange} />
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: "1rem",
+        }}
+      >
+        <h2 style={{ margin: 0 }}>Live Streams</h2>
+        <a href={exportUrl} className="btn-ghost" download>
+          Export CSV
+        </a>
+      </div>
 
-                  />
+      {!loading && sortedStreams.length === 0 ? (
+        <p className="muted">No streams match your filters.</p>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table aria-busy={loading} aria-label="Streams">
+            <thead>
+              <tr>
+                <th style={{ width: "40px" }}>
+                  {selectableStreams.length > 0 && (
+                    <input
+                      type="checkbox"
+                      checked={allSelectableSelected}
+                      onChange={handleSelectAllToggle}
+                      aria-label="Select all streams"
+                      style={{ cursor: "pointer" }}
+                      disabled={loading}
+                    />
+                  )}
                 </th>
                 <th>ID</th>
                 <th>Addresses</th>
-                <th>Amount</th>
-                <th>Progress</th>
-                <th>Status</th>
+                <th>
+                  <button
+                    type="button"
+                    className="sort-header"
+                    onClick={() => handleHeaderClick("amount")}
+                    title="Click to sort by total amount"
+                  >
+                    Amount
+                    {sortColumn === "amount" && sortDirection && (
+                      <span className="sort-icon">
+                        {sortDirection === "asc" ? " ▲" : " ▼"}
+                      </span>
+                    )}
+                  </button>
+                  <div className="header-subtext">
+                    <button
+                      type="button"
+                      className="sort-header sort-header-sub"
+                      onClick={() => handleHeaderClick("startDate")}
+                      title="Click to sort by start date"
+                    >
+                      Start Date
+                      {sortColumn === "startDate" && sortDirection && (
+                        <span className="sort-icon">
+                          {sortDirection === "asc" ? " ▲" : " ▼"}
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                </th>
+                <th>
+                  <button
+                    type="button"
+                    className="sort-header"
+                    onClick={() => handleHeaderClick("vested")}
+                    title="Click to sort by vested amount"
+                  >
+                    Progress
+                    {sortColumn === "vested" && sortDirection && (
+                      <span className="sort-icon">
+                        {sortDirection === "asc" ? " ▲" : " ▼"}
+                      </span>
+                    )}
+                  </button>
+                </th>
+                <th>
+                  <button
+                    type="button"
+                    className="sort-header"
+                    onClick={() => handleHeaderClick("status")}
+                    title="Click to sort by status"
+                  >
+                    Status
+                    {sortColumn === "status" && sortDirection && (
+                      <span className="sort-icon">
+                        {sortDirection === "asc" ? " ▲" : " ▼"}
+                      </span>
+                    )}
+                  </button>
+                </th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -263,8 +369,9 @@ export function StreamsTable({
                         isExpanded={isExpanded}
                         healthBadges={healthBadges}
                         isSelected={selectedStreamIds.has(stream.id)}
+                        isSelectable={isStreamSelectable(stream)}
+                        onToggleSelect={() => handleCheckboxToggle(stream.id)}
                         onToggleTimeline={toggleTimeline}
-                        onCheckboxToggle={handleCheckboxToggle}
                         onCancel={onCancel}
                         onPause={onPause}
                         onResume={onResume}
@@ -276,6 +383,7 @@ export function StreamsTable({
             </tbody>
           </table>
         </div>
+      )}
 
 
       {selectedStreamIds.size > 0 && (
@@ -328,16 +436,14 @@ interface StreamRowProps {
   isScheduled: boolean;
   isFinalised: boolean;
   isExpanded: boolean;
-  isSelected: boolean;
   healthBadges: ReturnType<typeof getHealthBadges>;
   isSelected: boolean;
   isSelectable: boolean;
   onToggleSelect: () => void;
   onToggleTimeline: (id: string) => void;
-  onCheckboxToggle: (id: string) => void;
   onCancel: (id: string) => Promise<void>;
-  onPause: (id: string) => Promise<void>;
-  onResume: (id: string) => Promise<void>;
+  onPause?: (id: string) => Promise<void>;
+  onResume?: (id: string) => Promise<void>;
   onEditStartTime: StreamsTableProps["onEditStartTime"];
   onOpenStream?: (streamId: string) => void;
 }
@@ -347,13 +453,11 @@ const StreamRow = memo(function StreamRow({
   isScheduled,
   isFinalised,
   isExpanded,
-  isSelected,
   healthBadges,
   isSelected,
   isSelectable,
   onToggleSelect,
   onToggleTimeline,
-  onCheckboxToggle,
   onCancel,
   onPause,
   onResume,
@@ -411,15 +515,6 @@ const StreamRow = memo(function StreamRow({
               style={{ cursor: "pointer" }}
             />
           )}
-        </td>
-        <td>
-          <input
-            type="checkbox"
-            aria-label={`Select stream ${stream.id}`}
-            checked={isSelected}
-            onChange={() => onCheckboxToggle(stream.id)}
-            disabled={isFinalised}
-          />
         </td>
         <td>
           <button
@@ -500,7 +595,7 @@ const StreamRow = memo(function StreamRow({
                 className="btn-ghost"
                 type="button"
                 aria-label={`Pause stream ${stream.id}`}
-                onClick={() => onPause(stream.id)}
+                onClick={() => onPause?.(stream.id)}
               >
                 ⏸ Pause
               </button>
@@ -510,7 +605,7 @@ const StreamRow = memo(function StreamRow({
                 className="btn-ghost"
                 type="button"
                 aria-label={`Resume stream ${stream.id}`}
-                onClick={() => onResume(stream.id)}
+                onClick={() => onResume?.(stream.id)}
               >
                 ▶ Resume
               </button>

@@ -217,6 +217,7 @@ export function validateEnv(): ValidatedConfig {
         throw new Error("Environment validation failed");
       } else {
         console.warn("   ⚠️  In development, short keys are allowed but not recommended");
+        adminApiKey = process.env.ADMIN_API_KEY;
       }
     } else {
       adminApiKey = process.env.ADMIN_API_KEY;

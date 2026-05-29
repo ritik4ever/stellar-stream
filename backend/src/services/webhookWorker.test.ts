@@ -12,7 +12,7 @@ const TEST_DB_PATH = path.join(__dirname, "..", "..", "data", "worker-test.db");
 describe("WebhookWorker", () => {
   beforeEach(() => {
     process.env.DB_PATH = TEST_DB_PATH;
-    process.env.WEBHOOK_DESTINATION_URL = "http://example.com/webhook";
+    process.env.WEBHOOK_DESTINATION_URL = "https://example.com/webhook";
     initDb();
     const db = getDb();
     db.exec("DELETE FROM stream_events");
@@ -106,6 +106,6 @@ describe("WebhookWorker", () => {
     expect(dead).toBeDefined();
     expect(dead.payload).toBe('{"foo":"bar"}');
     expect(dead.last_error).toBe("Critical Failure");
-    expect(dead.url).toBe("http://example.com/webhook");
+    expect(dead.url).toBe("https://example.com/webhook");
   });
 });

@@ -151,7 +151,7 @@ function invokeListStreamsRoute(
     throw new Error("GET /api/streams route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (req: any, res: any) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -185,7 +185,7 @@ function invokeSenderStreamsRoute(
     throw new Error("GET /api/senders/:accountId/streams route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (req: any, res: any) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -431,7 +431,7 @@ function invokeGlobalEventsRoute(
     throw new Error("GET /api/events route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (req: any, res: any) => void;
 
   let statusCode = 200;
   let jsonBody: any;

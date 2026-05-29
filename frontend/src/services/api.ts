@@ -296,7 +296,8 @@ export interface AppConfig {
 
 export async function getConfig(): Promise<AppConfig> {
   const response = await fetch(`${API_BASE}/config`);
-  return parseResponse<AppConfig>(response);
+  const body = await parseResponse<{ data: AppConfig }>(response);
+  return body.data;
 }
 
 export function clearCache() {

@@ -62,6 +62,13 @@ describe("Webhook Dead Letter Integration Tests", () => {
     it("should return dead letters with correct fields", async () => {
       const db = getDb();
       const now = Math.floor(Date.now() / 1000);
+      
+      // Insert parent stream to satisfy FK constraint
+      db.prepare(`
+        INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run("s1", "sender", "recipient", "USDC", 100, 3600, 0, 0);
+
       db.prepare(`
         INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at)
         VALUES (?, ?, ?, ?, ?, ?)
@@ -85,6 +92,16 @@ describe("Webhook Dead Letter Integration Tests", () => {
 
     it("should respect pagination (limit/offset)", async () => {
       const db = getDb();
+      
+      // Insert parent streams to satisfy FK constraint
+      const streamStmt = db.prepare(`
+        INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (let i = 1; i <= 5; i++) {
+        streamStmt.run(`s${i}`, "sender", "recipient", "USDC", 100, 3600, 0, 0);
+      }
+
       for (let i = 1; i <= 5; i++) {
         db.prepare(`
           INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at)
@@ -113,6 +130,15 @@ describe("Webhook Dead Letter Integration Tests", () => {
   describe("GET /api/webhooks/dead-letters/count", () => {
     it("should return correct total count", async () => {
       const db = getDb();
+      
+      // Insert parent streams to satisfy FK constraint
+      const streamStmt = db.prepare(`
+        INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      streamStmt.run("s1", "sender", "recipient", "USDC", 100, 3600, 0, 0);
+      streamStmt.run("s2", "sender", "recipient", "USDC", 100, 3600, 0, 0);
+
       db.prepare(`INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at) VALUES (?, ?, ?, ?, ?, ?)`).run("s1", "e", "u", "p", "err", 100);
       db.prepare(`INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at) VALUES (?, ?, ?, ?, ?, ?)`).run("s2", "e", "u", "p", "err", 100);
 

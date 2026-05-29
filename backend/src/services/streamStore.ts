@@ -376,7 +376,15 @@ export function calculateProgress(
   stream: StreamRecord,
   at = nowInSeconds(),
 ): StreamProgress {
-
+  if (stream.durationSeconds === 0) {
+    return {
+      status: "completed",
+      ratePerSecond: Infinity,
+      elapsedSeconds: 0,
+      vestedAmount: stream.totalAmount,
+      remainingAmount: 0,
+      percentComplete: 100,
+    };
   }
 
   const streamEnd = stream.startAt + stream.durationSeconds;
@@ -385,7 +393,12 @@ export function calculateProgress(
   const effectiveAt =
     stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
 
+  const effectiveEnd =
+    stream.canceledAt !== undefined
+      ? Math.min(stream.canceledAt, streamEnd + stream.pausedDuration)
+      : streamEnd + stream.pausedDuration;
 
+  const elapsed = Math.max(0, Math.min(effectiveAt, effectiveEnd) - stream.startAt - stream.pausedDuration);
   const ratio = Math.min(1, elapsed / stream.durationSeconds);
   const vestedAmount = stream.totalAmount * ratio;
 
@@ -666,6 +679,140 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
   return stream;
 }
 
+export async function pauseStream(id: string): Promise<StreamRecord> {
+  const stream = getStream(id);
+  if (!stream) {
+    const err: any = new Error("Stream not found.");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const status = computeStatus(stream, nowInSeconds());
+  if (status !== "active") {
+    const err: any = new Error("Only active streams can be paused.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const sorobanContext = getSorobanContext();
+  if (sorobanContext && rpcServer && serverKeypair) {
+    const sourceAccount = await rpcServer.getAccount(serverKeypair.publicKey());
+    const tx = sorobanContext.contract.call(
+      "pause_stream",
+      nativeToScVal(parseInt(id), { type: "u64" }),
+    );
+
+    const built = await rpcServer.prepareTransaction(
+      new TransactionBuilder(sourceAccount, {
+        fee: "1000",
+        networkPassphrase: process.env.NETWORK_PASSPHRASE || Networks.TESTNET,
+      })
+        .addOperation(tx)
+        .setTimeout(30)
+        .build(),
+    );
+
+    built.sign(serverKeypair);
+    const sendRes = await retryWithBackoff(() => rpcServer!.sendTransaction(built));
+    if (sendRes.status !== "PENDING") {
+      throw new Error(`pause tx not accepted: ${JSON.stringify(sendRes)}`);
+    }
+
+    let txResult;
+    let attempts = 0;
+    while (attempts < 10) {
+      txResult = await retryWithBackoff(() => rpcServer!.getTransaction(sendRes.hash));
+      if (txResult.status !== "NOT_FOUND") break;
+      await new Promise((r) => setTimeout(r, 1000));
+      attempts++;
+    }
+
+    if (txResult?.status !== "SUCCESS") {
+      throw new Error(`pause tx failed: ${JSON.stringify(txResult)}`);
+    }
+  }
+
+  stream.pausedAt = nowInSeconds();
+  const db = getDb();
+  db.transaction(() => {
+    upsertStream(stream);
+    recordEventWithDb(db, stream.id, "paused", stream.pausedAt!, stream.sender);
+  })();
+
+  invalidateCache(`stream:${id}`);
+  triggerWebhook("paused", stream);
+  return stream;
+}
+
+export async function resumeStream(id: string): Promise<StreamRecord> {
+  const stream = getStream(id);
+  if (!stream) {
+    const err: any = new Error("Stream not found.");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  if (stream.pausedAt === undefined) {
+    const err: any = new Error("Stream is not paused.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const sorobanContext = getSorobanContext();
+  if (sorobanContext && rpcServer && serverKeypair) {
+    const sourceAccount = await rpcServer.getAccount(serverKeypair.publicKey());
+    const tx = sorobanContext.contract.call(
+      "resume_stream",
+      nativeToScVal(parseInt(id), { type: "u64" }),
+    );
+
+    const built = await rpcServer.prepareTransaction(
+      new TransactionBuilder(sourceAccount, {
+        fee: "1000",
+        networkPassphrase: process.env.NETWORK_PASSPHRASE || Networks.TESTNET,
+      })
+        .addOperation(tx)
+        .setTimeout(30)
+        .build(),
+    );
+
+    built.sign(serverKeypair);
+    const sendRes = await retryWithBackoff(() => rpcServer!.sendTransaction(built));
+    if (sendRes.status !== "PENDING") {
+      throw new Error(`resume tx not accepted: ${JSON.stringify(sendRes)}`);
+    }
+
+    let txResult;
+    let attempts = 0;
+    while (attempts < 10) {
+      txResult = await retryWithBackoff(() => rpcServer!.getTransaction(sendRes.hash));
+      if (txResult.status !== "NOT_FOUND") break;
+      await new Promise((r) => setTimeout(r, 1000));
+      attempts++;
+    }
+
+    if (txResult?.status !== "SUCCESS") {
+      throw new Error(`resume tx failed: ${JSON.stringify(txResult)}`);
+    }
+  }
+
+  const now = nowInSeconds();
+  const elapsed = now - stream.pausedAt;
+  stream.pausedDuration = (stream.pausedDuration ?? 0) + elapsed;
+  stream.pausedAt = undefined;
+
+  const db = getDb();
+  db.transaction(() => {
+    upsertStream(stream);
+    recordEventWithDb(db, stream.id, "resumed", now, stream.sender, undefined, {
+      pausedDuration: stream.pausedDuration,
+    });
+  })();
+
+  invalidateCache(`stream:${id}`);
+  triggerWebhook("resumed", stream);
+  return stream;
+}
 
 export function refreshStreamStatuses(): number {
   const db = getDb();
@@ -676,7 +823,7 @@ export function refreshStreamStatuses(): number {
     SELECT * FROM streams 
     WHERE canceled_at IS NULL AND completed_at IS NULL AND paused_at IS NULL
       AND (start_at + duration_seconds) <= ?
-  `).all() as StreamRow[];
+  `).all(now) as StreamRow[];
 
 
   const result = db.prepare(`

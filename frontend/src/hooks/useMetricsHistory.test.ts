@@ -185,7 +185,7 @@ describe("useMetricsHistory", () => {
 
   it("shows loading state during API call", async () => {
     let resolvePromise: any;
-    const promise = new Promise(resolve => {
+    const promise = new Promise<any[]>(resolve => {
       resolvePromise = resolve;
     });
     mockFetchMetricsHistory.mockReturnValue(promise);

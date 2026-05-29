@@ -19,12 +19,6 @@ export default defineConfig({
                 maxEntries: 100,
                 maxAgeSeconds: 60 * 5, // 5 minutes
               },
-              cacheKeyWillBeUsed: async ({ request }) => {
-                // Cache by URL without timestamp to enable offline access
-                const url = new URL(request.url);
-                url.searchParams.delete('_t'); // Remove cache-busting timestamp
-                return url.toString();
-              },
             },
           },
           {

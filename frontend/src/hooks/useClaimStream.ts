@@ -50,15 +50,17 @@ export function useClaimStream(
 
   // Monotonic claim ID prevents stale async callbacks from updating state.
   const claimIdRef = useRef(0);
+  const inFlightRef = useRef(false);
 
   const claim = useCallback(
     async ({ streamId, recipientAddress, amount }: ClaimInput) => {
       // Block concurrent claims
-      if (claimState.status === "pending") return;
+      if (inFlightRef.current) return;
 
       // Early return for zero amount to prevent unnecessary API calls
       if (amount === 0) return;
 
+      inFlightRef.current = true;
       const claimId = ++claimIdRef.current;
 
       setClaimState({ streamId, status: "pending", error: null });
@@ -90,9 +92,13 @@ export function useClaimStream(
 
         setClaimState({ streamId, status: "failed", error: message });
         onFailure(streamId, message);
+      } finally {
+        if (claimIdRef.current === claimId) {
+          inFlightRef.current = false;
+        }
       }
     },
-    [claimState.status, onSuccess, onFailure],
+    [onSuccess, onFailure],
   );
 
   return {

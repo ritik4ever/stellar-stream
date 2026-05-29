@@ -71,6 +71,7 @@ import {
 import { validateEnv } from "./config/validateEnv";
 import { getMetricsHistory } from "./services/metricsHistory";
 import { initCache } from "./services/cache";
+import { register as metricsRegistry } from "./services/metrics";
 
 const STREAM_STATUSES: StreamStatus[] = [
   "scheduled",
@@ -780,6 +781,12 @@ app.post(
 
     try {
       const updated = await cancelStream(parsedId.value);
+      if (!updated) {
+        sendApiError(req, res, 404, "Stream not found.", {
+          code: "NOT_FOUND",
+        });
+        return;
+      }
       res.json({
         data: {
           ...updated,
@@ -1237,7 +1244,7 @@ app.post(
   "/api/webhooks/dead-letters/:id/requeue",
   authMiddleware,
   (req: Request, res: Response) => {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(req.params.id as string, 10);
     if (isNaN(id)) {
       sendApiError(req, res, 400, "Invalid ID format", {
         code: "VALIDATION_ERROR",

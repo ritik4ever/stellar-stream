@@ -11,7 +11,7 @@ import { StreamTimeline } from "./components/StreamTimeline";
 import { StreamsTable } from "./components/StreamsTable";
 import { WalletButton } from "./components/WalletButton";
 import { useFreighter } from "./hooks/useFreighter";
-import { useMetricsHistory } from "./hooks/useMetricsHistory";
+import { useMetricsHistory, type TimeRange } from "./hooks/useMetricsHistory";
 import { defaultStreamFilters, useStreamFilter } from "./hooks/useStreamFilter";
 import { useToast } from "./hooks/useToast";
 import { useWebSocket } from "./hooks/useWebSocket";
@@ -32,7 +32,25 @@ type ViewMode = "dashboard" | "recipient" | "sender";
 
 function App() {
   const wallet = useFreighter();
+  const { showToast } = useToast();
 
+  // ── ISSUE #159: Dark Mode Logic (LocalStorage + System Preference) ─────────────────
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem('theme');
+    if (saved) return saved;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => setTheme(prev => prev === 'light' ? 'dark' : 'light');
+  // ───────────────────────────────────────────────────────────────────────────────────
+
+  const [viewMode, setViewMode] = useState<ViewMode>("dashboard");
+  const [detailStreamId, setDetailStreamId] = useState<string | null>(null);
   const [streams, setStreams] = useState<Stream[]>([]);
   const [issues, setIssues] = useState<OpenIssue[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
@@ -42,6 +60,36 @@ function App() {
   } | null>(null);
   const [loadingDashboard, setLoadingDashboard] = useState(true);
   const [initialLoading, setInitialLoading] = useState(true);
+
+  const { filters, filteredStreams, setFilter } = useStreamFilter(streams);
+  const wsUrl = import.meta.env.VITE_WS_URL ?? "";
+  const { lastMessage } = useWebSocket<{
+    eventType?: string;
+    type?: string;
+    status?: string;
+    streamId?: string;
+  }>(wsUrl);
+
+  const apiFilters: ListStreamsFilters = useMemo(
+    () => ({
+      status: filters.status,
+      sender: filters.sender,
+      recipient: filters.recipient,
+      asset: filters.assetCode,
+    }),
+    [filters],
+  );
+
+  const tableFilters: ListStreamsFilters = useMemo(
+    () => ({
+      status: filters.status,
+      sender: filters.sender,
+      recipient: filters.recipient,
+      asset: filters.assetCode,
+      q: "",
+    }),
+    [filters],
+  );
 
 
   const metrics = useMemo(() => {
@@ -63,12 +111,8 @@ function App() {
     };
   }, [filteredStreams]);
 
-  const metricsHistory = useMetricsHistory(
-    metrics.active,
-    metrics.completed,
-    metrics.vested,
-    5000,
-  );
+  const [timeRange, setTimeRange] = useState<TimeRange>("7d");
+  const metricsHistoryState = useMetricsHistory(timeRange);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -179,7 +223,51 @@ function App() {
     }
   }
 
+  async function handlePause(streamId: string): Promise<void> {
+    try {
+      await pauseStream(streamId);
+      await refreshStreams(apiFilters);
+      showToast("Stream paused", "info");
+    } catch (err) {
+      if (err instanceof ApiError) {
+        showToast(`Pause failed (${err.statusCode}): ${err.message}`, "error");
+        return;
+      }
+      showToast(err instanceof Error ? err.message : "Failed to pause the stream.", "error");
+    }
+  }
 
+  async function handleResume(streamId: string): Promise<void> {
+    try {
+      await resumeStream(streamId);
+      await refreshStreams(apiFilters);
+      showToast("Stream resumed", "success");
+    } catch (err) {
+      if (err instanceof ApiError) {
+        showToast(`Resume failed (${err.statusCode}): ${err.message}`, "error");
+        return;
+      }
+      showToast(err instanceof Error ? err.message : "Failed to resume the stream.", "error");
+    }
+  }
+
+  async function handleUpdateStartTime(streamId: string, nextStartAt: number) {
+    try {
+      await updateStreamStartAt(streamId, nextStartAt);
+      await refreshStreams(apiFilters);
+      showToast("Start time updated", "success");
+    } catch (err) {
+      if (err instanceof ApiError) {
+        showToast(`Update failed (${err.statusCode}): ${err.message}`, "error");
+        return;
+      }
+      showToast("Failed to update stream start time", "error");
+    }
+  }
+
+  if (initialLoading && viewMode === "dashboard") {
+    return <div className="app-shell">Loading dashboard…</div>;
+  }
 
   return (
     <div className="app-shell">
@@ -267,8 +355,37 @@ function App() {
           </section>
 
           <section className="chart-section">
-            <h2 className="chart-section__title">Stream Metrics Trends</h2>
-            <StreamMetricsChart data={metricsHistory} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h2 className="chart-section__title" style={{ margin: 0 }}>Stream Metrics Trends</h2>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {(["7d", "30d", "all"] as const).map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setTimeRange(r)}
+                    style={{
+                      padding: "0.25rem 0.75rem",
+                      fontSize: "0.875rem",
+                      borderRadius: "0.375rem",
+                      border: "1px solid #4b5563",
+                      backgroundColor: timeRange === r ? "#3b82f6" : "transparent",
+                      color: "#f3f4f6",
+                      cursor: "pointer",
+                      transition: "all 0.2s"
+                    }}
+                  >
+                    {r.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {metricsHistoryState.loading ? (
+              <div style={{ height: "400px", display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af" }}>
+                Loading metrics history...
+              </div>
+            ) : (
+              <StreamMetricsChart data={metricsHistoryState.data || []} />
+            )}
           </section>
 
           <section className="layout-grid">

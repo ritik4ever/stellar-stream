@@ -164,8 +164,13 @@ async function indexEvents(): Promise<void> {
         lastProcessedLedger = cursor.last_ledger_sequence;
       } else {
         lastProcessedLedger = indexerStartLedger !== null ? indexerStartLedger : currentLedger - 1;
-        db.prepare("INSERT INTO indexer_cursor (id, last_ledger_sequence) VALUES (1, ?)").run(lastProcessedLedger);
+        db.prepare(`
+          INSERT INTO indexer_cursor (id, last_ledger_sequence)
+          VALUES (1, ?)
+          ON CONFLICT(id) DO UPDATE SET last_ledger_sequence = excluded.last_ledger_sequence
+        `).run(lastProcessedLedger);
       }
+    }
 
     if (currentLedger <= lastProcessedLedger) {
       circuitBreaker.onSuccess();
@@ -194,7 +199,11 @@ async function indexEvents(): Promise<void> {
       }
 
       lastProcessedLedger = currentLedger;
-      db.prepare("UPDATE indexer_cursor SET last_ledger_sequence = ? WHERE id = 1").run(currentLedger);
+      db.prepare(`
+        INSERT INTO indexer_cursor (id, last_ledger_sequence)
+        VALUES (1, ?)
+        ON CONFLICT(id) DO UPDATE SET last_ledger_sequence = excluded.last_ledger_sequence
+      `).run(currentLedger);
     })();
 
     ledgersScannedTotal.inc(currentLedger - startLedger);

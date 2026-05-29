@@ -585,7 +585,7 @@ describe("Backend Integration Tests", () => {
 
         // Create a stream that has already completed
         const completedStream = {
-          id: "completed-test",
+          id: "9999",
           sender: "GC7Y4M77LNYKYF4K4V5A737W3G3L3T7XQWZJZL4R64Z43W3T7XZQK2L4",
           recipient: "GB4Z3ZK3X24Z3T7XZQK2L4R64Z43W3T7XZQK2L4R64Z43W3T7XZQK2L4",
           asset_code: "USDC",
@@ -628,7 +628,7 @@ describe("Backend Integration Tests", () => {
         `).run(completedStream.id, "created", completedStream.created_at, completedStream.sender);
 
         // Call refreshStreamStatuses to mark stream as completed and record event
-        const { refreshStreamStatuses } = await import("../services/streamStore");
+        const { refreshStreamStatuses } = await import("./services/streamStore");
         refreshStreamStatuses();
 
         // Verify stream is marked as completed

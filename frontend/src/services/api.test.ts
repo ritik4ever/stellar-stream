@@ -71,10 +71,11 @@ describe("api authentication", () => {
     );
 
     await createStream({
+      sender: "G...",
       recipient: "G...",
-      amount: 100,
-      asset: "XLM",
-      duration: 3600,
+      totalAmount: 100,
+      assetCode: "XLM",
+      durationSeconds: 3600,
     });
 
     expect(fetchSpy).toHaveBeenCalledWith(

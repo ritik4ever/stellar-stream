@@ -40,14 +40,22 @@ function modifyChallengeOps(challengeXdr: string, modifications: { timestamp?: n
           if (op.name === 'timestamp') {
               if (modifications.removeTimestamp) continue;
               if (modifications.timestamp !== undefined) {
-                  builder.addOperation(Operation.manageData({ name: 'timestamp', value: modifications.timestamp.toString() }));
+                  builder.addOperation(Operation.manageData({
+                      name: 'timestamp',
+                      value: modifications.timestamp.toString(),
+                      source: serverKeypair.publicKey()
+                  }));
                   continue;
               }
           }
           if (op.name === 'nonce') {
               if (modifications.removeNonce) continue;
               if (modifications.nonce !== undefined) {
-                  builder.addOperation(Operation.manageData({ name: 'nonce', value: modifications.nonce }));
+                  builder.addOperation(Operation.manageData({
+                      name: 'nonce',
+                      value: modifications.nonce,
+                      source: serverKeypair.publicKey()
+                  }));
                   continue;
               }
           }
