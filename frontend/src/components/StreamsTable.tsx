@@ -5,6 +5,7 @@ import { CopyableAddress } from "./CopyableAddress";
 import { StreamTimeline } from "./StreamTimeline";
 import { getHealthBadges } from "../utils/streamHealthBadges";
 import { FilterBar } from "./FilterBar";
+import { EmptyState } from "./EmptyState";
 
 interface StreamsTableProps {
   streams: Stream[];
@@ -17,6 +18,14 @@ interface StreamsTableProps {
    * Receives the stream AND the button ref so the modal can return focus.
    */
   onEditStartTime: (stream: Stream, triggerRef: RefObject<HTMLButtonElement | null>) => void;
+  /**
+   * Total count of all streams (before filtering) to determine if no streams exist at all.
+   */
+  totalStreamCount?: number;
+  /**
+   * Optional callback for creating a new stream (shown when no streams exist at all).
+   */
+  onCreateStream?: () => void;
 }
 
 function statusClass(status: Stream["progress"]["status"]): string {
@@ -40,12 +49,24 @@ export function StreamsTable({
   onCancel,
   onEditStartTime,
   onOpenStream,
+  totalStreamCount = 0,
+  onCreateStream,
 }: StreamsTableProps) {
   const [expandedStreamId, setExpandedStreamId] = useState<string | null>(null);
   const exportUrl = useMemo(() => getExportCsvUrl(filters as Record<string, string>), [filters]);
 
   const toggleTimeline = (streamId: string) => {
     setExpandedStreamId((prev) => (prev === streamId ? null : streamId));
+  };
+
+  const handleClearFilters = () => {
+    onFiltersChange({
+      status: "",
+      sender: "",
+      recipient: "",
+      asset: "",
+      q: "",
+    });
   };
 
   return (
@@ -66,7 +87,12 @@ export function StreamsTable({
       </div>
 
       {streams.length === 0 ? (
-        <p className="muted">No streams match your filters.</p>
+        <EmptyState
+          filters={filters}
+          onClearFilters={handleClearFilters}
+          hasAnyStreams={totalStreamCount > 0}
+          onCreateStream={onCreateStream}
+        />
       ) : (
         <div className="table-wrap">
           <table>
