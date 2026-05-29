@@ -135,7 +135,46 @@ describe('StreamsTable Component', () => {
   it('renders a helpful message for empty streams array', () => {
     render(<StreamsTable {...defaultProps} streams={[]} />);
     
-    expect(screen.getByText(/no streams match your filters/i)).toBeInTheDocument();
+    expect(screen.getByText(/no streams yet/i)).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('renders EmptyState for filtered empty results and clears filters', () => {
+    const onFiltersChange = vi.fn();
+    render(
+      <StreamsTable
+        {...defaultProps}
+        streams={[]}
+        filters={{ status: 'active' }}
+        onFiltersChange={onFiltersChange}
+        totalStreamCount={4}
+      />
+    );
+
+    expect(screen.getByText(/no active streams/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /clear filters/i }));
+    expect(onFiltersChange).toHaveBeenCalledWith({
+      status: '',
+      sender: '',
+      recipient: '',
+      asset: '',
+      q: '',
+    });
+  });
+
+  it('shows Create Stream button when there are no streams at all', () => {
+    const onCreateStream = vi.fn();
+    render(
+      <StreamsTable
+        {...defaultProps}
+        streams={[]}
+        onCreateStream={onCreateStream}
+      />
+    );
+
+    const createButton = screen.getByRole('button', { name: /create stream/i });
+    expect(createButton).toBeInTheDocument();
+    fireEvent.click(createButton);
+    expect(onCreateStream).toHaveBeenCalled();
   });
 });

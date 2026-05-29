@@ -301,14 +301,22 @@ function App() {
           </section>
 
           <section className="layout-grid">
-            <CreateStreamForm
-              onCreate={handleCreate}
-              apiError={formError}
-              walletAddress={wallet.address}
-            />
+            <div id="create-stream-section">
+              <CreateStreamForm
+                onCreate={handleCreate}
+                apiError={formError}
+                walletAddress={wallet.address}
+              />
+            </div>
             <StreamsTable
               streams={filteredStreams}
               filters={tableFilters}
+              totalStreamCount={streams.length}
+              onCreateStream={() =>
+                document
+                  .getElementById("create-stream-section")
+                  ?.scrollIntoView({ behavior: "smooth" })
+              }
               onFiltersChange={(next) => {
                 setFilter("status", next.status ?? defaultStreamFilters.status);
                 setFilter("sender", next.sender ?? defaultStreamFilters.sender);
