@@ -10,6 +10,7 @@ import {
   validateForm,
   isFormValid,
 } from "../hooks/useFormValidation";
+import { getFeeNote } from "../utils/feeEstimation";
 
 interface CreateStreamFormProps {
   onCreate: (payload: CreateStreamPayload) => Promise<void>;
@@ -483,6 +484,16 @@ export function CreateStreamForm({
           )}
         </div>
       </div>
+
+      {/* Cost preview */}
+      <details className="cost-preview" style={{ marginTop: "1rem", fontSize: "0.875rem" }}>
+        <summary style={{ cursor: "pointer", color: "var(--color-text-secondary)" }}>
+          Estimated transaction cost
+        </summary>
+        <p style={{ marginTop: "0.5rem", color: "var(--color-text-tertiary)" }}>
+          {getFeeNote()}
+        </p>
+      </details>
 
       <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginTop: "1rem" }}>
         <button
