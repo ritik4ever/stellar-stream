@@ -376,18 +376,25 @@ export function calculateProgress(
   stream: StreamRecord,
   at = nowInSeconds(),
 ): StreamProgress {
+  const streamEnd = stream.startAt + stream.durationSeconds + stream.pausedDuration;
 
-  }
-
-  const streamEnd = stream.startAt + stream.durationSeconds;
+  // Calculate effective duration cutoff for canceled/completed streams
+  const effectiveEnd =
+    stream.canceledAt !== undefined
+      ? Math.min(stream.canceledAt, streamEnd)
+      : streamEnd;
 
   // When paused, vesting is frozen at the moment of pause.
   const effectiveAt =
     stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
 
+  // Raw elapsed time (including paused time), then subtract paused duration
+  const rawElapsed = Math.max(0, Math.min(effectiveAt, effectiveEnd) - stream.startAt);
+  const elapsed = Math.max(0, rawElapsed - stream.pausedDuration);
 
-
-  const ratio = Math.min(1, elapsed / stream.durationSeconds);
+  const ratio = stream.durationSeconds > 0
+    ? Math.min(1, elapsed / stream.durationSeconds)
+    : (stream.canceledAt !== undefined ? 0 : 1);
   const vestedAmount = stream.totalAmount * ratio;
 
   return {
