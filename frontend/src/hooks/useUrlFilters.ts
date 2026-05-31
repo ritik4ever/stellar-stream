@@ -2,9 +2,17 @@ import { useCallback, useEffect, useState } from "react";
 import type { ListStreamsFilters } from "../services/api";
 
 export type ViewMode = "dashboard" | "recipient" | "sender";
+export type SortField = "createdAt" | "amount" | "status" | "deadline";
+export type SortDir = "asc" | "desc";
+
+export interface ExtendedFilters extends ListStreamsFilters {
+  sort?: string;
+  page?: number;
+}
 
 const VALID_STATUSES = new Set(["active", "scheduled", "completed", "canceled"]);
 const VALID_VIEWS = new Set<ViewMode>(["dashboard", "recipient", "sender"]);
+const VALID_SORT_FIELDS = new Set<SortField>(["createdAt", "amount", "status", "deadline"]);
 
 function sanitizeString(raw: string | null, maxLen = 64): string {
     if (!raw) return "";
@@ -21,7 +29,25 @@ function parseStatus(raw: string | null): string {
     return VALID_STATUSES.has(v) ? v : "";
 }
 
-function readParams(): { view: ViewMode; filters: ListStreamsFilters; streamId: string | null } {
+function parseSort(raw: string | null): string {
+    const v = sanitizeString(raw).toLowerCase();
+    const parts = v.split("-");
+    if (parts.length === 2 && VALID_SORT_FIELDS.has(parts[0] as SortField) && (parts[1] === "asc" || parts[1] === "desc")) {
+        return v;
+    }
+    // Also accept plain field name (default desc)
+    if (VALID_SORT_FIELDS.has(v as SortField)) {
+        return `${v}-desc`;
+    }
+    return "";
+}
+
+function parsePage(raw: string | null): number {
+    const v = parseInt(raw ?? "", 10);
+    return Number.isFinite(v) && v >= 1 ? v : 1;
+}
+
+function readParams(): { view: ViewMode; filters: ExtendedFilters; streamId: string | null } {
     const p = new URLSearchParams(window.location.search);
     const rawStreamId = sanitizeString(p.get("streamId"), 128);
     return {
@@ -32,17 +58,21 @@ function readParams(): { view: ViewMode; filters: ListStreamsFilters; streamId: 
             asset: sanitizeString(p.get("asset")),
             sender: sanitizeString(p.get("sender")),
             recipient: sanitizeString(p.get("recipient")),
+            sort: parseSort(p.get("sort")),
+            page: parsePage(p.get("page")),
         },
     };
 }
 
-function buildSearch(view: ViewMode, filters: ListStreamsFilters, streamId: string | null): string {
+function buildSearch(view: ViewMode, filters: ExtendedFilters, streamId: string | null): string {
     const p = new URLSearchParams();
     if (view !== "dashboard") p.set("view", view);
     if (filters.status) p.set("status", filters.status);
     if (filters.asset) p.set("asset", filters.asset);
     if (filters.sender) p.set("sender", filters.sender);
     if (filters.recipient) p.set("recipient", filters.recipient);
+    if (filters.sort) p.set("sort", filters.sort);
+    if (filters.page && filters.page > 1) p.set("page", String(filters.page));
     if (streamId) p.set("streamId", streamId);
     const s = p.toString();
     return s ? `?${s}` : "";
@@ -50,10 +80,10 @@ function buildSearch(view: ViewMode, filters: ListStreamsFilters, streamId: stri
 
 export interface UrlFilterState {
     view: ViewMode;
-    filters: ListStreamsFilters;
+    filters: ExtendedFilters;
     streamId: string | null;
     setView: (v: ViewMode) => void;
-    setFilters: (f: ListStreamsFilters) => void;
+    setFilters: (f: ExtendedFilters) => void;
     openStream: (id: string) => void;
     closeStream: () => void;
 }
@@ -61,7 +91,7 @@ export interface UrlFilterState {
 export function useUrlFilters(): UrlFilterState {
     const initial = readParams();
     const [view, setViewState] = useState<ViewMode>(initial.view);
-    const [filters, setFiltersState] = useState<ListStreamsFilters>(initial.filters);
+    const [filters, setFiltersState] = useState<ExtendedFilters>(initial.filters);
     const [streamId, setStreamIdState] = useState<string | null>(initial.streamId);
 
     useEffect(() => {
@@ -89,7 +119,7 @@ export function useUrlFilters(): UrlFilterState {
         window.history.pushState(null, "", next || window.location.pathname);
     }, [filters, streamId]);
 
-    const setFilters = useCallback((f: ListStreamsFilters) => {
+    const setFilters = useCallback((f: ExtendedFilters) => {
         setFiltersState(f);
     }, []);
 
