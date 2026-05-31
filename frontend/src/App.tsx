@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useState, type RefObject } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type RefObject } from "react";
 import { CreateStreamForm } from "./components/CreateStreamForm";
 import { EditStartTimeModal } from "./components/EditStartTimeModal";
 import { IssueBacklog } from "./components/IssueBacklog";
 import { OfflineBanner } from "./components/OfflineBanner";
-import { RecipientDashboard } from "./components/RecipientDashboard";
-import { SenderDashboard } from "./components/SenderDashboard";
 import { StreamDetailDrawer } from "./components/StreamDetailDrawer";
 import { StreamMetricsChart } from "./components/StreamMetricsChart";
 import { StreamTimeline } from "./components/StreamTimeline";
 import { StreamsTable } from "./components/StreamsTable";
 import { WalletButton } from "./components/WalletButton";
+
+const RecipientDashboard = lazy(() => import("./components/RecipientDashboard"));
+const SenderDashboard = lazy(() => import("./components/SenderDashboard"));
 import { useFreighter } from "./hooks/useFreighter";
 import { useMetricsHistory } from "./hooks/useMetricsHistory";
 import { defaultStreamFilters, useStreamFilter } from "./hooks/useStreamFilter";
@@ -237,14 +238,18 @@ function App() {
       <OfflineBanner />
 
       {viewMode === "sender" ? (
-        <SenderDashboard
-          senderAddress={wallet.address}
-          onEditStartTime={(stream) =>
-            setEditingStream({ stream, triggerRef: { current: null } })
-          }
-        />
+        <Suspense fallback={<div className="card" style={{ padding: "2rem", textAlign: "center" }}>Loading sender dashboard…</div>}>
+          <SenderDashboard
+            senderAddress={wallet.address}
+            onEditStartTime={(stream) =>
+              setEditingStream({ stream, triggerRef: { current: null } })
+            }
+          />
+        </Suspense>
       ) : viewMode === "recipient" ? (
-        <RecipientDashboard recipientAddress={wallet.address} />
+        <Suspense fallback={<div className="card" style={{ padding: "2rem", textAlign: "center" }}>Loading recipient dashboard…</div>}>
+          <RecipientDashboard recipientAddress={wallet.address} />
+        </Suspense>
       ) : (
         <>
           <section className="metric-grid">
