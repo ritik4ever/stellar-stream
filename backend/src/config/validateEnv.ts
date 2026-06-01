@@ -85,7 +85,7 @@ export interface ValidatedConfig {
 export function validateEnv(): ValidatedConfig {
 
 // Safe defaults for CI/test environment
-const env = {
+const envDefaults = {
   RPC_URL: process.env.RPC_URL || "https://soroban-testnet.stellar.org",
   NETWORK_PASSPHRASE: process.env.NETWORK_PASSPHRASE || "Test SDF Network ; September 2015",
   CONTRACT_ID: process.env.CONTRACT_ID || undefined,
