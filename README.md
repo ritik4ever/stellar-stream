@@ -695,3 +695,9 @@ Contract:
 - Enhance event history with claim events from contract.
 - Add real-time event notifications via WebSockets.
 - Automate binding regeneration in CI after each contract deployment.
+
+## API Quick Start
+
+```bash
+curl https://api.example.com/streams
+```
