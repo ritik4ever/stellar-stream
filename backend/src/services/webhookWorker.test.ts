@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import axios from "axios";
 import { processWebhookQueue } from "./webhookWorker";
 import { initDb, getDb } from "./db";
+import { countDeadLetters } from "./webhook";
 import fs from "fs";
 import path from "path";
 
@@ -12,7 +13,7 @@ const TEST_DB_PATH = path.join(__dirname, "..", "..", "data", "worker-test.db");
 describe("WebhookWorker", () => {
   beforeEach(() => {
     process.env.DB_PATH = TEST_DB_PATH;
-    process.env.WEBHOOK_DESTINATION_URL = "http://example.com/webhook";
+    process.env.WEBHOOK_DESTINATION_URL = "https://example.com/webhook";
     initDb();
     const db = getDb();
     db.exec("DELETE FROM stream_events");
@@ -106,6 +107,63 @@ describe("WebhookWorker", () => {
     expect(dead).toBeDefined();
     expect(dead.payload).toBe('{"foo":"bar"}');
     expect(dead.last_error).toBe("Critical Failure");
-    expect(dead.url).toBe("http://example.com/webhook");
+    expect(dead.url).toBe("https://example.com/webhook");
+  });
+
+  it("should retry 3 times with increasing delay then move to dead letters when webhook returns 500", async () => {
+    const db = getDb();
+    const now = Math.floor(Date.now() / 1000);
+
+    // Insert a fresh delivery at attempt 0 with max_attempts = 3
+    db.prepare(`
+      INSERT INTO webhook_deliveries (stream_id, event, payload, attempt, max_attempts, status, next_retry_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("s1", "event.created", '{"test":"payload"}', 0, 3, "pending", now - 10, now - 10);
+
+    // ── Attempt 1: 0 → 1 ──
+    (axios.post as any).mockRejectedValueOnce(new Error("500 Internal Server Error"));
+    await processWebhookQueue();
+
+    let delivery = db.prepare("SELECT * FROM webhook_deliveries WHERE stream_id = ?").get("s1") as any;
+    expect(delivery.attempt).toBe(1);
+    expect(delivery.status).toBe("pending");
+    // Backoff after 1st failure: getRetryDelaySeconds(0) = 5s
+    const expectedRetry1 = Math.floor(Date.now() / 1000) + 5;
+    expect(delivery.next_retry_at).toBeGreaterThanOrEqual(expectedRetry1 - 3);
+    expect(delivery.next_retry_at).toBeLessThanOrEqual(expectedRetry1 + 3);
+
+    // Advance next_retry_at to trigger immediate retry
+    db.prepare("UPDATE webhook_deliveries SET next_retry_at = ? WHERE id = ?").run(now - 10, delivery.id);
+
+    // ── Attempt 2: 1 → 2 ──
+    (axios.post as any).mockRejectedValueOnce(new Error("500 Internal Server Error"));
+    await processWebhookQueue();
+
+    delivery = db.prepare("SELECT * FROM webhook_deliveries WHERE stream_id = ?").get("s1") as any;
+    expect(delivery.attempt).toBe(2);
+    expect(delivery.status).toBe("pending");
+    // Backoff after 2nd failure: getRetryDelaySeconds(1) = 15s
+    const expectedRetry2 = Math.floor(Date.now() / 1000) + 15;
+    expect(delivery.next_retry_at).toBeGreaterThanOrEqual(expectedRetry2 - 3);
+    expect(delivery.next_retry_at).toBeLessThanOrEqual(expectedRetry2 + 3);
+
+    // Advance next_retry_at to trigger immediate retry
+    db.prepare("UPDATE webhook_deliveries SET next_retry_at = ? WHERE id = ?").run(now - 10, delivery.id);
+
+    // ── Attempt 3: 2 → 3 (max), should land in dead letters ──
+    (axios.post as any).mockRejectedValueOnce(new Error("500 Internal Server Error"));
+    await processWebhookQueue();
+
+    // Active delivery should be removed
+    const active = db.prepare("SELECT * FROM webhook_deliveries WHERE stream_id = ?").get("s1");
+    expect(active).toBeUndefined();
+
+    // Dead letter should contain the failed delivery
+    expect(countDeadLetters()).toBe(1);
+    const dead = db.prepare("SELECT * FROM webhook_dead_letters").get() as any;
+    expect(dead).toBeDefined();
+    expect(dead.payload).toBe('{"test":"payload"}');
+    expect(dead.last_error).toBe("500 Internal Server Error");
+    expect(dead.url).toBe("https://example.com/webhook");
   });
 });

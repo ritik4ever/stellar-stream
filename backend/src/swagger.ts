@@ -379,6 +379,36 @@ export const swaggerDocument = {
           },
         },
       },
+      StreamMetrics: {
+        type: "object",
+        properties: {
+          total_streams: {
+            type: "integer",
+            description: "Total number of streams in the database.",
+            example: 42,
+          },
+          active_streams: {
+            type: "integer",
+            description: "Streams currently streaming (started, not paused, not yet ended or canceled).",
+            example: 10,
+          },
+          total_vested_usdc: {
+            type: "number",
+            description: "Total USDC vested across active and completed streams.",
+            example: 5000.5,
+          },
+          total_vested_xlm: {
+            type: "number",
+            description: "Total XLM vested across active and completed streams.",
+            example: 1200.25,
+          },
+          streams_completed_today: {
+            type: "integer",
+            description: "Number of streams completed since UTC midnight today.",
+            example: 3,
+          },
+        },
+      },
       Error: {
         type: "object",
         required: ["error", "statusCode"],
@@ -543,6 +573,48 @@ export const swaggerDocument = {
           },
           "500": {
             description: "Failed to compute stats.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/api/metrics": {
+      get: {
+        summary: "Get aggregated stream metrics",
+        description:
+          "Returns aggregated stream metrics including counts and vested amounts by asset. " +
+          "Result is cached for 60 seconds. Requires a valid admin JWT (Bearer token).",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "200": {
+            description: "Aggregated stream metrics.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      $ref: "#/components/schemas/StreamMetrics",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "401": {
+            description: "Missing, invalid, or expired JWT.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+          "500": {
+            description: "Failed to compute metrics.",
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/Error" },
@@ -1624,6 +1696,109 @@ export const swaggerDocument = {
           },
           "404": {
             description: "Stream not found.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/api/events": {
+      get: {
+        summary: "List All Events",
+        description:
+          "Retrieves all stream events across all streams with pagination and optional filtering by event type, stream ID, and timestamp.",
+        parameters: [
+          {
+            name: "page",
+            in: "query",
+            required: false,
+            description: "Page number (default: 1).",
+            schema: { type: "integer", minimum: 1 },
+          },
+          {
+            name: "pageSize",
+            in: "query",
+            required: false,
+            description: "Number of events per page (default: 20, max: 100).",
+            schema: { type: "integer", minimum: 1, maximum: 100 },
+          },
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            description: "Alias for pageSize. If both are provided, pageSize takes precedence.",
+            schema: { type: "integer", minimum: 1, maximum: 100 },
+          },
+          {
+            name: "eventType",
+            in: "query",
+            required: false,
+            description: "Filter by event type: created, claimed, canceled, paused, resumed, start_time_updated, completed.",
+            schema: {
+              type: "string",
+              enum: ["created", "claimed", "canceled", "paused", "resumed", "start_time_updated", "completed"],
+            },
+          },
+          {
+            name: "streamId",
+            in: "query",
+            required: false,
+            description: "Filter by stream ID.",
+            schema: { type: "string" },
+          },
+          {
+            name: "since",
+            in: "query",
+            required: false,
+            description: "Filter to events after this unix timestamp (in seconds).",
+            schema: { type: "integer" },
+          },
+          {
+            name: "cursor",
+            in: "query",
+            required: false,
+            description: "Cursor for cursor-based pagination (event ID).",
+            schema: { type: "integer" },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Paginated list of events.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: {
+                        $ref: "#/components/schemas/StreamEvent",
+                      },
+                    },
+                    total: {
+                      type: "integer",
+                      description: "Total number of events matching the filters.",
+                    },
+                    page: {
+                      type: "integer",
+                      description: "Current page number.",
+                    },
+                    pageSize: {
+                      type: "integer",
+                      description: "Number of events per page.",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": {
+            description: "Validation error — invalid query parameters.",
             content: {
               "application/json": {
                 schema: {

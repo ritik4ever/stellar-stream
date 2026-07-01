@@ -9,7 +9,7 @@ on:
       - 'backend/**'
 
 jobs:
-  test:
+  lint-typecheck-test:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -24,13 +24,19 @@ jobs:
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
 
-      - run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
-      - run: npx vitest run --coverage
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests with coverage
+        run: npx vitest run --coverage --coverage.thresholds.lines=80
 
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: backend/coverage/
-
-      - run: npm run build

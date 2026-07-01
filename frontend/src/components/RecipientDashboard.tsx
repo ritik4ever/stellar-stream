@@ -19,10 +19,12 @@ interface RecipientDashboardProps {
 interface ToastProps {
   message: string;
   type: "success" | "error";
+  actionHref?: string;
+  actionLabel?: string;
   onDismiss: () => void;
 }
 
-function Toast({ message, type, onDismiss }: ToastProps) {
+function Toast({ message, type, actionHref, actionLabel, onDismiss }: ToastProps) {
   return (
     <div
       className={`claim-toast claim-toast--${type}`}
@@ -33,6 +35,16 @@ function Toast({ message, type, onDismiss }: ToastProps) {
         {type === "success" ? "✓" : "✕"}
       </span>
       <span className="claim-toast__msg">{message}</span>
+      {actionHref && actionLabel && (
+        <a
+          className="claim-toast__link"
+          href={actionHref}
+          target="_blank"
+          rel="noreferrer"
+        >
+          {actionLabel}
+        </a>
+      )}
       <button
         type="button"
         className="claim-toast__dismiss"
@@ -54,6 +66,7 @@ interface ClaimButtonProps {
   claimableAmount: number;
   assetCode: string;
   claimState: ClaimState;
+  walletConnected: boolean;
   onClaim: () => void;
 }
 
@@ -62,15 +75,17 @@ function ClaimButton({
   claimableAmount,
   assetCode,
   claimState,
+  walletConnected,
   onClaim,
 }: ClaimButtonProps) {
   const isThisStream = claimState.streamId === streamId;
   const isPending = isThisStream && claimState.status === "pending";
   const isConfirmed = isThisStream && claimState.status === "confirmed";
   const isFailed = isThisStream && claimState.status === "failed";
-  const disabled = isPending || claimableAmount <= 0;
+  const disabled = !walletConnected || isPending || claimableAmount <= 0;
 
   let label = `Claim ${claimableAmount} ${assetCode}`;
+  if (!walletConnected) label = "Connect wallet";
   if (isPending) label = "Claiming…";
   if (isConfirmed) label = "Claimed ✓";
 
@@ -106,6 +121,10 @@ function statusClass(status: Stream["progress"]["status"]): string {
   return map[status] ?? "badge";
 }
 
+function getStellarExpertTxUrl(txHash: string): string {
+  return `https://stellar.expert/explorer/testnet/tx/${txHash}`;
+}
+
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
@@ -114,7 +133,12 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
   const [streams, setStreams] = useState<Stream[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  const [toast, setToast] = useState<{
+    message: string;
+    type: "success" | "error";
+    actionHref?: string;
+    actionLabel?: string;
+  } | null>(null);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [pendingBatchInputs, setPendingBatchInputs] = useState<BatchClaimInput[]>([]);
 
@@ -146,8 +170,10 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
     async (streamId: string, result: ClaimResult, _history: StreamEvent[]) => {
       await refreshStreams();
       setToast({
-        message: `Successfully claimed ${result.claimedAmount} tokens from stream ${streamId}.`,
+        message: `Successfully claimed ${result.claimedAmount} ${result.assetCode} from stream ${streamId}. Transaction hash: ${result.txHash}`,
         type: "success",
+        actionHref: getStellarExpertTxUrl(result.txHash),
+        actionLabel: "View on Stellar Expert",
       });
     },
     [refreshStreams],
@@ -157,8 +183,10 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
     async (streamId: string, result: ClaimResult, _history: StreamEvent[]) => {
       await refreshStreams();
       setToast({
-        message: `Successfully claimed ${result.claimedAmount} from stream ${streamId}.`,
+        message: `Successfully claimed ${result.claimedAmount} ${result.assetCode} from stream ${streamId}. Transaction hash: ${result.txHash}`,
         type: "success",
+        actionHref: getStellarExpertTxUrl(result.txHash),
+        actionLabel: "View on Stellar Expert",
       });
     },
     [refreshStreams],
@@ -296,6 +324,8 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
         <Toast
           message={toast.message}
           type={toast.type}
+          actionHref={toast.actionHref}
+          actionLabel={toast.actionLabel}
           onDismiss={() => setToast(null)}
         />
       )}
@@ -442,11 +472,13 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
                           claimableAmount={stream.progress.vestedAmount}
                           assetCode={stream.assetCode}
                           claimState={claimState}
+                          walletConnected={Boolean(recipientAddress)}
                           onClaim={() =>
                             claim({
                               streamId: stream.id,
                               recipientAddress: recipientAddress,
                               amount: stream.progress.vestedAmount,
+                              assetCode: stream.assetCode,
                             })
                           }
                         />

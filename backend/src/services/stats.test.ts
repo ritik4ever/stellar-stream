@@ -5,7 +5,7 @@ import { vi } from "vitest";
 let db: InstanceType<typeof Database>;
 vi.mock("./db", () => ({ getDb: () => db }));
 
-const { getStreamStats, getGlobalStats, resetStatsCache } = await import("./stats");
+const { getStreamStats, getGlobalStats, resetStatsCache } = require("./stats");
 
 function setupDb() {
   db = new Database(":memory:");
@@ -166,3 +166,4 @@ describe("getGlobalStats – localStreamCount and onChainStreamCount", () => {
     expect(stats.localStreamCount).toBe(stats.total);
   });
 });
+

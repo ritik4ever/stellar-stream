@@ -25,6 +25,7 @@ describe("calculateProgress", () => {
     startAt: 1000000,
     createdAt: 999000,
     pausedDuration: 0,
+    cliffSeconds: 0,
     ...overrides,
   });
 
@@ -368,3 +369,5 @@ describe("calculateProgress", () => {
     });
   });
 });
+
+

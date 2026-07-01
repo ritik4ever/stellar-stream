@@ -19,6 +19,8 @@ export interface ClaimInput {
   recipientAddress: string;
   /** Claimable amount shown in the UI (informational; contract enforces the real amount). */
   amount: number;
+  /** Asset label shown after the direct Soroban claim is submitted. */
+  assetCode?: string;
 }
 
 // ── Hook ───────────────────────────────────────────────────────────────────
@@ -52,7 +54,7 @@ export function useClaimStream(
   const claimIdRef = useRef(0);
 
   const claim = useCallback(
-    async ({ streamId, recipientAddress, amount }: ClaimInput) => {
+    async ({ streamId, recipientAddress, amount, assetCode }: ClaimInput) => {
       // Block concurrent claims
       if (claimState.status === "pending") return;
 
@@ -64,11 +66,9 @@ export function useClaimStream(
       setClaimState({ streamId, status: "pending", error: null });
 
       try {
-        const { result, history } = await claimStream(
-          streamId,
-          recipientAddress,
-          amount,
-        );
+        const { result, history } = assetCode
+          ? await claimStream(streamId, recipientAddress, amount, assetCode)
+          : await claimStream(streamId, recipientAddress, amount);
 
         // Guard against stale callbacks from superseded claims
         if (claimIdRef.current !== claimId) return;

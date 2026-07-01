@@ -1,0 +1,44 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    assignees:
+      - "ritik4ever"
+    labels:
+      - "dependencies"
+    groups:
+      all-dependencies:
+        patterns:
+          - "*"
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    assignees:
+      - "ritik4ever"
+    labels:
+      - "dependencies"
+    groups:
+      all-dependencies:
+        patterns:
+          - "*"
+  - package-ecosystem: "cargo"
+    directory: "/contracts"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    assignees:
+      - "ritik4ever"
+    labels:
+      - "dependencies"
+    groups:
+      all-dependencies:
+        patterns:
+          - "*"

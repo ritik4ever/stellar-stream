@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
+import { visualizer } from 'rollup-plugin-visualizer';
 
 /** Report-only first; set VITE_CSP_ENFORCE=true to send Content-Security-Policy instead. */
 const CSP_POLICY =
@@ -15,7 +16,7 @@ const securityHeaders = {
   [cspHeaderName]: CSP_POLICY,
 };
 
-export default defineConfig({
+export default defineConfig(({ command, mode }) => ({
   plugins: [
     react(),
     {
@@ -48,6 +49,11 @@ export default defineConfig({
         });
       },
     },
+    ...(mode === 'analyze' ? [visualizer({ 
+      open: process.env.CI !== 'true',
+      filename: 'dist/stats.html',
+      gzipSize: true,
+    })] : []),
     // Only enable PWA plugin when not running in CI (GitHub Actions sets CI=true).
     // Some CI environments cause workbox validation to fail; skipping the plugin
     // in CI ensures the build completes reliably. To test PWA locally, run
@@ -130,4 +136,4 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
   },
-});
+}));

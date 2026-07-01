@@ -1,7 +1,7 @@
 # ADR 0001: SQLite vs PostgreSQL for Stream Storage
 
-**Status:** Accepted  
-**Date:** 2026-05-27  
+**Status:** Accepted (Extended with PostgreSQL Support)  
+**Date:** 2026-05-27 (Updated 2026-06-30)  
 **Deciders:** Stellar Stream Team
 
 ## Context
@@ -148,6 +148,18 @@ When the application outgrows SQLite:
 - Indexes on frequently queried columns (sender, recipient, status)
 - Connection pooling via better-sqlite3
 - Redis caching layer for hot data (stream lists, stats)
+
+## PostgreSQL Support Implementation (June 2026)
+
+To scale the application for multi-instance deployments, optional support for PostgreSQL has been implemented:
+
+1. **Activation:** PostgreSQL is automatically activated when the `DATABASE_URL` environment variable is set. If not set, the application defaults to SQLite.
+2. **Synchronous Repository Adapter:** To avoid altering the existing synchronous database access pattern in the backend services, a synchronous `PostgresDatabase` wrapper class was created. It uses a background `Worker` thread to connect to PostgreSQL asynchronously via the `pg` driver, communicating query requests and results back to the main thread synchronously using a `SharedArrayBuffer` and `Atomics.wait`/`Atomics.notify`.
+3. **Dialect Compatibility Translation:**
+   - **Types:** `INTEGER` maps to `BIGINT` and `REAL` maps to `DOUBLE PRECISION` on the fly.
+   - **Primary Keys:** `INTEGER PRIMARY KEY AUTOINCREMENT` is rewritten to `SERIAL PRIMARY KEY`.
+   - **Conflict Resolution:** `INSERT OR IGNORE` clauses are translated to standard PostgreSQL `ON CONFLICT (...) DO NOTHING` clauses.
+   - **Full-Text Search:** The SQLite `fts5` virtual table indexing is bypassed on PostgreSQL, and query matches are executed using native, case-insensitive `ILIKE` clauses on the main table.
 
 ## Related Decisions
 

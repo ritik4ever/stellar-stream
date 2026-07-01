@@ -1,0 +1,5 @@
+ALTER TABLE streams ADD COLUMN paused_at INTEGER;
+ALTER TABLE streams ADD COLUMN paused_duration INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE stream_archive ADD COLUMN paused_at INTEGER;
+ALTER TABLE stream_archive ADD COLUMN paused_duration INTEGER NOT NULL DEFAULT 0;

@@ -24,6 +24,7 @@ const mockState = vi.hoisted(() => ({
 const dbMocks = vi.hoisted(() => ({
   initDb: vi.fn(),
   getDb: vi.fn(),
+  syncFtsIndex: vi.fn(),
 }));
 
 const eventHistoryMocks = vi.hoisted(() => ({
@@ -33,11 +34,21 @@ const eventHistoryMocks = vi.hoisted(() => ({
   }),
 }));
 
+const loggerMocks = vi.hoisted(() => ({
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
 vi.mock("./db", () => dbMocks);
 vi.mock("./eventHistory", () => eventHistoryMocks);
 vi.mock("./webhook", () => ({
   triggerWebhook: vi.fn(),
 }));
+vi.mock("../logger", () => loggerMocks);
 
 vi.mock("@stellar/stellar-sdk", () => {
   class MockContract {
@@ -272,7 +283,7 @@ describe("reconcileMissingStreams", () => {
     mockState.nextId = 3;
     mockState.existingStreamIds = new Set(["1"]);
 
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const errorSpy = loggerMocks.logger.error;
 
     const { initSoroban, reconcileMissingStreams } = await import("./streamStore");
 
@@ -281,11 +292,12 @@ describe("reconcileMissingStreams", () => {
 
     expect(repaired).toBe(0);
     expect(errorSpy).toHaveBeenCalledWith(
-      "[reconciliation] missing stream 2 could not be fetched from chain",
+      { streamId: 2 },
+      "missing stream could not be fetched from chain",
     );
     expect(eventHistoryMocks.recordEventWithDb).not.toHaveBeenCalled();
 
-    errorSpy.mockRestore();
+    errorSpy.mockClear();
   });
 });
 

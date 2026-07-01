@@ -420,8 +420,8 @@ describe("useClaimStream", () => {
       });
 
       expect(mockClaimStream).toHaveBeenCalledTimes(2);
-      expect(mockClaimStream).toHaveBeenNthCalledWith(1, "1", "GTEST123456789", 100);
-      expect(mockClaimStream).toHaveBeenNthCalledWith(2, "2", "GTEST123456789", 50);
+      expect(mockClaimStream).toHaveBeenNthCalledWith(1, "1", "GTEST123456789", 100, "XLM");
+      expect(mockClaimStream).toHaveBeenNthCalledWith(2, "2", "GTEST123456789", 50, "XLM");
       expect(onSuccess).toHaveBeenCalledTimes(2);
       expect(result.current.state.phase).toBe("complete");
       expect(result.current.state.successCount).toBe(2);

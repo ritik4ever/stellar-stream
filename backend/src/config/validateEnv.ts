@@ -64,12 +64,15 @@ const adminApiKeySchema = z
 const envSchema = z.object({
   PORT: portSchema.optional().default(3001),
   CONTRACT_ID: z.string().optional(),
+  STELLAR_CONTRACT_ID: z.string().optional(),
   SERVER_PRIVATE_KEY: z.string().optional(),
   RPC_URL: z.string().optional().default("https://soroban-testnet.stellar.org:443"),
+  SOROBAN_RPC_URL: z.string().optional(),
   NETWORK_PASSPHRASE: z
     .string()
     .optional()
     .default("Test SDF Network ; September 2015"),
+  STELLAR_NETWORK: z.string().optional(),
   ALLOWED_ASSETS: z.string().optional().default("USDC,XLM"),
   DB_PATH: z.string().optional().default("backend/data/streams.db"),
   WEBHOOK_DESTINATION_URL: z.string().optional(),
@@ -118,15 +121,26 @@ export function validateEnv(): ValidatedConfig {
     process.exit(1);
     throw new Error("Environment validation failed"); // Ensure execution stops in tests
   }
+  if (norm === "public" || norm === "mainnet" || norm === "public global stellar network ; october 2015") {
+    return "Public Global Stellar Network ; October 2015";
+  }
+  return network;
+}
 
-  const env = parsed.data;
+export function validateEnv(): ValidatedConfig {
+  // Support backwards compatibility: map old variables to new ones if new ones are not set
+  if (!process.env.STELLAR_CONTRACT_ID && process.env.CONTRACT_ID) {
+    process.env.STELLAR_CONTRACT_ID = process.env.CONTRACT_ID;
+  }
+  if (!process.env.SOROBAN_RPC_URL && process.env.RPC_URL) {
+    process.env.SOROBAN_RPC_URL = process.env.RPC_URL;
+  }
+  if (!process.env.STELLAR_NETWORK && process.env.NETWORK_PASSPHRASE) {
+    process.env.STELLAR_NETWORK = process.env.NETWORK_PASSPHRASE;
+  }
 
-  // Determine if Soroban is disabled
-  const sorobanDisabled = env.SOROBAN_DISABLED?.toLowerCase() === "true";
-
-  // Validate Soroban-related config
-  let contractId: string | null = null;
-  let serverPrivateKey: string | null = null;
+  const isProduction = process.env.NODE_ENV === "production";
+  const sorobanDisabled = process.env.SOROBAN_DISABLED?.toLowerCase() === "true";
 
   if (!sorobanDisabled) {
     // CONTRACT_ID and SERVER_PRIVATE_KEY are required for Soroban operations
@@ -174,8 +188,17 @@ export function validateEnv(): ValidatedConfig {
       throw new Error("Environment validation failed");
     }
 
-    contractId = env.CONTRACT_ID;
-    serverPrivateKey = env.SERVER_PRIVATE_KEY;
+    // Now validate their formats if present
+    if (process.env.STELLAR_CONTRACT_ID) {
+      const contractIdValidation = stellarAccountIdSchema.safeParse(process.env.STELLAR_CONTRACT_ID);
+      if (!contractIdValidation.success) {
+        console.error("❌ STELLAR_CONTRACT_ID validation failed:");
+        contractIdValidation.error.issues.forEach((issue: z.ZodIssue) => {
+          console.error(`   ${issue.message}`);
+        });
+        process.exit(1);
+      }
+    }
 
     logger.info("Soroban configuration validated");
   } else {
@@ -208,7 +231,8 @@ export function validateEnv(): ValidatedConfig {
   }
 
   // Parse allowed assets
-  const allowedAssets = env.ALLOWED_ASSETS.split(",")
+  const allowedAssets = (env.ALLOWED_ASSETS || "")
+    .split(",")
     .map((asset: string) => asset.trim().toUpperCase())
     .filter((asset: string) => asset.length > 0);
 
@@ -255,17 +279,17 @@ export function validateEnv(): ValidatedConfig {
   );
 
   return {
-    port: env.PORT,
+    port: env.PORT || 3001,
     sorobanEnabled: !sorobanDisabled,
-    contractId,
-    serverPrivateKey,
-    rpcUrl: env.RPC_URL,
-    networkPassphrase: env.NETWORK_PASSPHRASE,
+    contractId: process.env.STELLAR_CONTRACT_ID || null,
+    serverPrivateKey: process.env.SERVER_PRIVATE_KEY || null,
+    rpcUrl: process.env.SOROBAN_RPC_URL || env.RPC_URL || "https://soroban-testnet.stellar.org:443",
+    networkPassphrase: process.env.NETWORK_PASSPHRASE || env.NETWORK_PASSPHRASE || "Test SDF Network ; September 2015",
     allowedAssets,
-    dbPath: env.DB_PATH,
+    dbPath: env.DB_PATH || "backend/data/streams.db",
     webhookDestinationUrl: env.WEBHOOK_DESTINATION_URL || null,
     webhookSigningSecret: env.WEBHOOK_SIGNING_SECRET || null,
-    jwtSecret: env.JWT_SECRET,
+    jwtSecret: env.JWT_SECRET || "",
     serverSigningKey: env.SERVER_SIGNING_KEY || null,
     domain: env.DOMAIN,
     indexerPollIntervalMs: env.INDEXER_POLL_INTERVAL_MS,

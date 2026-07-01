@@ -46,7 +46,6 @@ export const FILTER_BUTTONS: Array<{ type: EventType; label: string }> = [
   { type: "start_time_updated", label: "Start Time Updated" },
   { type: "paused", label: "Paused" },
   { type: "resumed", label: "Resumed" },
-  { type: "cliff_reached", label: "Cliff Reached" },
 ];
 
 export function FilterBar({ activeFilters, onToggle, onClear }: FilterBarProps) {
@@ -99,7 +98,6 @@ function getEventIcon(eventType: string): string {
     case "claimed":            return "💸";
     case "canceled":           return "❌";
     case "start_time_updated": return "🕐";
-    case "cliff_reached":      return "📍";
     case "paused":             return "⏸️";
     case "resumed":            return "▶️";
     default:                   return "📋";
@@ -116,8 +114,6 @@ function formatEventTitle(eventType: string): string {
       return "Stream canceled";
     case "start_time_updated":
       return "Start time updated";
-    case "cliff_reached":
-      return "Cliff period reached";
     case "paused":
       return "Stream paused";
     case "resumed":
@@ -140,8 +136,6 @@ function getEventDescription(event: StreamEvent): string {
       return `Closed by ${actor}`;
     case "start_time_updated":
       return `New start time set by ${actor}`;
-    case "cliff_reached":
-      return "Vesting cliff period has ended. Stream is now actively vesting.";
     case "paused":
       return `Stream paused by ${actor}`;
     case "resumed":

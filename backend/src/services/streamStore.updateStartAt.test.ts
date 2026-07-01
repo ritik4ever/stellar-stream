@@ -7,6 +7,7 @@ const mockState = vi.hoisted(() => ({
 }));
 
 const dbMocks = vi.hoisted(() => ({
+  syncFtsIndex: vi.fn(),
   getDb: vi.fn(() => ({
     transaction: vi.fn((callback: () => void) => callback),
     prepare: vi.fn(() => ({
@@ -35,6 +36,18 @@ const dbMocks = vi.hoisted(() => ({
       }),
     })),
   })),
+  syncFtsIndex: vi.fn(),
+}));
+
+const cacheMocks = vi.hoisted(() => ({
+  initCache: vi.fn(),
+  getCache: vi.fn(() => ({
+    get: vi.fn(),
+    set: vi.fn(),
+    del: vi.fn(),
+    clear: vi.fn(),
+    isConnected: vi.fn(() => true),
+  })),
 }));
 
 const eventHistoryMocks = vi.hoisted(() => ({
@@ -53,8 +66,22 @@ const eventHistoryMocks = vi.hoisted(() => ({
   }),
 }));
 
+const cacheMocks = vi.hoisted(() => ({
+  initCache: vi.fn(),
+  getCache: vi.fn(() => ({
+    get: vi.fn(),
+    set: vi.fn(),
+    del: vi.fn(),
+    clear: vi.fn(),
+    isConnected: vi.fn(() => true),
+  })),
+  shutdownCache: vi.fn(),
+}));
+
+vi.mock("./cache", () => cacheMocks);
 vi.mock("./db", () => dbMocks);
 vi.mock("./eventHistory", () => eventHistoryMocks);
+vi.mock("./cache", () => cacheMocks);
 
 // Import after mocking
 import { updateStreamStartAt, nowInSeconds } from "./streamStore";
@@ -79,7 +106,7 @@ describe("updateStreamStartAt", () => {
   });
 
   describe("Successful updates", () => {
-    it("should update start time of a scheduled stream and persist changes", () => {
+    it("should update start time of a scheduled stream and persist changes", async () => {
       const streamId = "1";
       const oldStartAt = mockNow + 3600; // 1 hour from now
       const newStartAt = mockNow + 7200; // 2 hours from now
@@ -97,7 +124,7 @@ describe("updateStreamStartAt", () => {
 
       mockState.streams.set(streamId, scheduledStream);
 
-      const result = updateStreamStartAt(streamId, newStartAt);
+      const result = await updateStreamStartAt(streamId, newStartAt);
 
       // Verify the stream's startAt was updated
       expect(result.startAt).toBe(newStartAt);
@@ -118,7 +145,7 @@ describe("updateStreamStartAt", () => {
       );
     });
 
-    it("should record event with correct metadata containing old and new start times", () => {
+    it("should record event with correct metadata containing old and new start times", async () => {
       const streamId = "2";
       const oldStartAt = mockNow + 1800;
       const newStartAt = mockNow + 5400;
@@ -136,7 +163,7 @@ describe("updateStreamStartAt", () => {
 
       mockState.streams.set(streamId, scheduledStream);
 
-      updateStreamStartAt(streamId, newStartAt);
+      await updateStreamStartAt(streamId, newStartAt);
 
       // Verify event metadata contains both old and new start times
       const recordedEvent = mockState.events.find(e => e.eventType === "start_time_updated");
@@ -151,23 +178,16 @@ describe("updateStreamStartAt", () => {
   });
 
   describe("Error cases", () => {
-    it("should throw 404 error when stream does not exist", () => {
+    it("should throw 404 error when stream does not exist", async () => {
       const nonExistentStreamId = "999";
       const newStartAt = mockNow + 3600;
 
-      expect(() => {
-        updateStreamStartAt(nonExistentStreamId, newStartAt);
-      }).toThrow("Stream not found.");
-
-      // Verify the error has correct status code
-      try {
-        updateStreamStartAt(nonExistentStreamId, newStartAt);
-      } catch (error: any) {
-        expect(error.statusCode).toBe(404);
-      }
+      await expect(
+        updateStreamStartAt(nonExistentStreamId, newStartAt)
+      ).rejects.toMatchObject({ message: "Stream not found.", statusCode: 404 });
     });
 
-    it("should throw 400 error when attempting to update start time of an active stream", () => {
+    it("should throw 400 error when attempting to update start time of an active stream", async () => {
       const streamId = "3";
       const activeStream = {
         id: streamId,
@@ -182,19 +202,12 @@ describe("updateStreamStartAt", () => {
 
       mockState.streams.set(streamId, activeStream);
 
-      expect(() => {
-        updateStreamStartAt(streamId, mockNow + 3600);
-      }).toThrow("Can only update start time for scheduled streams.");
-
-      // Verify the error has correct status code
-      try {
-        updateStreamStartAt(streamId, mockNow + 3600);
-      } catch (error: any) {
-        expect(error.statusCode).toBe(400);
-      }
+      await expect(
+        updateStreamStartAt(streamId, mockNow + 3600)
+      ).rejects.toMatchObject({ message: "Can only update start time for scheduled streams.", statusCode: 400 });
     });
 
-    it("should throw 400 error when attempting to update start time of a completed stream", () => {
+    it("should throw 400 error when attempting to update start time of a completed stream", async () => {
       const streamId = "4";
       const completedStream = {
         id: streamId,
@@ -210,18 +223,12 @@ describe("updateStreamStartAt", () => {
 
       mockState.streams.set(streamId, completedStream);
 
-      expect(() => {
-        updateStreamStartAt(streamId, mockNow + 3600);
-      }).toThrow("Can only update start time for scheduled streams.");
-
-      try {
-        updateStreamStartAt(streamId, mockNow + 3600);
-      } catch (error: any) {
-        expect(error.statusCode).toBe(400);
-      }
+      await expect(
+        updateStreamStartAt(streamId, mockNow + 3600)
+      ).rejects.toMatchObject({ message: "Can only update start time for scheduled streams.", statusCode: 400 });
     });
 
-    it("should throw 400 error when attempting to update start time of a canceled stream", () => {
+    it("should throw 400 error when attempting to update start time of a canceled stream", async () => {
       const streamId = "5";
       const canceledStream = {
         id: streamId,
@@ -237,20 +244,14 @@ describe("updateStreamStartAt", () => {
 
       mockState.streams.set(streamId, canceledStream);
 
-      expect(() => {
-        updateStreamStartAt(streamId, mockNow + 3600);
-      }).toThrow("Can only update start time for scheduled streams.");
-
-      try {
-        updateStreamStartAt(streamId, mockNow + 3600);
-      } catch (error: any) {
-        expect(error.statusCode).toBe(400);
-      }
+      await expect(
+        updateStreamStartAt(streamId, mockNow + 3600)
+      ).rejects.toMatchObject({ message: "Can only update start time for scheduled streams.", statusCode: 400 });
     });
   });
 
   describe("Event history verification", () => {
-    it("should make start_time_updated event queryable via getStreamHistory", () => {
+    it("should make start_time_updated event queryable via getStreamHistory", async () => {
       const streamId = "6";
       const oldStartAt = mockNow + 2700;
       const newStartAt = mockNow + 5400;
@@ -269,7 +270,7 @@ describe("updateStreamStartAt", () => {
       mockState.streams.set(streamId, scheduledStream);
 
       // Perform the update
-      updateStreamStartAt(streamId, newStartAt);
+      await updateStreamStartAt(streamId, newStartAt);
 
       // Query the event history
       const history = getStreamHistory(streamId);
@@ -286,7 +287,7 @@ describe("updateStreamStartAt", () => {
       });
     });
 
-    it("should not record event when update fails due to validation error", () => {
+    it("should not record event when update fails due to validation error", async () => {
       const streamId = "7";
       const activeStream = {
         id: streamId,
@@ -302,9 +303,9 @@ describe("updateStreamStartAt", () => {
       mockState.streams.set(streamId, activeStream);
 
       // Attempt to update (should fail)
-      expect(() => {
-        updateStreamStartAt(streamId, mockNow + 3600);
-      }).toThrow();
+      await expect(
+        updateStreamStartAt(streamId, mockNow + 3600)
+      ).rejects.toThrow();
 
       // Verify no event was recorded
       expect(eventHistoryMocks.recordEventWithDb).not.toHaveBeenCalled();
@@ -313,7 +314,7 @@ describe("updateStreamStartAt", () => {
   });
 
   describe("Edge cases", () => {
-    it("should handle updating start time to the same value", () => {
+    it("should handle updating start time to the same value", async () => {
       const streamId = "8";
       const startAt = mockNow + 3600;
       
@@ -330,7 +331,7 @@ describe("updateStreamStartAt", () => {
 
       mockState.streams.set(streamId, scheduledStream);
 
-      const result = updateStreamStartAt(streamId, startAt);
+      const result = await updateStreamStartAt(streamId, startAt);
 
       // Should still work and record event
       expect(result.startAt).toBe(startAt);
@@ -345,7 +346,7 @@ describe("updateStreamStartAt", () => {
       );
     });
 
-    it("should handle updating start time to a past timestamp for scheduled stream", () => {
+    it("should handle updating start time to a past timestamp for scheduled stream", async () => {
       const streamId = "9";
       const oldStartAt = mockNow + 3600;
       const newStartAt = mockNow - 1800; // Past time
@@ -365,10 +366,11 @@ describe("updateStreamStartAt", () => {
 
       // This should work - the function doesn't validate against past times
       // (that validation might be at the API layer or business logic layer)
-      const result = updateStreamStartAt(streamId, newStartAt);
+      const result = await updateStreamStartAt(streamId, newStartAt);
 
       expect(result.startAt).toBe(newStartAt);
       expect(eventHistoryMocks.recordEventWithDb).toHaveBeenCalled();
     });
   });
 });
+

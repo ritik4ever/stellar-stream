@@ -283,7 +283,7 @@ export async function listOpenIssues(): Promise<OpenIssue[]> {
 export interface StreamEvent {
   id: number;
   streamId: string;
-  eventType: "created" | "claimed" | "canceled" | "start_time_updated" | "paused" | "resumed";
+  eventType: "created" | "claimed" | "canceled" | "start_time_updated" | "paused" | "resumed" | "cliff_reached";
   timestamp: number;
   actor?: string;
   amount?: number;
@@ -360,7 +360,47 @@ export async function getConfig(): Promise<AppConfig> {
   return parseResponse<AppConfig>(response);
 }
 
+/**
+ * Fetches recent events for a sender across all their streams.
+ * Aggregates events from all sender's streams and returns them sorted by timestamp (newest first).
+ * 
+ * @param senderAddress - The sender's wallet address
+ * @param limit - Maximum number of events to return (default: 10)
+ * @returns Array of StreamEvents sorted by timestamp descending
+ */
+export async function getSenderEvents(senderAddress: string, limit: number = 10): Promise<StreamEvent[]> {
+  try {
+    // First get all streams for the sender
+    const streamsResult = await listStreams({ sender: senderAddress });
+    const streams = streamsResult.data;
+
+    if (streams.length === 0) {
+      return [];
+    }
+
+    // Fetch events from each stream
+    const allEvents: StreamEvent[] = [];
+    const eventPromises = streams.map((stream) =>
+      getStreamHistory(stream.id)
+        .then((events) => allEvents.push(...events))
+        .catch(() => {
+          // Silent fail on individual stream event fetch
+        })
+    );
+
+    await Promise.all(eventPromises);
+
+    // Sort by timestamp descending (most recent first) and limit
+    return allEvents
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
 export function clearCache() {
   cache.clear();
 }
+
 

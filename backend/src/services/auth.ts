@@ -347,3 +347,42 @@ export function authMiddleware(
     }
   }
 }
+
+export function adminJwtAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    sendApiError(req, res, 401, "Missing or invalid authorization header.", {
+      code: "unauthorized",
+    });
+    return;
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const decoded = jwt.verify(token, getJwtSecret()) as any;
+    if (decoded.role !== "admin" && decoded.accountId !== "admin" && !decoded.isAdmin) {
+      sendApiError(req, res, 403, "Forbidden: Admin access required.", {
+        code: "forbidden",
+      });
+      return;
+    }
+    (req as any).user = decoded; // Attach user to request
+    next();
+  } catch (error: any) {
+    if (error.name === "TokenExpiredError") {
+      sendApiError(req, res, 401, "Authorization token has expired.", {
+        code: "token_expired",
+      });
+    } else {
+      sendApiError(req, res, 401, "Invalid authorization token.", {
+        code: "invalid_token",
+      });
+    }
+  }
+}

@@ -45,7 +45,7 @@ vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
 });
 
 // Import after all mocks are registered
-const { initIndexer, startIndexer, stopIndexer } = await import("./indexer");
+const { initIndexer, startIndexer, stopIndexer } = require("./indexer");
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -199,3 +199,4 @@ describe("indexer processEvent — StreamClaimed", () => {
     expect(claimedCalls[1][5]).toBe(claim2.value.amount);
   });
 });
+

@@ -29,6 +29,7 @@ const mockState = vi.hoisted(() => ({
 const dbMocks = vi.hoisted(() => ({
   initDb: vi.fn(),
   getDb: vi.fn(),
+  syncFtsIndex: vi.fn(),
 }));
 
 const eventHistoryMocks = vi.hoisted(() => ({
@@ -38,9 +39,19 @@ const eventHistoryMocks = vi.hoisted(() => ({
   }),
 }));
 
+const loggerMocks = vi.hoisted(() => ({
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
 vi.mock("./db", () => dbMocks);
 vi.mock("./eventHistory", () => eventHistoryMocks);
 vi.mock("./webhook", () => ({ triggerWebhook: vi.fn() }));
+vi.mock("../logger", () => loggerMocks);
 
 vi.mock("@stellar/stellar-sdk", () => {
   class MockContract {
@@ -316,7 +327,7 @@ describe("reconcileMissingStreams – sync correctness", () => {
     // Trigger timeout on all RPC calls
     mockState.simulateTimeout = true;
 
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const errorSpy = loggerMocks.logger.error;
 
     const { initSoroban, reconcileMissingStreams } = await import("./streamStore");
     await initSoroban();
@@ -327,7 +338,7 @@ describe("reconcileMissingStreams – sync correctness", () => {
     expect(errorSpy).toHaveBeenCalled();
     expect(mockState.upsertedStreams).toHaveLength(0);
 
-    errorSpy.mockRestore();
+    errorSpy.mockClear();
   });
 
   it("is idempotent — running twice does not duplicate rows or events", async () => {

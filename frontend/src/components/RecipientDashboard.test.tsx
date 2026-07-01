@@ -22,9 +22,6 @@ import { RecipientDashboard } from "./RecipientDashboard";
 // Mock soroban service so tests don't hit the network
 // ---------------------------------------------------------------------------
 
-vi.mock("../services/soroban", () => ({
-  claimStream: vi.fn(),
-}));
 vi.mock("../services/soroban", () => {
   const mockFn = vi.fn();
   return {
@@ -135,7 +132,7 @@ describe("RecipientDashboard", () => {
     expect(screen.getByText("active")).toBeInTheDocument();
   });
 
-  it("calls claim API with correct stream ID and amount when claim button is clicked", async () => {
+  it("submits claim with correct stream ID, recipient, amount, and asset when claim button is clicked", async () => {
     setupRecipientHandler([activeStream]);
     render(<RecipientDashboard recipientAddress={RECIPIENT} />);
 
@@ -147,7 +144,8 @@ describe("RecipientDashboard", () => {
       fireEvent.click(screen.getByLabelText(/claim 500 USDC from stream 1/i));
     });
 
-    expect(mockClaimOnChain).toHaveBeenCalledWith("1", RECIPIENT, 500);
+    expect(mockClaimStream).toHaveBeenCalledWith("1", RECIPIENT, 500, "USDC");
+    expect(mockClaimOnChain).toHaveBeenCalledWith("1", RECIPIENT, 500, "USDC");
   });
 
   it("claim button is disabled when vested amount is 0", async () => {
@@ -207,8 +205,14 @@ describe("RecipientDashboard", () => {
 
     await waitFor(() => {
       const toast = screen.getByRole("status");
-      expect(toast).toHaveTextContent(/successfully claimed 500 tokens from stream 1/i);
+      expect(toast).toHaveTextContent(/successfully claimed 500 USDC from stream 1/i);
+      expect(toast).toHaveTextContent(/transaction hash: txhash123/i);
     }, { timeout: 3000 });
+    expect(screen.getByRole("link", { name: /view on stellar expert/i }))
+      .toHaveAttribute(
+        "href",
+        "https://stellar.expert/explorer/testnet/tx/txhash123",
+      );
   });
 
   it("shows error toast when claim fails", async () => {
@@ -280,10 +284,10 @@ describe("RecipientDashboard", () => {
     });
 
     await waitFor(() =>
-      expect(screen.getByText(/successfully claimed 500 tokens from stream 1/i)).toBeInTheDocument(),
+      expect(screen.getByText(/successfully claimed 500 USDC from stream 1/i)).toBeInTheDocument(),
     );
 
     fireEvent.click(screen.getByLabelText("Dismiss notification"));
-    expect(screen.queryByText(/successfully claimed 500 tokens from stream 1/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/successfully claimed 500 USDC from stream 1/i)).not.toBeInTheDocument();
   });
 });

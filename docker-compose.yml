@@ -28,12 +28,13 @@ services:
       redis:
         condition: service_healthy
     restart: on-failure
+    # Health check: polls /api/health every 10s, fails after 3 missed checks (timeout 5s each)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
-      interval: 30s
-      timeout: 10s
+      interval: 10s
+      timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
 
   frontend:
     build:
@@ -43,7 +44,15 @@ services:
       - "3000:3000"
     environment:
       - VITE_API_URL=http://backend:3001/api
+    # Frontend waits for backend to pass its health check before starting
     depends_on:
       backend:
         condition: service_healthy
     restart: unless-stopped
+    # Health check: polls the served app root every 10s, fails after 3 missed checks (timeout 5s each)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

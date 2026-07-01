@@ -122,7 +122,7 @@ export function useClaimBatch(
       for (let i = 0; i < claimable.length; i++) {
         if (runIdRef.current !== runId) return;
 
-        const { streamId, amount } = claimable[i];
+        const { streamId, amount, assetCode } = claimable[i];
         setState((s) => ({
           ...s,
           progress: { current: i + 1, total: claimable.length },
@@ -133,6 +133,7 @@ export function useClaimBatch(
             streamId,
             recipientAddress,
             amount,
+            assetCode,
           );
           successCount++;
           await onSuccess(streamId, result, history);

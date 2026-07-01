@@ -18,6 +18,7 @@ import { streamHasEvent } from "./eventHistory";
 import { triggerWebhook } from "./webhook";
 import { initCache, getCache } from "./cache";
 import { resetStatsCache } from "./stats";
+import { resetStreamMetricsCache } from "./streamMetrics";
 import { logger } from "../logger";
 import { retryWithBackoff, SorobanSubmitError } from "../utils/sorobanRetry";
 
@@ -446,20 +447,24 @@ export function calculateProgress(
   stream: StreamRecord,
   at = nowInSeconds(),
 ): StreamProgress {
-  const effectiveAt = stream.canceledAt !== undefined
-    ? stream.canceledAt
-    : stream.pausedAt !== undefined
-    ? Math.min(at, stream.pausedAt)
-    : at;
+  const streamEnd = stream.startAt + stream.durationSeconds;
 
-  const elapsed = Math.max(0, Math.max(0, effectiveAt - stream.startAt) - stream.pausedDuration);
+  // When paused, vesting is frozen at the moment of pause.
+  const effectiveAt =
+    stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
+
+  const elapsed = Math.max(0, Math.min(effectiveAt - stream.startAt - stream.pausedDuration, stream.durationSeconds));
+
   const ratio = Math.min(1, elapsed / stream.durationSeconds);
+  const elapsed = Math.max(0, Math.max(0, effectiveAt - stream.startAt) - stream.pausedDuration);
+  const ratio = stream.durationSeconds <= 0 ? 1 : Math.min(1, elapsed / stream.durationSeconds);
+  const elapsedSeconds = stream.durationSeconds <= 0 ? 0 : Math.min(elapsed, stream.durationSeconds);
   const vestedAmount = stream.totalAmount * ratio;
 
   return {
     status: computeStatus(stream, at),
-    ratePerSecond: round(stream.totalAmount / stream.durationSeconds),
-    elapsedSeconds: elapsed,
+    ratePerSecond: stream.durationSeconds <= 0 ? Infinity : round(stream.totalAmount / stream.durationSeconds),
+    elapsedSeconds,
     vestedAmount: round(vestedAmount),
     remainingAmount: round(Math.max(0, stream.totalAmount - vestedAmount)),
     percentComplete: round(ratio * 100),
@@ -637,7 +642,7 @@ export async function syncStreams() {
 
     const ids = Array.from({ length: nextId - 1 }, (_, i) => i + 1);
 
-    // Concurrency-limited parallel fetch — max 5 simultaneous RPC calls.
+    // Concurrency-limited parallel fetch â€” max 5 simultaneous RPC calls.
     // Falls back to sequential per-stream if the parallel pass throws.
     const limit = pLimit(5);
     let parallelFailed = false;
@@ -862,6 +867,7 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
     startAt,
     createdAt: nowInSeconds(),
     pausedDuration: 0,
+    cliffSeconds: input.cliffSeconds ?? 0,
   };
 
   // Atomically write the stream row and the creation event.
@@ -888,8 +894,9 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
   resetStatsCache();
+  resetStreamMetricsCache();
 
-  // Webhook fires after the transaction commits — a webhook failure
+  // Webhook fires after the transaction commits â€” a webhook failure
   // must never roll back an already-persisted stream.
   triggerWebhook("created", stream);
   return stream;
@@ -1176,6 +1183,7 @@ export async function cancelStream(
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
   resetStatsCache();
+  resetStreamMetricsCache();
 
   // Atomically write the updated stream row and the cancellation event.
   const db = getDb();
@@ -1226,6 +1234,7 @@ export async function pauseStream(id: string): Promise<StreamRecord> {
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
   resetStatsCache();
+  resetStreamMetricsCache();
 
   triggerWebhook("paused", stream);
   return stream;
@@ -1265,6 +1274,7 @@ export async function resumeStream(id: string): Promise<StreamRecord> {
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
   resetStatsCache();
+  resetStreamMetricsCache();
 
   triggerWebhook("resumed", stream);
   return stream;
@@ -1314,6 +1324,7 @@ export async function updateStreamStartAt(id: string,
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
   resetStatsCache();
+  resetStreamMetricsCache();
 
   return stream;
 }

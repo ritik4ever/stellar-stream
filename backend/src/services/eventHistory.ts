@@ -155,6 +155,8 @@ export function queryEvents(
   limit: number,
   offset: number,
   cursor?: number,
+  streamId?: string,
+  since?: number,
 ): StreamEvent[] {
   const db = getDb();
   const { clause, params } = buildEventFilterClause(filters, cursor);

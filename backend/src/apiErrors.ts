@@ -10,6 +10,7 @@ export type ApiErrorResponse = {
   error: string;
   statusCode: number;
   requestId?: string;
+  correlationId?: string;
   code?: string;
   details?: ValidationIssue[];
 };
@@ -28,7 +29,8 @@ export function buildApiErrorResponse(
   return {
     error,
     statusCode,
-    requestId: req.requestId, // Automatically included from requestLogger middleware
+    requestId: req.requestId,
+    correlationId: req.correlationId,
     code: options.code,
     details: options.details,
   };

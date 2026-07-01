@@ -874,6 +874,97 @@ td {
   font-size: 0.9rem;
 }
 
+.claim-toast {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 0.9rem;
+}
+
+.claim-toast--error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.claim-toast__icon {
+  font-weight: 700;
+}
+
+.claim-toast__msg {
+  flex: 1;
+}
+
+.claim-toast__link {
+  color: inherit;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.claim-toast__dismiss {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.btn-claim {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-width: 112px;
+  min-height: 36px;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid #0f766e;
+  border-radius: 6px;
+  background: #0f766e;
+  color: #ffffff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.btn-claim:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.btn-claim--confirmed {
+  border-color: #15803d;
+  background: #15803d;
+}
+
+.btn-claim--failed {
+  border-color: #dc2626;
+  background: #dc2626;
+}
+
+.btn-claim__spinner {
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 2px solid rgba(255, 255, 255, 0.55);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: recipient-spin 0.7s linear infinite;
+}
+
+.claim-pending-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #0f766e;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
 .loading-spinner {
   width: 32px;
   height: 32px;

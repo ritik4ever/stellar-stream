@@ -32,7 +32,7 @@ describe("validateEnv", () => {
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Soroban configuration incomplete")
+        expect.stringContaining("STELLAR_CONTRACT_ID is required in production")
       );
     });
 
@@ -47,7 +47,7 @@ describe("validateEnv", () => {
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Soroban configuration incomplete")
+        expect.stringContaining("SERVER_PRIVATE_KEY is required in production")
       );
     });
 
@@ -63,7 +63,7 @@ describe("validateEnv", () => {
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("CONTRACT_ID validation failed")
+        expect.stringContaining("STELLAR_CONTRACT_ID validation failed")
       );
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining("must start with C (contract)")
@@ -498,7 +498,6 @@ describe("validateEnv", () => {
       );
     });
   });
-});
 
 describe("ADMIN_API_KEY validation", () => {
   it("should accept ADMIN_API_KEY with 32+ characters", () => {
@@ -597,4 +596,124 @@ describe("ADMIN_API_KEY validation", () => {
     );
     expect(warnCalls).toHaveLength(0);
   });
+
+  describe("Acceptance Criteria: Startup validation for SOROBAN_RPC_URL, STELLAR_CONTRACT_ID, and STELLAR_NETWORK", () => {
+    describe("in production mode", () => {
+      beforeEach(() => {
+        process.env.NODE_ENV = "production";
+      });
+
+      it("should exit with code 1 when SOROBAN_RPC_URL is missing", () => {
+        process.env.STELLAR_CONTRACT_ID = "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+        process.env.STELLAR_NETWORK = "testnet";
+        process.env.SERVER_PRIVATE_KEY = "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+        
+        validateEnv();
+        
+        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("SOROBAN_RPC_URL is required in production")
+        );
+      });
+
+      it("should exit with code 1 when STELLAR_CONTRACT_ID is missing", () => {
+        process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org:443";
+        process.env.STELLAR_NETWORK = "testnet";
+        process.env.SERVER_PRIVATE_KEY = "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+
+        validateEnv();
+
+        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("STELLAR_CONTRACT_ID is required in production")
+        );
+      });
+
+      it("should exit with code 1 when STELLAR_NETWORK is missing", () => {
+        process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org:443";
+        process.env.STELLAR_CONTRACT_ID = "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+        process.env.SERVER_PRIVATE_KEY = "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+
+        validateEnv();
+
+        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("STELLAR_NETWORK is required in production")
+        );
+      });
+
+      it("should exit with code 1 when SERVER_PRIVATE_KEY is missing", () => {
+        process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org:443";
+        process.env.STELLAR_CONTRACT_ID = "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+        process.env.STELLAR_NETWORK = "testnet";
+
+        validateEnv();
+
+        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("SERVER_PRIVATE_KEY is required in production")
+        );
+      });
+    });
+
+    describe("in development mode", () => {
+      beforeEach(() => {
+        process.env.NODE_ENV = "development";
+      });
+
+      it("should log warning and use testnet default when SOROBAN_RPC_URL is missing", () => {
+        process.env.STELLAR_CONTRACT_ID = "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+        process.env.STELLAR_NETWORK = "testnet";
+        process.env.SERVER_PRIVATE_KEY = "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+
+        const config = validateEnv();
+
+        expect(exitSpy).not.toHaveBeenCalled();
+        expect(consoleWarnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("SOROBAN_RPC_URL is missing in development")
+        );
+        expect(config.rpcUrl).toBe("https://soroban-testnet.stellar.org:443");
+      });
+
+      it("should log warning and use testnet default when STELLAR_CONTRACT_ID is missing", () => {
+        process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org:443";
+        process.env.STELLAR_NETWORK = "testnet";
+        process.env.SERVER_PRIVATE_KEY = "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+
+        const config = validateEnv();
+
+        expect(exitSpy).not.toHaveBeenCalled();
+        expect(consoleWarnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("STELLAR_CONTRACT_ID is missing in development")
+        );
+        expect(config.contractId).toBe("CCJW2RLIN4MQQ4DAJMMR3F5QPDA6QYTKXJMEVI3XOTDBTBCLBB553J74");
+      });
+
+      it("should log warning and use testnet default when STELLAR_NETWORK is missing", () => {
+        process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org:443";
+        process.env.STELLAR_CONTRACT_ID = "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+        process.env.SERVER_PRIVATE_KEY = "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+
+        const config = validateEnv();
+
+        expect(exitSpy).not.toHaveBeenCalled();
+        expect(consoleWarnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("STELLAR_NETWORK is missing in development")
+        );
+        expect(config.networkPassphrase).toBe("Test SDF Network ; September 2015");
+      });
+
+      it("should map STELLAR_NETWORK public to public passphrase", () => {
+        process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org:443";
+        process.env.STELLAR_CONTRACT_ID = "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+        process.env.STELLAR_NETWORK = "public";
+        process.env.SERVER_PRIVATE_KEY = "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+
+        const config = validateEnv();
+
+        expect(config.networkPassphrase).toBe("Public Global Stellar Network ; October 2015");
+      });
+    });
+  });
+});
 });

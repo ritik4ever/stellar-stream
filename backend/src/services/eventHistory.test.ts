@@ -102,7 +102,7 @@ describe("eventHistory", () => {
 
       expect(countStreamEvents("stream-1")).toBe(2);
 
-      const history = getStreamHistory("stream-1");
+      const history = getStreamHistory("stream-1", 20, 0, "asc");
       expect(history).toHaveLength(2);
       expect(history.map((e) => e.eventType)).toEqual(["created", "claimed"]);
     });
@@ -149,7 +149,7 @@ describe("eventHistory", () => {
       recordEvent("stream-4", "start_time_updated", 2000);
       recordEvent("stream-4", "canceled", 4000);
 
-      const history = getStreamHistory("stream-4");
+      const history = getStreamHistory("stream-4", 20, 0, "asc");
 
       expect(history.map((e) => e.timestamp)).toEqual([1000, 2000, 3000, 4000]);
       expect(history.map((e) => e.eventType)).toEqual([
@@ -167,7 +167,7 @@ describe("eventHistory", () => {
       recordEvent("stream-5", "claimed", 1000, "second");
       recordEvent("stream-5", "canceled", 1000, "third");
 
-      const history = getStreamHistory("stream-5");
+      const history = getStreamHistory("stream-5", 20, 0, "asc");
 
       expect(history.map((e) => e.actor)).toEqual(["first", "second", "third"]);
     });
@@ -179,8 +179,8 @@ describe("eventHistory", () => {
       recordEvent("stream-B", "created", 500);
       recordEvent("stream-A", "claimed", 2000);
 
-      const historyA = getStreamHistory("stream-A");
-      const historyB = getStreamHistory("stream-B");
+      const historyA = getStreamHistory("stream-A", 20, 0, "asc");
+      const historyB = getStreamHistory("stream-B", 20, 0, "asc");
 
       expect(historyA).toHaveLength(2);
       expect(historyA.map((e) => e.timestamp)).toEqual([1000, 2000]);

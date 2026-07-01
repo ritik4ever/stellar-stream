@@ -1,5 +1,7 @@
-import { describe, it, expect } from "vitest";
-import { computeWebhookSignature, getWebhookHeaders } from "./webhookSignature";
+import { readFileSync } from "fs";
+import path from "path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { computeWebhookSignature, getWebhookHeaders, verifyWebhookSignature } from "./webhookSignature";
 
 /**
  * SAMPLE VERIFICATION SNIPPET FOR WEBHOOK RECEIVERS:
@@ -23,6 +25,10 @@ import { computeWebhookSignature, getWebhookHeaders } from "./webhookSignature";
  */
 
 describe("Webhook Signature Verification", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   const secret = "test-signing-secret-1234567890";
   const payload = JSON.stringify({
     event: "stream.created",
@@ -52,6 +58,42 @@ describe("Webhook Signature Verification", () => {
     const signature2 = computeWebhookSignature(payload, "different-secret");
     
     expect(signature1).not.toBe(signature2);
+  });
+
+  it("should reject a tampered payload body", () => {
+    const signatureHeader = `sha256=${computeWebhookSignature(payload, secret)}`;
+    const tamperedPayload = payload.replace("100", "1000");
+
+    expect(verifyWebhookSignature(tamperedPayload, signatureHeader, secret)).toBe(false);
+  });
+
+  it("should reject a signature generated with a different secret", () => {
+    const signatureHeader = `sha256=${computeWebhookSignature(payload, secret)}`;
+
+    expect(verifyWebhookSignature(payload, signatureHeader, "different-secret")).toBe(false);
+  });
+
+  it("should reject a truncated signature without throwing", () => {
+    const truncatedSignature = computeWebhookSignature(payload, secret).slice(0, 32);
+    const signatureHeader = `sha256=${truncatedSignature}`;
+
+    expect(() => verifyWebhookSignature(payload, signatureHeader, secret)).not.toThrow();
+    expect(verifyWebhookSignature(payload, signatureHeader, secret)).toBe(false);
+  });
+
+  it("should reject empty payloads", () => {
+    const signatureHeader = `sha256=${computeWebhookSignature(payload, secret)}`;
+
+    expect(verifyWebhookSignature("", signatureHeader, secret)).toBe(false);
+    expect(verifyWebhookSignature(Buffer.from(""), signatureHeader, secret)).toBe(false);
+  });
+
+  it("should use timingSafeEqual for the final comparison", () => {
+    const implementationPath = path.resolve(__dirname, "webhookSignature.ts");
+    const source = readFileSync(implementationPath, "utf8");
+
+    expect(source).toContain("timingSafeEqual(");
+    expect(source).toContain("return timingSafeEqual(providedSignature, expectedSignatureBuffer);");
   });
 
   describe("getWebhookHeaders", () => {

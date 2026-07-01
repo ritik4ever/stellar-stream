@@ -15,5 +15,18 @@ export default defineConfig({
         inline: ["msw", "@mswjs/interceptors"],
       },
     },
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json", "html", "lcov"],
+      include: ["src/**/*.ts", "src/**/*.tsx"],
+      exclude: [
+        "src/**/*.test.*",
+        "src/**/*.d.ts",
+        "src/vite-env.d.ts",
+        "src/node-verify.js",
+        "src/main.tsx",
+        "src/server.ts",
+      ],
+    },
   },
 });
