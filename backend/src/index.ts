@@ -17,12 +17,12 @@ import {
 } from "./apiErrors";
 import { swaggerDocument } from "./swagger";
 import {
-  countAllEvents,
-  getAllEvents,
-  getGlobalEvents,
+  queryEvents,
+  countEvents,
   getStreamHistory,
   countStreamEvents,
   getStreamEventSummary,
+  type EventFilters,
 } from "./services/eventHistory";
 import { fetchOpenIssues } from "./services/openIssues";
 import {
@@ -591,20 +591,21 @@ app.get("/api/events", readLimiter, (req: Request, res: Response) => {
   const hasPage = req.query.page !== undefined;
   const hasLimit = req.query.limit !== undefined;
 
-  const eventType = query.eventType as Parameters<typeof getGlobalEvents>[2];
-  const total = countAllEvents(eventType);
+  const filters: EventFilters = {
+    eventType: query.eventType as EventFilters["eventType"],
+    streamId: query.streamId,
+    actor: query.actor,
+    from: query.from,
+    to: query.to,
+  };
+  const total = countEvents(filters);
 
   const page = query.page ?? PAGINATION_DEFAULT_PAGE;
   const limit =
     !hasPage && !hasLimit ? total : (query.limit ?? PAGINATION_DEFAULT_LIMIT);
 
   const offset = (page - 1) * limit;
-  const data = getGlobalEvents(
-    limit === 0 ? 0 : limit,
-    offset,
-    eventType,
-    query.cursor,
-  );
+  const data = queryEvents(filters, limit === 0 ? 0 : limit, offset, query.cursor);
 
   res.json({ data, total, page, limit });
 });

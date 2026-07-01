@@ -142,32 +142,71 @@ export const webhookRegistrationSchema = z.object({
     .optional(),
 });
 
-export const listEventsQuerySchema = z.object({
-  eventType: z
-    .string()
-    .optional()
-    .refine(
-      (value) => value === undefined || (VALID_EVENT_TYPES as readonly string[]).includes(value),
-      {
-        message: `eventType must be one of: ${VALID_EVENT_TYPES.join(", ")}`,
-      },
-    ),
-  page: z
-    .coerce.number()
-    .int("page must be an integer")
-    .min(1, "page must be greater than or equal to 1")
-    .optional(),
-  limit: z
-    .coerce.number()
-    .int("limit must be an integer")
-    .min(1, "limit must be greater than or equal to 1")
-    .max(100, "limit must be less than or equal to 100")
-    .optional(),
-  cursor: z
-    .coerce.number()
-    .int("cursor must be an integer")
-    .optional(),
-});
+/**
+ * Accepts a date-range bound as either a UNIX timestamp in seconds
+ * (e.g. "1700000000") or an ISO-8601 date/datetime (e.g. "2026-07-01"),
+ * normalising to UNIX seconds to match `stream_events.timestamp`.
+ */
+export const eventDateBoundSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .transform((value, ctx) => {
+    if (/^\d+$/.test(value)) {
+      return Number(value);
+    }
+    const ms = Date.parse(value);
+    if (Number.isNaN(ms)) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "must be a UNIX timestamp in seconds or an ISO-8601 date (e.g. 2026-07-01).",
+      });
+      return z.NEVER;
+    }
+    return Math.floor(ms / 1000);
+  });
+
+export const listEventsQuerySchema = z
+  .object({
+    eventType: z
+      .string()
+      .optional()
+      .refine(
+        (value) => value === undefined || (VALID_EVENT_TYPES as readonly string[]).includes(value),
+        {
+          message: `eventType must be one of: ${VALID_EVENT_TYPES.join(", ")}`,
+        },
+      ),
+    streamId: streamIdSchema.optional(),
+    actor: stellarAccountIdSchema.optional(),
+    from: eventDateBoundSchema.optional(),
+    to: eventDateBoundSchema.optional(),
+    page: z
+      .coerce.number()
+      .int("page must be an integer")
+      .min(1, "page must be greater than or equal to 1")
+      .optional(),
+    limit: z
+      .coerce.number()
+      .int("limit must be an integer")
+      .min(1, "limit must be greater than or equal to 1")
+      .max(100, "limit must be less than or equal to 100")
+      .optional(),
+    cursor: z
+      .coerce.number()
+      .int("cursor must be an integer")
+      .optional(),
+  })
+  .superRefine((query, ctx) => {
+    if (query.from !== undefined && query.to !== undefined && query.from > query.to) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["from"],
+        message: "from must be earlier than or equal to to.",
+      });
+    }
+  });
 
 export const recipientAccountIdSchema = z.object({
   accountId: stellarAccountIdSchema,

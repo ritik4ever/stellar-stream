@@ -20,12 +20,15 @@ const streamStoreMocks = vi.hoisted(() => ({
   listStreamsBySender: vi.fn(),
   syncStreams: vi.fn(),
   updateStreamStartAt: vi.fn(),
+  nowInSeconds: vi.fn(() => Math.floor(Date.now() / 1000)),
 }));
 
 const eventHistoryMocks = vi.hoisted(() => ({
   getStreamHistory: vi.fn(),
   getAllEvents: vi.fn(),
   getGlobalEvents: vi.fn(),
+  queryEvents: vi.fn(),
+  countEvents: vi.fn(),
   countAllEvents: vi.fn(),
   countStreamEvents: vi.fn(),
   recordEvent: vi.fn(),
@@ -163,7 +166,7 @@ function invokeListStreamsRoute(
     throw new Error("GET /api/streams route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (req: any, res: any) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -176,6 +179,9 @@ function invokeListStreamsRoute(
     },
     json(payload: any) {
       jsonBody = payload;
+      return this;
+    },
+    set(name: string, value: string) {
       return this;
     },
   };
@@ -197,7 +203,7 @@ function invokeSenderStreamsRoute(
     throw new Error("GET /api/senders/:accountId/streams route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (req: any, res: any) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -210,6 +216,9 @@ function invokeSenderStreamsRoute(
     },
     json(payload: any) {
       jsonBody = payload;
+      return this;
+    },
+    set(name: string, value: string) {
       return this;
     },
   };
@@ -231,6 +240,8 @@ beforeEach(() => {
   streamStoreMocks.listStreamsBySender.mockImplementation((sender: string) => streams.filter(s => s.sender === sender));
 
   eventHistoryMocks.getGlobalEvents.mockReset();
+  eventHistoryMocks.queryEvents.mockReset();
+  eventHistoryMocks.countEvents.mockReset();
   eventHistoryMocks.countAllEvents.mockReset();
   eventHistoryMocks.countStreamEvents.mockReset();
   eventHistoryMocks.getStreamHistory.mockReset();
@@ -599,7 +610,7 @@ function invokeGlobalEventsRoute(
     throw new Error("GET /api/events route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (req: any, res: any) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -608,6 +619,7 @@ function invokeGlobalEventsRoute(
   const res = {
     status(code: number) { statusCode = code; return this; },
     json(payload: any) { jsonBody = payload; return this; },
+    set(name: string, value: string) { return this; },
   };
 
   handler(req, res);
@@ -616,8 +628,8 @@ function invokeGlobalEventsRoute(
 
 describe("GET /api/events", () => {
   beforeEach(() => {
-    eventHistoryMocks.countAllEvents.mockReturnValue(sampleEvents.length);
-    eventHistoryMocks.getGlobalEvents.mockReturnValue(sampleEvents);
+    eventHistoryMocks.countEvents.mockReturnValue(sampleEvents.length);
+    eventHistoryMocks.queryEvents.mockReturnValue(sampleEvents);
   });
 
   it("returns all events and correct metadata in legacy mode", () => {
@@ -631,22 +643,90 @@ describe("GET /api/events", () => {
     expect(body.data[0].streamId).toBe("stream-1");
   });
 
-  it("filters by eventType – passes it to getGlobalEvents and countAllEvents", () => {
+  it("filters by eventType – passes it to queryEvents and countEvents", () => {
     const createdEvents = sampleEvents.filter((e) => e.eventType === "created");
-    eventHistoryMocks.countAllEvents.mockReturnValue(createdEvents.length);
-    eventHistoryMocks.getGlobalEvents.mockReturnValue(createdEvents);
+    eventHistoryMocks.countEvents.mockReturnValue(createdEvents.length);
+    eventHistoryMocks.queryEvents.mockReturnValue(createdEvents);
 
     const { status, body } = invokeGlobalEventsRoute({ eventType: "created" });
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
-    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith("created");
+    expect(eventHistoryMocks.countEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: "created" }),
+    );
+    expect(eventHistoryMocks.queryEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: "created" }),
+      expect.any(Number),
+      expect.any(Number),
+      undefined,
+    );
+  });
 
+  it("filters by streamId – passes it through to the query", () => {
+    eventHistoryMocks.queryEvents.mockReturnValue(
+      sampleEvents.filter((e) => e.streamId === "stream-1"),
+    );
+
+    const { status } = invokeGlobalEventsRoute({ streamId: "1" });
+
+    expect(status).toBe(200);
+    expect(eventHistoryMocks.countEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ streamId: "1" }),
+    );
+  });
+
+  it("filters by actor – passes it through to the query", () => {
+    const { status } = invokeGlobalEventsRoute({ actor: SENDER_A });
+
+    expect(status).toBe(200);
+    expect(eventHistoryMocks.queryEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: SENDER_A }),
+      expect.any(Number),
+      expect.any(Number),
+      undefined,
+    );
+  });
+
+  it("filters by a from/to date range (ISO dates normalised to unix seconds)", () => {
+    const { status } = invokeGlobalEventsRoute({
+      from: "2026-01-01",
+      to: "2026-12-31",
+    });
+
+    expect(status).toBe(200);
+    const filters = eventHistoryMocks.queryEvents.mock.calls[0][0];
+    expect(filters.from).toBe(Math.floor(Date.parse("2026-01-01") / 1000));
+    expect(filters.to).toBe(Math.floor(Date.parse("2026-12-31") / 1000));
+  });
+
+  it("accepts a numeric unix-seconds from bound", () => {
+    const { status } = invokeGlobalEventsRoute({ from: "1700000000" });
+
+    expect(status).toBe(200);
+    expect(eventHistoryMocks.queryEvents.mock.calls[0][0].from).toBe(1700000000);
+  });
+
+  it("returns 400 when from is after to", () => {
+    const { status, body } = invokeGlobalEventsRoute({
+      from: "2026-12-31",
+      to: "2026-01-01",
+    });
+
+    expect(status).toBe(400);
+    expect(body.error).toContain("from must be earlier than or equal to to");
+  });
+
+  it("returns 400 for an invalid actor", () => {
+    const { status, body } = invokeGlobalEventsRoute({ actor: "not-an-address" });
+
+    expect(status).toBe(400);
+    expect(body.statusCode).toBe(400);
   });
 
   it("paginates correctly when page and limit are provided", () => {
     const page2Events = sampleEvents.slice(2);
-    eventHistoryMocks.getGlobalEvents.mockReturnValue(page2Events);
+    eventHistoryMocks.queryEvents.mockReturnValue(page2Events);
 
     const { status, body } = invokeGlobalEventsRoute({ page: "2", limit: "2" });
 
@@ -656,11 +736,16 @@ describe("GET /api/events", () => {
     expect(body.total).toBe(4);
     expect(body.data).toHaveLength(2);
     // offset should be (2-1)*2 = 2
-
+    expect(eventHistoryMocks.queryEvents).toHaveBeenCalledWith(
+      expect.any(Object),
+      2,
+      2,
+      undefined,
+    );
   });
 
   it("uses default limit of 20 when only page is provided", () => {
-    eventHistoryMocks.getGlobalEvents.mockReturnValue([]);
+    eventHistoryMocks.queryEvents.mockReturnValue([]);
 
     const { status, body } = invokeGlobalEventsRoute({ page: "2" });
 
@@ -670,7 +755,7 @@ describe("GET /api/events", () => {
   });
 
   it("uses default page of 1 when only limit is provided", () => {
-    eventHistoryMocks.getGlobalEvents.mockReturnValue(sampleEvents.slice(0, 2));
+    eventHistoryMocks.queryEvents.mockReturnValue(sampleEvents.slice(0, 2));
 
     const { status, body } = invokeGlobalEventsRoute({ limit: "2" });
 
@@ -708,8 +793,8 @@ describe("GET /api/events", () => {
   });
 
   it("returns empty data array for out-of-range page with metadata intact", () => {
-    eventHistoryMocks.countAllEvents.mockReturnValue(2);
-    eventHistoryMocks.getGlobalEvents.mockReturnValue([]);
+    eventHistoryMocks.countEvents.mockReturnValue(2);
+    eventHistoryMocks.queryEvents.mockReturnValue([]);
 
     const { status, body } = invokeGlobalEventsRoute({ page: "5", limit: "1" });
 
@@ -720,9 +805,20 @@ describe("GET /api/events", () => {
     expect(body.data).toEqual([]);
   });
 
+  it("returns {data: [], total: 0} (not 404) when no events match", () => {
+    eventHistoryMocks.countEvents.mockReturnValue(0);
+    eventHistoryMocks.queryEvents.mockReturnValue([]);
+
+    const { status, body } = invokeGlobalEventsRoute({ eventType: "paused" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(0);
+    expect(body.data).toEqual([]);
+  });
+
   it("includes streamId and eventType fields in each event", () => {
-    eventHistoryMocks.getGlobalEvents.mockReturnValue([sampleEvents[0]]);
-    eventHistoryMocks.countAllEvents.mockReturnValue(1);
+    eventHistoryMocks.queryEvents.mockReturnValue([sampleEvents[0]]);
+    eventHistoryMocks.countEvents.mockReturnValue(1);
 
     const { status, body } = invokeGlobalEventsRoute({ page: "1", limit: "1" });
 

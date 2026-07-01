@@ -85,6 +85,8 @@ function migrate(): void {
 
     CREATE INDEX IF NOT EXISTS idx_stream_events_stream_id ON stream_events(stream_id);
     CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp ON stream_events(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_stream_events_event_type ON stream_events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_stream_events_actor ON stream_events(actor);
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_stream_events_dedup
       ON stream_events(stream_id, event_type, ledger_sequence)

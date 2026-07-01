@@ -90,21 +90,94 @@ export function getStreamHistory(streamId: string, limit = 20, offset = 0, order
   return rows.map(rowToEvent);
 }
 
-export function getAllEvents(limit = 100, offset = 0, cursor?: number): StreamEvent[] {
-  const db = getDb();
-  let query = `SELECT * FROM stream_events`;
+/**
+ * Filters for the global event feed (`GET /api/events`). Every field is
+ * optional; omitted fields are not constrained. `from`/`to` are inclusive
+ * UNIX timestamps in seconds (matching `stream_events.timestamp`).
+ */
+export interface EventFilters {
+  eventType?: StreamEventType;
+  streamId?: string;
+  actor?: string;
+  from?: number;
+  to?: number;
+}
+
+/**
+ * Build the shared `WHERE` fragment and positional params for the global event
+ * feed. Centralising this keeps the data query (queryEvents) and the count
+ * query (countEvents) in perfect sync, so pagination totals never drift from
+ * the rows actually returned.
+ */
+function buildEventFilterClause(
+  filters: EventFilters,
+  cursor?: number,
+): { clause: string; params: any[] } {
+  const conditions: string[] = [];
   const params: any[] = [];
 
+  if (filters.eventType !== undefined) {
+    conditions.push("event_type = ?");
+    params.push(filters.eventType);
+  }
+  if (filters.streamId !== undefined) {
+    conditions.push("stream_id = ?");
+    params.push(filters.streamId);
+  }
+  if (filters.actor !== undefined) {
+    conditions.push("actor = ?");
+    params.push(filters.actor);
+  }
+  if (filters.from !== undefined) {
+    conditions.push("timestamp >= ?");
+    params.push(filters.from);
+  }
+  if (filters.to !== undefined) {
+    conditions.push("timestamp <= ?");
+    params.push(filters.to);
+  }
+  // Keyset guard for stable pagination when new events arrive mid-scroll.
   if (cursor !== undefined) {
-    query += ` WHERE id < ?`;
+    conditions.push("id < ?");
     params.push(cursor);
   }
 
-  query += ` ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?`;
-  params.push(limit, offset);
+  const clause = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+  return { clause, params };
+}
 
-  const rows = db.prepare(query).all(...params) as EventRow[];
+/**
+ * Return events across all streams matching `filters`, newest first
+ * (timestamp DESC, id DESC). Used by the global event feed.
+ */
+export function queryEvents(
+  filters: EventFilters,
+  limit: number,
+  offset: number,
+  cursor?: number,
+): StreamEvent[] {
+  const db = getDb();
+  const { clause, params } = buildEventFilterClause(filters, cursor);
+  const rows = db
+    .prepare(
+      `SELECT * FROM stream_events${clause} ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?`,
+    )
+    .all(...params, limit, offset) as EventRow[];
   return rows.map(rowToEvent);
+}
+
+/** Count events matching `filters` (used for pagination totals). */
+export function countEvents(filters: EventFilters): number {
+  const db = getDb();
+  const { clause, params } = buildEventFilterClause(filters);
+  const row = db
+    .prepare(`SELECT COUNT(*) as count FROM stream_events${clause}`)
+    .get(...params) as { count: number };
+  return row.count;
+}
+
+export function getAllEvents(limit = 100, offset = 0, cursor?: number): StreamEvent[] {
+  return queryEvents({}, limit, offset, cursor);
 }
 
 export function getGlobalEvents(
@@ -113,37 +186,11 @@ export function getGlobalEvents(
   eventType?: StreamEventType,
   cursor?: number,
 ): StreamEvent[] {
-  const db = getDb();
-  if (eventType) {
-    let query = `SELECT * FROM stream_events WHERE event_type = ?`;
-    const params: any[] = [eventType];
-
-    if (cursor !== undefined) {
-      query += ` AND id < ?`;
-      params.push(cursor);
-    }
-
-    query += ` ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?`;
-    params.push(limit, offset);
-
-    const rows = db.prepare(query).all(...params) as EventRow[];
-    return rows.map(rowToEvent);
-  }
-  return getAllEvents(limit, offset, cursor);
+  return queryEvents({ eventType }, limit, offset, cursor);
 }
 
 export function countAllEvents(eventType?: StreamEventType): number {
-  const db = getDb();
-  if (eventType) {
-    const row = db
-      .prepare(`SELECT COUNT(*) as count FROM stream_events WHERE event_type = ?`)
-      .get(eventType) as { count: number };
-    return row.count;
-  }
-  const row = db
-    .prepare(`SELECT COUNT(*) as count FROM stream_events`)
-    .get() as { count: number };
-  return row.count;
+  return countEvents({ eventType });
 }
 
 export function countStreamEvents(streamId: string): number {
