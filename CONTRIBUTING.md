@@ -32,3 +32,7 @@ If you change event structures and need to update the snapshots, run:
 
 ```bash
 cargo insta review
+
+## Commits
+
+Use Conventional Commits: `feat:`, `fix:`, `docs:`, `chore:`
