@@ -109,6 +109,21 @@ export interface ValidatedConfig {
 }
 
 export function validateEnv(): ValidatedConfig {
+
+// Safe defaults for CI/test environment
+const envDefaults = {
+  RPC_URL: process.env.RPC_URL || "https://soroban-testnet.stellar.org",
+  NETWORK_PASSPHRASE: process.env.NETWORK_PASSPHRASE || "Test SDF Network ; September 2015",
+  CONTRACT_ID: process.env.CONTRACT_ID || undefined,
+  SERVER_PRIVATE_KEY: process.env.SERVER_PRIVATE_KEY || undefined,
+  ALLOWED_ASSETS: process.env.ALLOWED_ASSETS || "***",
+  INDEXER_POLL_INTERVAL_MS: process.env.INDEXER_POLL_INTERVAL_MS || "10000",
+  PORT: process.env.PORT || "3001",
+  ADMIN_API_KEY: process.env.ADMIN_API_KEY || undefined,
+  SOROBAN_DISABLED: process.env.SOROBAN_DISABLED || "false",
+  WEBHOOK_DESTINATION_URL: process.env.WEBHOOK_DESTINATION_URL || "",
+};
+
   // Parse environment variables
   const parsed = envSchema.safeParse(process.env);
 

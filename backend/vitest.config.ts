@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
+    setupFiles: ["./tests/setup.ts"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     // setupFiles runs in each worker process before any test module is
     // imported, guaranteeing that env vars are set before rate limiters and
