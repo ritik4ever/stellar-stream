@@ -1,5 +1,13 @@
 # StellarStream
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Stellar-Payment%20Streaming-blue" alt="Stellar" />
+  <img src="https://img.shields.io/badge/Soroban-Smart%20Contracts-orange" alt="Soroban" />
+  <img src="https://img.shields.io/badge/Frontend-React%20%2B%20TypeScript-61dafb" alt="React" />
+  <img src="https://img.shields.io/badge/Backend-Node.js%20%2B%20Express-green" alt="Node" />
+  <img src="https://img.shields.io/badge/license-MIT-brightgreen" alt="License" />
+</p>
+
 StellarStream is a basic payment-streaming MVP for the Stellar ecosystem.
 It includes:
 * A React dashboard to create and monitor streams
