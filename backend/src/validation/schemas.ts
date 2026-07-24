@@ -217,6 +217,12 @@ export const bulkCancelStreamsSchema = z.object({
   sender: stellarAccountIdSchema,
 });
 
+
+export const transferStreamPayloadSchema = z.object({
+  sender: stellarAccountIdSchema,
+  newRecipient: stellarAccountIdSchema,
+});
+
 export type CreateStreamPayload = z.infer<typeof createStreamPayloadSchema>;
 
 export type ValidationIssue = {

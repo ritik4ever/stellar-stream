@@ -14,6 +14,7 @@ const onClose = vi.fn();
 const onCancel = vi.fn().mockResolvedValue(undefined);
 const onPause = vi.fn().mockResolvedValue(undefined);
 const onResume = vi.fn().mockResolvedValue(undefined);
+const onTransfer = vi.fn().mockResolvedValue(undefined);
 const signAction = vi.fn().mockResolvedValue('mock-signature');
 
 /** Returns an MSW override that serves a stream with the given status */
@@ -47,6 +48,7 @@ beforeEach(() => {
   onCancel.mockClear();
   onPause.mockClear();
   onResume.mockClear();
+  onTransfer.mockClear();
   signAction.mockClear();
   clearCache();
 });
@@ -400,6 +402,51 @@ describe('StreamDetailDrawer', () => {
       await waitFor(() =>
         expect(screen.getByRole('alert')).toHaveTextContent('Resume failed'),
       );
+    });
+  });
+
+  // ── Transfer action flow ───────────────────────────────────────────────────
+  describe('Transfer action', () => {
+    it('shows Transfer Stream button for active stream when wallet matches sender', async () => {
+      server.use(streamWithStatus('active'));
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onTransfer={onTransfer}
+          walletAddress="GSENDER123"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText('Transfer Stream')).toBeInTheDocument());
+    });
+
+    it('submits transfer successfully', async () => {
+      server.use(streamWithStatus('active'));
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onTransfer={onTransfer}
+          walletAddress="GSENDER123"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText('Transfer Stream')).toBeInTheDocument());
+      
+      // Click transfer button to open form
+      fireEvent.click(screen.getByText('Transfer Stream'));
+      
+      // Form should be open
+      const input = screen.getByPlaceholderText(/G.../i);
+      const confirmButton = screen.getByRole('button', { name: /Confirm/i });
+      
+      // Type new recipient
+      const newRecipient = "GAJDLWC3JCAQ6PINMWGWZXBZSZSTRXLKTMI5QTGGCIXV6PY4NRJS5SHZ";
+      fireEvent.change(input, { target: { value: newRecipient } });
+      
+      // Click confirm
+      fireEvent.click(confirmButton);
+      
+      await waitFor(() => expect(onTransfer).toHaveBeenCalledWith('42', newRecipient));
     });
   });
 });

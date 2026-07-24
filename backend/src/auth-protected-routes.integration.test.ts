@@ -335,6 +335,29 @@ describe("Auth-protected routes integration tests (#375)", () => {
   });
 
   // ══════════════════════════════════════════════════════════════════════════
+  //  6b. POST /api/streams/:id/transfer
+  // ══════════════════════════════════════════════════════════════════════════
+
+  describe("POST /api/streams/:id/transfer", () => {
+    const url = `/api/streams/${FIXTURE_STREAM_ID}/transfer`;
+    const newRecipient = "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+
+    it("no token → 401", async () => expect401(await send("post", url, { body: { sender: senderKp.publicKey(), newRecipient } })));
+
+    it("expired token → 401", async () => {
+      const res = await send("post", url, { token: expiredToken(), body: { sender: senderKp.publicKey(), newRecipient } });
+      expect401(res);
+      expect(res.body.code).toBe("token_expired");
+    });
+
+    it("valid token → auth passes (non-401)", async () => {
+      seedFixtureStream(senderKp.publicKey(), recipientKp.publicKey());
+      const res = await send("post", url, { token: senderToken(), body: { sender: senderKp.publicKey(), newRecipient } });
+      expectAuthPassed(res);
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
   //  7. POST /api/streams/:id/reconcile
   // ══════════════════════════════════════════════════════════════════════════
 

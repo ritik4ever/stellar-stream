@@ -21,6 +21,7 @@ import {
   listStreams,
   pauseStream,
   resumeStream,
+  transferStream,
   updateStreamStartAt,
 } from "../services/api";
 import { ListStreamsFilters } from "../services/api";
@@ -267,6 +268,24 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
       showToast(err instanceof Error ? err.message : "Failed to resume the stream.", "error");
     }
   }
+  async function handleTransfer(streamId: string, newRecipient: string): Promise<void> {
+    try {
+      if (!wallet.address) {
+        showToast("Please connect your wallet first.", "error");
+        return;
+      }
+      await transferStream(streamId, wallet.address, newRecipient);
+      await refreshStreams(apiFilters);
+      void refreshUnfilteredCount();
+      showToast("Stream transferred successfully", "success");
+    } catch (err) {
+      if (err instanceof ApiError) {
+        showToast(`Transfer failed (${err.statusCode}): ${err.message}`, "error");
+        return;
+      }
+      showToast(err instanceof Error ? err.message : "Failed to transfer the stream.", "error");
+    }
+  }
 
   async function handleUpdateStartTime(streamId: string, nextStartAt: number) {
     try {
@@ -374,6 +393,7 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
           onCancel={handleCancel}
           onPause={handlePause}
           onResume={handleResume}
+          onTransfer={handleTransfer}
           signAction={wallet.signAction}
           walletAddress={wallet.address}
         />

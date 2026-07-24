@@ -326,7 +326,54 @@ export function initDb(): void {
     db.pragma("cache_size = -64000");
   }
 
+  runMigrations(db);
+}
 
+export function getAllowedAssets(): string[] {
+  try {
+    const rows = db.prepare("SELECT code FROM allowed_assets").all() as Array<{
+      code: string;
+    }>;
+    return rows.map((r) => r.code);
+  } catch {
+    return [];
+  }
+}
 
+export function addAllowedAsset(code: string): void {
+  db.prepare("INSERT OR IGNORE INTO allowed_assets (code) VALUES (?)").run(
+    code.trim().toUpperCase(),
+  );
+}
 
+export function removeAllowedAsset(code: string): void {
+  db.prepare("DELETE FROM allowed_assets WHERE code = ?").run(
+    code.trim().toUpperCase(),
+  );
+}
+
+export function syncFtsIndex(streamId: string, sender: string, recipient: string, assetCode: string): void {
+  try {
+    db.prepare(
+      `INSERT INTO streams_fts(rowid, stream_id, sender, recipient, asset_code)
+       VALUES ((SELECT rowid FROM streams WHERE id = ?), ?, ?, ?, ?)
+       ON CONFLICT(rowid) DO UPDATE SET
+         sender = excluded.sender,
+         recipient = excluded.recipient,
+         asset_code = excluded.asset_code`
+    ).run(streamId, streamId, sender, recipient, assetCode);
+  } catch {
+    // FTS update failed; log but don't crash
+  }
+}
+
+export function searchStreamsFts(query: string): string[] {
+  try {
+    const rows = db.prepare(
+      `SELECT stream_id FROM streams_fts WHERE streams_fts MATCH ? ORDER BY rank`
+    ).all(query) as Array<{ stream_id: string }>;
+    return rows.map((row) => row.stream_id);
+  } catch {
+    return [];
+  }
 }

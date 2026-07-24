@@ -447,15 +447,12 @@ export function calculateProgress(
   stream: StreamRecord,
   at = nowInSeconds(),
 ): StreamProgress {
-  const streamEnd = stream.startAt + stream.durationSeconds;
+  const effectiveAt = stream.canceledAt !== undefined
+    ? stream.canceledAt
+    : stream.pausedAt !== undefined
+    ? Math.min(at, stream.pausedAt)
+    : at;
 
-  // When paused, vesting is frozen at the moment of pause.
-  const effectiveAt =
-    stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
-
-  const elapsed = Math.max(0, Math.min(effectiveAt - stream.startAt - stream.pausedDuration, stream.durationSeconds));
-
-  const ratio = Math.min(1, elapsed / stream.durationSeconds);
   const elapsed = Math.max(0, Math.max(0, effectiveAt - stream.startAt) - stream.pausedDuration);
   const ratio = stream.durationSeconds <= 0 ? 1 : Math.min(1, elapsed / stream.durationSeconds);
   const elapsedSeconds = stream.durationSeconds <= 0 ? 0 : Math.min(elapsed, stream.durationSeconds);
@@ -1400,4 +1397,108 @@ export function deleteStreamById(id: string): boolean {
   db.prepare("UPDATE streams SET archived_at = ? WHERE id = ?").run(now, id);
 
   return true;
+}
+
+/**
+ * Transfers stream recipient to a new address.
+ * Submits Soroban transfer_stream transaction before updating SQLite.
+ * SQLite recipient field updated on success.
+ * Records "stream_transferred" event.
+ */
+export async function transferStream(
+  id: string,
+  newRecipient: string,
+): Promise<StreamRecord | undefined> {
+  const stream = getStream(id);
+  if (!stream) {
+    return undefined;
+  }
+
+  const status = computeStatus(stream, nowInSeconds());
+  if (status !== "active") {
+    const err: any = new Error("Only active streams can be transferred.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const oldRecipient = stream.recipient;
+  stream.recipient = newRecipient;
+
+  // Submits Soroban transfer_stream transaction before updating SQLite
+  try {
+    const sorobanContext = getSorobanContext();
+    if (sorobanContext && rpcServer && serverKeypair) {
+      const contractId = process.env.CONTRACT_ID;
+      if (contractId) {
+        const sourceAccount = await rpcServer.getAccount(serverKeypair.publicKey());
+        const contract = new Contract(contractId);
+        const tx = contract.call(
+          "transfer_stream",
+          nativeToScVal(parseInt(id), { type: "u64" }),
+          new Address(newRecipient).toScVal(),
+        );
+
+        const built = await rpcServer.prepareTransaction(
+          new TransactionBuilder(sourceAccount, {
+            fee: "1000",
+            networkPassphrase: process.env.NETWORK_PASSPHRASE || Networks.TESTNET,
+          })
+            .addOperation(tx)
+            .setTimeout(30)
+            .build(),
+        );
+
+        built.sign(serverKeypair);
+        const sendRes = await retryWithBackoff(() => rpcServer!.sendTransaction(built));
+        if (sendRes.status !== "PENDING") {
+          throw new Error("Failed to send transaction: " + JSON.stringify(sendRes));
+        }
+
+        let txResult;
+        let attempts = 0;
+        while (attempts < 10) {
+          txResult = await retryWithBackoff(() =>
+            rpcServer!.getTransaction(sendRes.hash),
+          );
+          if (txResult.status !== "NOT_FOUND") break;
+          await new Promise((r) => setTimeout(r, 1000));
+          attempts++;
+        }
+
+        if (txResult?.status !== "SUCCESS") {
+          throw new Error("Tx failed on chain: " + JSON.stringify(txResult));
+        }
+      }
+    }
+  } catch (err) {
+    logger.error({ err, streamId: id }, "failed to transfer stream on-chain");
+    throw err;
+  }
+
+  // Invalidate cache
+  await invalidateCache(`stream:${id}`);
+  await invalidateCache("streams:list:");
+  await invalidateCache("streams:export:");
+  resetStatsCache();
+  resetStreamMetricsCache();
+
+  // Atomically write the updated stream row and the transfer event.
+  const db = getDb();
+  const now = nowInSeconds();
+  db.transaction(() => {
+    upsertStream(stream);
+    recordEventWithDb(
+      db,
+      stream.id,
+      "stream_transferred",
+      now,
+      stream.sender,
+      undefined,
+      { oldRecipient, newRecipient }
+    );
+  })();
+
+  // Webhook fires after the transaction commits.
+  triggerWebhook("stream_transferred", stream);
+  return stream;
 }

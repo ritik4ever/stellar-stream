@@ -27,6 +27,7 @@ const EXPECTED_STREAMS_COLUMNS = [
   "paused_at",
   "paused_duration",
   "metadata",
+  "cliff_seconds",
 ];
 
 const EXPECTED_WEBHOOK_DEAD_LETTERS_COLUMNS = [
@@ -161,6 +162,8 @@ describe("database migrations", () => {
 
     runMigrations(db);
 
+    rollbackMigration(db, 6);
+    rollbackMigration(db, 5);
     rollbackMigration(db, 4);
 
     expect(getTableColumns(db, "webhook_dead_letters")).toEqual([

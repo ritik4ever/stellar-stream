@@ -108,24 +108,6 @@ export interface ValidatedConfig {
   allowedOrigins: string | undefined;
 }
 
-export function validateEnv(): ValidatedConfig {
-  // Parse environment variables
-  const parsed = envSchema.safeParse(process.env);
-
-  if (!parsed.success) {
-    logger.error({ issues: parsed.error.issues }, "environment validation failed");
-    parsed.error.issues.forEach((issue: z.ZodIssue) => {
-      const envVar = issue.path.join(".");
-      logger.error({ envVar, issue: issue.message }, "environment variable validation issue");
-    });
-    process.exit(1);
-    throw new Error("Environment validation failed"); // Ensure execution stops in tests
-  }
-  if (norm === "public" || norm === "mainnet" || norm === "public global stellar network ; october 2015") {
-    return "Public Global Stellar Network ; October 2015";
-  }
-  return network;
-}
 
 export function validateEnv(): ValidatedConfig {
   // Support backwards compatibility: map old variables to new ones if new ones are not set
@@ -244,7 +226,7 @@ export function validateEnv(): ValidatedConfig {
 
   // Validate ADMIN_API_KEY if provided
   let adminApiKey: string | null = null;
-  const isProduction = process.env.NODE_ENV === "production";
+
 
   if (process.env.ADMIN_API_KEY) {
     const adminKeyValidation = adminApiKeySchema.safeParse(process.env.ADMIN_API_KEY);

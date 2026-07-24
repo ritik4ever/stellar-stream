@@ -51,6 +51,7 @@ import {
   archiveOldStreams,
   calculateProgress,
   cancelStream,
+  transferStream,
   createStream,
   getStream,
   getOnChainClaimableAmount,
@@ -89,6 +90,7 @@ import {
   recipientAccountIdSchema,
   senderAccountIdSchema,
   streamIdSchema,
+  transferStreamPayloadSchema,
   updateStreamStartAtSchema,
 } from "./validation/schemas";
 import { validateEnv } from "./config/validateEnv";
@@ -1044,51 +1046,23 @@ app.get(
       progress: calculateProgress(stream, now),
     }));
 
-  const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
-  if (!parsedQuery.success) {
-    sendValidationError(req, res, parsedQuery.error.issues);
-    return;
-  }
-  const query = parsedQuery.data;
-
-  let data = listStreamsByRecipient(accountId)
-    .map((stream) => ({
-      ...stream,
-      progress: calculateProgress(stream),
-    }));
-
-  if (query.status) {
-    data = data.filter((stream) => stream.progress.status === query.status);
-  }
-  if (query.sender) {
-    data = data.filter(
-      (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
-    );
-  }
-  if (query.asset) {
-    data = data.filter(
-      (stream) => stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
-    );
-  }
-  if (query.assetCode && query.assetCode.length > 0) {
-    data = data.filter((stream) =>
-      query.assetCode!.includes(stream.assetCode.toUpperCase()),
-    );
-  }
-  if (query.q && query.q.length > 0) {
-    const searchTerm = query.q.toLowerCase();
-    data = data.filter((stream) => {
-      return (
-        stream.id.toLowerCase().includes(searchTerm) ||
-        stream.sender.toLowerCase().includes(searchTerm) ||
-        stream.recipient.toLowerCase().includes(searchTerm) ||
-        stream.assetCode.toLowerCase().includes(searchTerm)
+    if (query.status) {
+      data = data.filter((stream) => stream.progress.status === query.status);
+    }
+    if (query.sender) {
+      data = data.filter(
+        (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
       );
     }
     if (query.asset) {
       data = data.filter(
         (stream) =>
           stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
+      );
+    }
+    if (query.assetCode && query.assetCode.length > 0) {
+      data = data.filter((stream) =>
+        query.assetCode!.includes(stream.assetCode.toUpperCase()),
       );
     }
     if (query.q && query.q.length > 0) {
@@ -1337,6 +1311,77 @@ app.post(
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to cancel stream.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        {
+          code: normalizedError.code ?? "INTERNAL_ERROR",
+        },
+      );
+    }
+  },
+);
+
+app.post(
+  "/api/streams/:id/transfer",
+  mutationLimiter,
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    const parsedBody = transferStreamPayloadSchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      sendValidationError(req, res, parsedBody.error.issues);
+      return;
+    }
+
+    const { sender, newRecipient } = parsedBody.data;
+
+    const user = (req as any).user;
+    if (sender !== user.accountId) {
+      sendApiError(req, res, 403, "Authenticated account mismatch.", {
+        code: "FORBIDDEN",
+      });
+      return;
+    }
+
+    if (stream.sender !== sender) {
+      sendApiError(req, res, 403, "Only the sender can transfer this stream.", {
+        code: "FORBIDDEN",
+      });
+      return;
+    }
+
+    try {
+      const updated = await transferStream(parsedId.value, newRecipient);
+      if (!updated) {
+        sendApiError(req, res, 500, "Failed to transfer stream.", { code: "INTERNAL_ERROR" });
+        return;
+      }
+      res.json({
+        data: {
+          ...updated,
+          progress: calculateProgress(updated),
+        },
+      });
+    } catch (error: any) {
+      logger.error({ err: error, stack: error.stack, streamId: parsedId.value }, "failed to transfer stream");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to transfer stream.",
       );
       sendApiError(
         req,
