@@ -1401,3 +1401,89 @@ export function deleteStreamById(id: string): boolean {
 
   return true;
 }
+
+export interface ClawbackResult {
+  txHash: string;
+  actualAmount: number;
+}
+
+/**
+ * Calls the on-chain clawback function to reclaim unclaimed vested tokens.
+ * Requires the contract admin to be the backend signing key.
+ * @param {string} id - Stream ID (numeric string matching the on-chain u64)
+ * @param {number} amount - Amount to clawback (capped at unclaimed vested by contract)
+ * @returns {Promise<ClawbackResult>} Transaction hash and actual amount clawed back
+ */
+export async function clawbackStream(id: string, amount: number): Promise<ClawbackResult> {
+  const contractId = process.env.CONTRACT_ID;
+  const netPass =
+    process.env.NETWORK_PASSPHRASE || "Test SDF Network ; September 2015";
+
+  if (!contractId || !rpcServer || !serverKeypair) {
+    throw new Error("Backend not configured for Soroban.");
+  }
+
+  const streamIdU64 = parseInt(id, 10);
+  if (isNaN(streamIdU64) || streamIdU64 < 0) {
+    const err: any = new Error("Invalid stream ID for on-chain clawback.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const adminAddress = serverKeypair.publicKey();
+
+  const sourceAccount = await rpcServer.getAccount(adminAddress);
+  const contract = new Contract(contractId);
+  const tx = contract.call(
+    "clawback",
+    nativeToScVal(streamIdU64, { type: "u64" }),
+    nativeToScVal(amount, { type: "i128" }),
+    new Address(adminAddress).toScVal(),
+  );
+
+  const built = await rpcServer.prepareTransaction(
+    new TransactionBuilder(sourceAccount, {
+      fee: "1000",
+      networkPassphrase: netPass,
+    })
+      .addOperation(tx)
+      .setTimeout(30)
+      .build(),
+  );
+
+  built.sign(serverKeypair);
+
+  const sendRes = await retryWithBackoff(() =>
+    rpcServer!.sendTransaction(built),
+  );
+  if (sendRes.status !== "PENDING") {
+    const err: any = new Error(
+      "Failed to send clawback transaction: " + JSON.stringify(sendRes),
+    );
+    err.statusCode = 502;
+    throw err;
+  }
+
+  let txResult;
+  let attempts = 0;
+  while (attempts < 10) {
+    txResult = await retryWithBackoff(() =>
+      rpcServer!.getTransaction(sendRes.hash),
+    );
+    if (txResult.status !== "NOT_FOUND") break;
+    await new Promise((r) => setTimeout(r, 1000));
+    attempts++;
+  }
+
+  if (txResult?.status !== "SUCCESS" || !txResult.returnValue) {
+    const err: any = new Error(
+      "Clawback transaction failed on chain: " + JSON.stringify(txResult),
+    );
+    err.statusCode = 502;
+    throw err;
+  }
+
+  const actualAmount = Number(scValToNative(txResult.returnValue));
+
+  return { txHash: sendRes.hash, actualAmount };
+}

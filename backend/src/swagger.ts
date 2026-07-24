@@ -449,6 +449,14 @@ export const swaggerDocument = {
         },
       },
     },
+    securitySchemes: {
+      AdminKey: {
+        type: "apiKey",
+        in: "header",
+        name: "X-Admin-Key",
+        description: "Admin API key for protected endpoints.",
+      },
+    },
   },
   paths: {
     "/api/health": {
@@ -1831,6 +1839,114 @@ export const swaggerDocument = {
                     },
                   },
                 },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/api/admin/streams/{id}/clawback": {
+      post: {
+        summary: "Admin Clawback",
+        description:
+          "Clawback unclaimed vested tokens from a stream. Requires admin authentication via X-Admin-Key header. Calls the on-chain clawback function and returns the transaction hash.",
+        tags: ["Admin"],
+        security: [{ AdminKey: [] }],
+        parameters: [
+          {
+            in: "path",
+            name: "id",
+            required: true,
+            schema: { type: "string" },
+            description: "Stream ID.",
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["amount"],
+                properties: {
+                  amount: {
+                    type: "number",
+                    description: "Amount to clawback (positive integer). Capped at unclaimed vested amount by the contract.",
+                    exclusiveMinimum: true,
+                    minimum: 0,
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Clawback executed successfully.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    result: {
+                      type: "object",
+                      properties: {
+                        txHash: {
+                          type: "string",
+                          description: "On-chain transaction hash.",
+                        },
+                        actualAmount: {
+                          type: "number",
+                          description: "Amount actually clawed back (may differ from requested if capped).",
+                        },
+                        requestedAmount: {
+                          type: "number",
+                          description: "Amount originally requested.",
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": {
+            description: "Validation error — invalid stream ID or amount.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+          "401": {
+            description: "Unauthorized — missing or invalid admin key.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+          "404": {
+            description: "Stream not found.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+          "429": {
+            description: "Rate limit exceeded.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+          "502": {
+            description: "On-chain transaction failed.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
               },
             },
           },
