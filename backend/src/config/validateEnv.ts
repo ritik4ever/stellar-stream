@@ -119,15 +119,11 @@ export function validateEnv(): ValidatedConfig {
       logger.error({ envVar, issue: issue.message }, "environment variable validation issue");
     });
     process.exit(1);
-    throw new Error("Environment validation failed"); // Ensure execution stops in tests
+    throw new Error("Environment validation failed");
   }
-  if (norm === "public" || norm === "mainnet" || norm === "public global stellar network ; october 2015") {
-    return "Public Global Stellar Network ; October 2015";
-  }
-  return network;
-}
 
-export function validateEnv(): ValidatedConfig {
+  const env = parsed.data;
+
   // Support backwards compatibility: map old variables to new ones if new ones are not set
   if (!process.env.STELLAR_CONTRACT_ID && process.env.CONTRACT_ID) {
     process.env.STELLAR_CONTRACT_ID = process.env.CONTRACT_ID;
@@ -244,7 +240,6 @@ export function validateEnv(): ValidatedConfig {
 
   // Validate ADMIN_API_KEY if provided
   let adminApiKey: string | null = null;
-  const isProduction = process.env.NODE_ENV === "production";
 
   if (process.env.ADMIN_API_KEY) {
     const adminKeyValidation = adminApiKeySchema.safeParse(process.env.ADMIN_API_KEY);

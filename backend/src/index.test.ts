@@ -18,6 +18,8 @@ const streamStoreMocks = vi.hoisted(() => ({
   initSoroban: vi.fn(),
   listStreams: vi.fn(),
   listStreamsBySender: vi.fn(),
+  listStreamsByRecipient: vi.fn(),
+  nowInSeconds: vi.fn(),
   syncStreams: vi.fn(),
   updateStreamStartAt: vi.fn(),
 }));
@@ -36,9 +38,11 @@ vi.mock("./services/streamStore", () => streamStoreMocks);
 vi.mock("./services/eventHistory", () => eventHistoryMocks);
 vi.mock("./services/auth", () => ({
   authMiddleware: vi.fn((req: any, res: any, next: any) => next()),
+  adminJwtAuth: vi.fn((req: any, res: any, next: any) => next()),
   generateChallenge: vi.fn(),
   refreshToken: vi.fn(),
   verifyChallengeAndIssueToken: vi.fn(),
+  getJwtSecret: vi.fn(() => "test_secret"),
 }));
 
 const TEST_JWT_SECRET = "test_secret_for_integration";
@@ -224,6 +228,7 @@ beforeEach(() => {
   streamStoreMocks.calculateProgress.mockReset();
   streamStoreMocks.createStream.mockReset();
   streamStoreMocks.getStream.mockReset();
+  streamStoreMocks.nowInSeconds.mockReturnValue(200);
   streamStoreMocks.listStreams.mockReturnValue(streams);
   streamStoreMocks.calculateProgress.mockImplementation((stream: TestStream) => progressById[stream.id]);
 
@@ -781,6 +786,150 @@ describe("GET /api/events", () => {
       actor: "GSENDER",
       amount: 50,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/streams/export.csv
+// ---------------------------------------------------------------------------
+
+function invokeExportCsvRoute(
+  query: Record<string, unknown> = {},
+): { status: number; headers: Record<string, string>; body: string } {
+  const layer = (app as any)?._router?.stack?.find(
+    (entry: any) => entry.route?.path === "/api/streams/export.csv" && entry.route?.methods?.get,
+  );
+
+  if (!layer) {
+    throw new Error("GET /api/streams/export.csv route not found");
+  }
+
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (req: any, res: any) => void;
+
+  let statusCode = 200;
+  const responseHeaders: Record<string, string> = {};
+  const chunks: string[] = [];
+
+  const req = { query, requestId: "test-request-id" };
+  const res = {
+    status(code: number) { statusCode = code; return this; },
+    set(key: string, value: string) { responseHeaders[key.toLowerCase()] = value; return this; },
+    setHeader(key: string, value: string) { responseHeaders[key.toLowerCase()] = value; return this; },
+    write(chunk: string) { chunks.push(chunk); return true; },
+    end() { return this; },
+  };
+
+  handler(req, res);
+
+  return { status: statusCode, headers: responseHeaders, body: chunks.join("") };
+}
+
+describe("GET /api/streams/export.csv", () => {
+  it("returns CSV with correct headers and all streams", async () => {
+    const response = await request(app).get("/api/streams/export.csv");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/csv");
+    expect(response.headers["content-disposition"]).toBe('attachment; filename="streams.csv"');
+
+    const lines = response.text.split("\n").filter((line: string) => line.length > 0);
+    expect(lines[0]).toBe("id,sender,recipient,asset,totalAmount,vestedAmount,status,startAt,durationSeconds,createdAt");
+    expect(lines.length).toBe(5);
+
+    const row4 = lines[1].split(",");
+    expect(row4[0]).toBe("4");
+    expect(row4[1]).toBe(SENDER_A);
+    expect(row4[2]).toBe(RECIPIENT_1);
+    expect(row4[3]).toBe("USDC");
+    expect(row4[4]).toBe("100");
+    expect(row4[5]).toBe("50");
+    expect(row4[6]).toBe("active");
+  });
+
+  it("filters by status", async () => {
+    const response = await request(app).get("/api/streams/export.csv").query({ status: "active" });
+
+    expect(response.status).toBe(200);
+    const lines = response.text.split("\n").filter((line: string) => line.length > 0);
+    expect(lines.length).toBe(2);
+    expect(lines[0]).toBe("id,sender,recipient,asset,totalAmount,vestedAmount,status,startAt,durationSeconds,createdAt");
+    expect(lines[1]).toContain("active");
+    expect(lines[1]).toContain("4");
+  });
+
+  it("returns only header row when no streams match", async () => {
+    const response = await request(app).get("/api/streams/export.csv").query({ status: "paused" });
+
+    expect(response.status).toBe(200);
+    const lines = response.text.split("\n").filter((line: string) => line.length > 0);
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toBe("id,sender,recipient,asset,totalAmount,vestedAmount,status,startAt,durationSeconds,createdAt");
+  });
+
+  it("produces valid CSV parseable by standard parser", async () => {
+    const response = await request(app).get("/api/streams/export.csv");
+    const lines = response.text.split("\n").filter((line: string) => line.length > 0);
+
+    const expectedHeaders = ["id", "sender", "recipient", "asset", "totalAmount", "vestedAmount", "status", "startAt", "durationSeconds", "createdAt"];
+    const parsedHeaders = lines[0].split(",");
+    expect(parsedHeaders).toEqual(expectedHeaders);
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",");
+      expect(cols.length).toBe(expectedHeaders.length);
+    }
+  });
+
+  it("streams large datasets without buffering entire content", async () => {
+    const largeStreams = Array.from({ length: 500 }, (_, i) => ({
+      id: String(i + 100),
+      sender: SENDER_A,
+      recipient: RECIPIENT_1,
+      assetCode: "USDC",
+      totalAmount: 1000,
+      durationSeconds: 3600,
+      startAt: 1000000 + i,
+      createdAt: 999000 + i,
+      pausedDuration: 0,
+      cliffSeconds: 0,
+    }));
+
+    streamStoreMocks.listStreams.mockReturnValue(largeStreams);
+    streamStoreMocks.calculateProgress.mockImplementation((stream: any) => ({
+      status: "active" as const,
+      ratePerSecond: 1,
+      elapsedSeconds: 0,
+      vestedAmount: 0,
+      remainingAmount: stream.totalAmount,
+      percentComplete: 0,
+    }));
+
+    const response = await request(app).get("/api/streams/export.csv");
+
+    expect(response.status).toBe(200);
+    const lines = response.text.split("\n").filter((line: string) => line.length > 0);
+    expect(lines.length).toBe(501);
+    expect(lines[0]).toBe("id,sender,recipient,asset,totalAmount,vestedAmount,status,startAt,durationSeconds,createdAt");
+    expect(lines[1]).toContain("100");
+    expect(lines[500]).toContain("599");
+  });
+
+  it("returns validation errors matching the list endpoint", async () => {
+    const responseInvalid = await request(app).get("/api/streams/export.csv").query({ status: "pending" });
+
+    expect(responseInvalid.status).toBe(400);
+    expect(responseInvalid.body.code).toBe("VALIDATION_ERROR");
+    expect(responseInvalid.body.error).toContain("status must be one of");
+
+    const responsePage = await request(app).get("/api/streams/export.csv").query({ page: "0" });
+    expect(responsePage.status).toBe(400);
+    expect(responsePage.body.code).toBe("VALIDATION_ERROR");
+    expect(responsePage.body.error).toContain("page must be greater than or equal to 1");
+
+    const responseLimit = await request(app).get("/api/streams/export.csv").query({ limit: "101" });
+    expect(responseLimit.status).toBe(400);
+    expect(responseLimit.body.code).toBe("VALIDATION_ERROR");
+    expect(responseLimit.body.error).toContain("limit must be less than or equal to 100");
   });
 });
 
