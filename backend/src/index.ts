@@ -8,6 +8,7 @@ import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
 import { z } from "zod";
 import { createServer } from "http";
+import { Readable } from "stream";
 import { searchStreamsFts, getAllowedAssets, addAllowedAsset, removeAllowedAsset } from "./services/db";
 import { initWebSocket } from "./services/websocket";
 import {
@@ -176,6 +177,63 @@ const listStreamsQuerySchema = z.object({
     .enum(SORT_ORDERS)
     .optional(),
 });
+
+type StreamWithProgress = StreamRecord & { progress: ReturnType<typeof calculateProgress> };
+
+function applyStreamFilters(
+  data: StreamWithProgress[],
+  query: z.infer<typeof listStreamsQuerySchema>,
+): StreamWithProgress[] {
+  if (query.status) {
+    data = data.filter((stream) => stream.progress.status === query.status);
+  }
+  if (query.recipient) {
+    data = data.filter(
+      (stream) => stream.recipient.toLowerCase() === query.recipient!.toLowerCase(),
+    );
+  }
+  if (query.sender) {
+    data = data.filter(
+      (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
+    );
+  }
+  if (query.asset) {
+    data = data.filter(
+      (stream) => stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
+    );
+  }
+  if (query.assetCode && query.assetCode.length > 0) {
+    data = data.filter((stream) =>
+      query.assetCode!.includes(stream.assetCode.toUpperCase()),
+    );
+  }
+  if (query.q && query.q.length > 0) {
+    const searchTerm = query.q.toLowerCase();
+    data = data.filter((stream) => {
+      return (
+        stream.id.toLowerCase().includes(searchTerm) ||
+        stream.sender.toLowerCase().includes(searchTerm) ||
+        stream.recipient.toLowerCase().includes(searchTerm) ||
+        stream.assetCode.toLowerCase().includes(searchTerm)
+      );
+    });
+  }
+  if (query.minAmount !== undefined) {
+    data = data.filter((stream) => stream.totalAmount >= query.minAmount!);
+  }
+  if (query.maxAmount !== undefined) {
+    data = data.filter((stream) => stream.totalAmount <= query.maxAmount!);
+  }
+  return data;
+}
+
+function csvEscape(value: string | number): string {
+  const str = String(value);
+  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
 
 const AUTH_CHALLENGE_RATE_LIMIT = Number(
   process.env.AUTH_CHALLENGE_RATE_LIMIT ?? 10,
@@ -543,52 +601,13 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
   const hasLimit = req.query.limit !== undefined;
 
   const now = nowInSeconds();
-  let data = listStreams(query.include_archived, query.sort ?? "createdAt", query.order ?? "desc").map((stream) => ({
-    ...stream,
-    progress: calculateProgress(stream, now),
-  }));
-
-  if (query.status) {
-    data = data.filter((stream) => stream.progress.status === query.status);
-  }
-  if (query.recipient) {
-    data = data.filter(
-      (stream) =>
-        stream.recipient.toLowerCase() === query.recipient!.toLowerCase(),
-    );
-  }
-  if (query.sender) {
-    data = data.filter(
-      (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
-    );
-  }
-  if (query.asset) {
-    data = data.filter(
-      (stream) => stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
-    );
-  }
-  if (query.assetCode && query.assetCode.length > 0) {
-    data = data.filter((stream) =>
-      query.assetCode!.includes(stream.assetCode.toUpperCase()),
-    );
-  }
-  if (query.q && query.q.length > 0) {
-    const searchTerm = query.q.toLowerCase();
-    data = data.filter((stream) => {
-      return (
-        stream.id.toLowerCase().includes(searchTerm) ||
-        stream.sender.toLowerCase().includes(searchTerm) ||
-        stream.recipient.toLowerCase().includes(searchTerm) ||
-        stream.assetCode.toLowerCase().includes(searchTerm)
-      );
-    });
-  }
-  if (query.minAmount !== undefined) {
-    data = data.filter((stream) => stream.totalAmount >= query.minAmount!);
-  }
-  if (query.maxAmount !== undefined) {
-    data = data.filter((stream) => stream.totalAmount <= query.maxAmount!);
-  }
+  const data = applyStreamFilters(
+    listStreams(query.include_archived, query.sort ?? "createdAt", query.order ?? "desc").map((stream) => ({
+      ...stream,
+      progress: calculateProgress(stream, now),
+    })),
+    query,
+  );
 
   const total = data.length;
   const page = query.page ?? PAGINATION_DEFAULT_PAGE;
@@ -688,73 +707,41 @@ app.get(
     }
 
     const query = parsedQuery.data;
-    const cacheKey = `streams:export:${JSON.stringify(query)}`;
-    
-    try {
-      const cache = getCache();
-      const cached = await cache.get<string>(cacheKey);
-      if (cached) {
-        res.set("Cache-Control", "max-age=5");
-        res.setHeader("Content-Type", "text/csv");
-        res.setHeader("Content-Disposition", 'attachment; filename="export.csv"');
-        res.send(cached);
-        return;
-      }
-    } catch {
-      // If cache fails, just proceed without caching
-    }
-
     const now = nowInSeconds();
-    let data = listStreams(query.include_archived).map((stream) => ({
-      ...stream,
-      progress: calculateProgress(stream, now),
-    }));
+    const data = applyStreamFilters(
+      listStreams(query.include_archived).map((stream) => ({
+        ...stream,
+        progress: calculateProgress(stream, now),
+      })),
+      query,
+    );
 
-    if (query.status) {
-      data = data.filter((stream) => stream.progress.status === query.status);
-    }
-    if (query.asset) {
-      data = data.filter(
-        (stream) =>
-          stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
-      );
-    }
-    if (query.assetCode && query.assetCode.length > 0) {
-      data = data.filter((stream) =>
-        query.assetCode!.includes(stream.assetCode.toUpperCase()),
-      );
-    }
-    if (query.sender) {
-      data = data.filter(
-        (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
-      );
-    }
-    if (query.recipient) {
-      data = data.filter(
-        (stream) =>
-          stream.recipient.toLowerCase() === query.recipient!.toLowerCase(),
-      );
-    }
+    const CSV_COLUMNS: Array<{ header: string; getter: (s: StreamWithProgress) => string | number }> = [
+      { header: "id", getter: (s) => s.id },
+      { header: "sender", getter: (s) => s.sender },
+      { header: "recipient", getter: (s) => s.recipient },
+      { header: "asset", getter: (s) => s.assetCode },
+      { header: "totalAmount", getter: (s) => s.totalAmount },
+      { header: "vestedAmount", getter: (s) => s.progress.vestedAmount },
+      { header: "status", getter: (s) => s.progress.status },
+      { header: "startAt", getter: (s) => s.startAt },
+      { header: "durationSeconds", getter: (s) => s.durationSeconds },
+      { header: "createdAt", getter: (s) => s.createdAt },
+    ];
 
-    const header = "id,sender,recipient,asset,total,status,startAt\n";
-    const rows = data
-      .map((stream) => {
-        return `${stream.id},${stream.sender},${stream.recipient},${stream.assetCode},${stream.totalAmount},${stream.progress.status},${stream.startAt}`;
-      })
-      .join("\n");
-    const csvContent = header + rows;
-
-    try {
-      const cache = getCache();
-      await cache.set(cacheKey, csvContent, 5);
-    } catch {
-      // If cache fails, just proceed
-    }
+    const headerRow = CSV_COLUMNS.map((col) => col.header).join(",") + "\n";
 
     res.set("Cache-Control", "max-age=5");
-    res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", 'attachment; filename="export.csv"');
-    res.send(csvContent);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="streams.csv"');
+    res.write(headerRow);
+
+    for (const stream of data) {
+      const row = CSV_COLUMNS.map((col) => csvEscape(col.getter(stream))).join(",") + "\n";
+      res.write(row);
+    }
+
+    res.end();
   },
 );
 
@@ -1039,69 +1026,13 @@ app.get(
     const query = parsedQuery.data;
 
     const now = nowInSeconds();
-    let data = listStreamsByRecipient(accountId, query.sort ?? "createdAt", query.order ?? "desc").map((stream) => ({
-      ...stream,
-      progress: calculateProgress(stream, now),
-    }));
-
-  const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
-  if (!parsedQuery.success) {
-    sendValidationError(req, res, parsedQuery.error.issues);
-    return;
-  }
-  const query = parsedQuery.data;
-
-  let data = listStreamsByRecipient(accountId)
-    .map((stream) => ({
-      ...stream,
-      progress: calculateProgress(stream),
-    }));
-
-  if (query.status) {
-    data = data.filter((stream) => stream.progress.status === query.status);
-  }
-  if (query.sender) {
-    data = data.filter(
-      (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
+    const data = applyStreamFilters(
+      listStreamsByRecipient(accountId, query.sort ?? "createdAt", query.order ?? "desc").map((stream) => ({
+        ...stream,
+        progress: calculateProgress(stream, now),
+      })),
+      query,
     );
-  }
-  if (query.asset) {
-    data = data.filter(
-      (stream) => stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
-    );
-  }
-  if (query.assetCode && query.assetCode.length > 0) {
-    data = data.filter((stream) =>
-      query.assetCode!.includes(stream.assetCode.toUpperCase()),
-    );
-  }
-  if (query.q && query.q.length > 0) {
-    const searchTerm = query.q.toLowerCase();
-    data = data.filter((stream) => {
-      return (
-        stream.id.toLowerCase().includes(searchTerm) ||
-        stream.sender.toLowerCase().includes(searchTerm) ||
-        stream.recipient.toLowerCase().includes(searchTerm) ||
-        stream.assetCode.toLowerCase().includes(searchTerm)
-      );
-    }
-    if (query.asset) {
-      data = data.filter(
-        (stream) =>
-          stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
-      );
-    }
-    if (query.q && query.q.length > 0) {
-      const searchTerm = query.q.toLowerCase();
-      data = data.filter((stream) => {
-        return (
-          stream.id.toLowerCase().includes(searchTerm) ||
-          stream.sender.toLowerCase().includes(searchTerm) ||
-          stream.recipient.toLowerCase().includes(searchTerm) ||
-          stream.assetCode.toLowerCase().includes(searchTerm)
-        );
-      });
-    }
 
     const hasPage = req.query.page !== undefined;
     const hasLimit = req.query.limit !== undefined;
@@ -1146,37 +1077,13 @@ app.get(
     const query = parsedQuery.data;
 
     const now = nowInSeconds();
-    let data = listStreamsBySender(accountId, query.sort ?? "createdAt", query.order ?? "desc").map((stream) => ({
-      ...stream,
-      progress: calculateProgress(stream, now),
-    }));
-
-    if (query.status) {
-      data = data.filter((stream) => stream.progress.status === query.status);
-    }
-    if (query.recipient) {
-      data = data.filter(
-        (stream) =>
-          stream.recipient.toLowerCase() === query.recipient!.toLowerCase(),
-      );
-    }
-    if (query.asset) {
-      data = data.filter(
-        (stream) =>
-          stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
-      );
-    }
-    if (query.q && query.q.length > 0) {
-      const searchTerm = query.q.toLowerCase();
-      data = data.filter((stream) => {
-        return (
-          stream.id.toLowerCase().includes(searchTerm) ||
-          stream.sender.toLowerCase().includes(searchTerm) ||
-          stream.recipient.toLowerCase().includes(searchTerm) ||
-          stream.assetCode.toLowerCase().includes(searchTerm)
-        );
-      });
-    }
+    const data = applyStreamFilters(
+      listStreamsBySender(accountId, query.sort ?? "createdAt", query.order ?? "desc").map((stream) => ({
+        ...stream,
+        progress: calculateProgress(stream, now),
+      })),
+      query,
+    );
 
     const hasPage = req.query.page !== undefined;
     const hasLimit = req.query.limit !== undefined;

@@ -1,9 +1,14 @@
-  # CI job to check contract bindings drift after deployment
-  # This job runs after contract deployment and smoke tests
+# CI job to check contract bindings drift
+# Runs on PRs to detect stale bindings and after contract deployment
 
 name: CI - Contract Bindings Drift Check
 
 on:
+  pull_request:
+    paths:
+      - 'contracts/**'
+      - 'frontend/src/contracts/generated/**'
+      - 'scripts/generate-contract-bindings.sh'
   workflow_run:
     workflows: ["CI - Build Checks"]
     types:
@@ -13,7 +18,7 @@ jobs:
   check-bindings-drift:
     name: Check Contract Bindings Drift
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'pull_request' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -21,7 +26,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
@@ -29,12 +34,36 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Install soroban-cli
+        uses: stellar/install-soroban-cli@v1
+
+      - name: Get contract ID
+        id: contract_id
+        run: |
+          # Try to get CONTRACT_ID from secrets first (for deployed contract)
+          if [ -n "${{ secrets.CONTRACT_ID }}" ]; then
+            echo "contract_id=${{ secrets.CONTRACT_ID }}" >> $GITHUB_OUTPUT
+            echo "Using CONTRACT_ID from secrets"
+          # Fallback to contract_id.txt in repo
+          elif [ -f contracts/contract_id.txt ]; then
+            CONTRACT_ID=$(cat contracts/contract_id.txt)
+            echo "contract_id=$CONTRACT_ID" >> $GITHUB_OUTPUT
+            echo "Using CONTRACT_ID from contracts/contract_id.txt"
+          else
+            echo "No CONTRACT_ID found - skipping bindings generation"
+            echo "contract_id=" >> $GITHUB_OUTPUT
+          fi
+
       - name: Generate contract bindings
+        if: steps.contract_id.outputs.contract_id != ''
         env:
-          CONTRACT_ID: ${{ secrets.CONTRACT_ID || format('cat contracts/contract_id.txt') }}
+          CONTRACT_ID: ${{ steps.contract_id.outputs.contract_id }}
+          RPC_URL: ${{ secrets.RPC_URL || 'https://soroban-testnet.stellar.org:443' }}
+          NETWORK_PASSPHRASE: ${{ secrets.NETWORK_PASSPHRASE || 'Test SDF Network ; September 2015' }}
         run: npm run gen:bindings
 
       - name: Check for uncommitted changes in generated bindings
+        if: steps.contract_id.outputs.contract_id != ''
         run: |
           if [[ -n $(git status --porcelain frontend/src/contracts/generated) ]]; then
             echo "::error::Run npm run gen:bindings and commit the result. Stale contract bindings detected."
@@ -42,3 +71,8 @@ jobs:
             exit 1
           fi
           echo "Bindings are up to date."
+
+      - name: Type-check generated bindings
+        if: steps.contract_id.outputs.contract_id != ''
+        working-directory: frontend
+        run: npx tsc --noEmit
