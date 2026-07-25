@@ -98,6 +98,16 @@ pub struct StreamResumed {
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamStartTimeUpdated {
+    pub stream_id: u64,
+    pub sender: Address,
+    pub old_start_time: u64,
+    pub new_start_time: u64,
+    pub updated_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClawbackExecuted {
     pub stream_id: u64,
     pub amount: i128,
@@ -585,6 +595,55 @@ impl StellarStreamContract {
                 stream_id,
                 sender,
                 resumed_at: now,
+            },
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Update start time
+    // ---------------------------------------------------------------------------
+
+    /// Update the start time of a stream.
+    ///
+    /// Only the original sender may invoke this function. The new start time
+    /// must be strictly in the future relative to the current ledger time,
+    /// strictly less than the stream's end time, and the stream must not be
+    /// canceled. Emits a `Stream/StartUp` event so off-chain listeners can
+    /// reconcile.
+    pub fn update_start_time(env: Env, stream_id: u64, sender: Address, new_start_time: u64) {
+        let mut stream = read_stream(&env, stream_id);
+        if stream.sender != sender {
+            panic!("sender mismatch");
+        }
+        sender.require_auth();
+
+        if stream.canceled {
+            panic!("stream canceled");
+        }
+
+        let now = env.ledger().timestamp();
+        if new_start_time <= now {
+            panic!("new_start_time must be in the future");
+        }
+        if new_start_time >= stream.end_time {
+            panic!("new_start_time must be before stream end_time");
+        }
+
+        let old_start_time = stream.start_time;
+        stream.start_time = new_start_time;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(stream_id), &stream);
+
+        env.events().publish(
+            (symbol_short!("Stream"), symbol_short!("StartUp")),
+            StreamStartTimeUpdated {
+                stream_id,
+                sender,
+                old_start_time,
+                new_start_time,
+                updated_at: now,
             },
         );
     }

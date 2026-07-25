@@ -297,6 +297,22 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           event.ledger,
         );
         break;
+
+      case "StartUp":
+        recordEventWithDb(
+          db,
+          value.stream_id.toString(),
+          "start_time_updated",
+          timestamp,
+          value.sender,
+          undefined,
+          {
+            oldStartTime: Number(value.old_start_time),
+            newStartTime: Number(value.new_start_time),
+          },
+          event.ledger,
+        );
+        break;
     }
   } catch (err) {
     logger.error({ err }, "failed to process event");
