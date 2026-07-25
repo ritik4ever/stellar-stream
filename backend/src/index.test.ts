@@ -612,6 +612,134 @@ it("returns 400 when durationSeconds is below the 60-second minimum", async () =
       ]),
     );
   });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Boundary Tests for Duration and Amount Validation
+  // ══════════════════════════════════════════════════════════════════════════
+
+  describe("Duration boundary tests", () => {
+    it("returns 400 when durationSeconds is 59 (below minimum)", async () => {
+      const response = await request(app)
+        .post("/api/streams")
+        .set("Authorization", "Bearer mock_token")
+        .send({
+          sender: SENDER_A,
+          recipient: RECIPIENT_1,
+          assetCode: "USDC",
+          totalAmount: 100,
+          durationSeconds: 59,
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe("VALIDATION_ERROR");
+      expect(response.body.error).toContain("durationSeconds must be at least 60 seconds");
+      expect(response.body.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ field: "durationSeconds" }),
+        ]),
+      );
+    });
+
+    it("returns 201 when durationSeconds is exactly 60 (minimum boundary)", async () => {
+      const response = await request(app)
+        .post("/api/streams")
+        .set("Authorization", "Bearer mock_token")
+        .send({
+          sender: SENDER_A,
+          recipient: RECIPIENT_1,
+          assetCode: "USDC",
+          totalAmount: 100,
+          durationSeconds: 60,
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.data).toMatchObject({
+        durationSeconds: 60,
+      });
+    });
+  });
+
+  describe("Amount precision boundary tests", () => {
+    it("returns 201 when totalAmount is 0.0000001 (1 stroop - minimum valid)", async () => {
+      const response = await request(app)
+        .post("/api/streams")
+        .set("Authorization", "Bearer mock_token")
+        .send({
+          sender: SENDER_A,
+          recipient: RECIPIENT_1,
+          assetCode: "USDC",
+          totalAmount: 0.0000001,
+          durationSeconds: 120,
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.data).toMatchObject({
+        totalAmount: 0.0000001,
+      });
+    });
+
+    it("returns 400 when totalAmount is 0", async () => {
+      const response = await request(app)
+        .post("/api/streams")
+        .set("Authorization", "Bearer mock_token")
+        .send({
+          sender: SENDER_A,
+          recipient: RECIPIENT_1,
+          assetCode: "USDC",
+          totalAmount: 0,
+          durationSeconds: 120,
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe("VALIDATION_ERROR");
+      expect(response.body.error).toContain("Amount must be greater than zero");
+      expect(response.body.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ field: "totalAmount" }),
+        ]),
+      );
+    });
+
+    it("returns 400 when totalAmount has more than 7 decimal places", async () => {
+      const response = await request(app)
+        .post("/api/streams")
+        .set("Authorization", "Bearer mock_token")
+        .send({
+          sender: SENDER_A,
+          recipient: RECIPIENT_1,
+          assetCode: "USDC",
+          totalAmount: 100.12345678, // 8 decimal places
+          durationSeconds: 120,
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe("VALIDATION_ERROR");
+      expect(response.body.error).toContain("Amount cannot have more than 7 decimal places");
+      expect(response.body.details).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ field: "totalAmount" }),
+        ]),
+      );
+    });
+
+    it("returns 201 when totalAmount has exactly 7 decimal places", async () => {
+      const response = await request(app)
+        .post("/api/streams")
+        .set("Authorization", "Bearer mock_token")
+        .send({
+          sender: SENDER_A,
+          recipient: RECIPIENT_1,
+          assetCode: "USDC",
+          totalAmount: 100.1234567, // exactly 7 decimal places
+          durationSeconds: 120,
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.data).toMatchObject({
+        totalAmount: 100.1234567,
+      });
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
