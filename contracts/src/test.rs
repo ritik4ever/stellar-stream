@@ -2332,3 +2332,173 @@ fn test_cancel_after_partial_claim_full_lifecycle() {
     let recipient_balance = token_client.balance(&recipient);
     assert_eq!(sender_refund + recipient_balance, 100);
 }
+
+// ============================================================================
+// #589 \u2014 update_start_time tests
+// ============================================================================
+
+#[test]
+fn test_update_start_time_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    // Create a stream scheduled to start in the future.
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &2000, &3000, &0, &None);
+    let stream_before = client.get_stream(&stream_id);
+    assert_eq!(stream_before.start_time, 2000);
+
+    // Move the ledger forward so new_start_time (2500) is in the future.
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    // Update the start time to a new future time before end_time (3000).
+    client.update_start_time(&stream_id, &sender, &2500);
+
+    let stream_after = client.get_stream(&stream_id);
+    assert_eq!(stream_after.start_time, 2500);
+}
+
+#[test]
+fn test_update_start_time_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &2000, &3000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    client.update_start_time(&stream_id, &sender, &2500);
+
+    let last_event = env.events().all().last().unwrap();
+    assert_eq!(last_event.0, contract_id);
+    assert_eq!(
+        last_event.1,
+        (symbol_short!("Stream"), symbol_short!("StartUp")).into_val(&env)
+    );
+
+    let event_data: StreamStartTimeUpdated = last_event.2.into_val(&env);
+    assert_eq!(event_data.stream_id, stream_id);
+    assert_eq!(event_data.sender, sender);
+    assert_eq!(event_data.old_start_time, 2000);
+    assert_eq!(event_data.new_start_time, 2500);
+    assert_eq!(event_data.updated_at, 1000);
+}
+
+#[test]
+#[should_panic(expected = "sender mismatch")]
+fn test_update_start_time_fails_with_wrong_sender() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let wrong_sender = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &2000, &3000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    client.update_start_time(&stream_id, &wrong_sender, &2500);
+}
+
+#[test]
+#[should_panic(expected = "new_start_time must be in the future")]
+fn test_update_start_time_rejects_past_timestamp() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &2000, &3000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 2500);
+    // 2000 is not strictly greater than now (2500)
+    client.update_start_time(&stream_id, &sender, &2000);
+}
+
+#[test]
+#[should_panic(expected = "new_start_time must be before stream end_time")]
+fn test_update_start_time_rejects_at_end_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &2000, &3000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    // Setting new_start_time equal to end_time (3000) must be rejected.
+    client.update_start_time(&stream_id, &sender, &3000);
+}
+
+#[test]
+#[should_panic(expected = "new_start_time must be before stream end_time")]
+fn test_update_start_time_rejects_after_end_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &2000, &3000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    client.update_start_time(&stream_id, &sender, &3500);
+}
+
+#[test]
+#[should_panic(expected = "stream canceled")]
+fn test_update_start_time_rejects_on_canceled_stream() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &2000, &3000, &0, &None);
+    client.cancel(&stream_id, &sender);
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.update_start_time(&stream_id, &sender, &2500);
+}
