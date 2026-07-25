@@ -68,6 +68,19 @@ vi.mock("@stellar/stellar-sdk", () => {
     }
   }
 
+  const MockSorobanRpc = {
+    Server: class MockSorobanServer {
+      constructor(public serverUrl: string) {}
+      simulateTransaction = vi.fn().mockResolvedValue({
+        result: { retval: { toJSON: () => ({}) } },
+      });
+      getNetwork = vi.fn().mockResolvedValue({ passphrase: "Test SDF Network ; September 2015" });
+    },
+    Api: {
+      isSimulationError: vi.fn(() => false),
+    },
+  };
+
   return {
     Address: MockAddress,
     Contract: MockContract,
@@ -82,6 +95,7 @@ vi.mock("@stellar/stellar-sdk", () => {
     rpc: {
       Server: MockServer,
     },
+    SorobanRpc: MockSorobanRpc,
   };
 });
 

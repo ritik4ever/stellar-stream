@@ -1,4 +1,6 @@
 import { CreateStreamPayload, OpenIssue, Stream } from "../types/stream";
+import { streamContract } from "./contractClient";
+import type { CreateStreamArgs, ClaimArgs, CancelArgs } from "./contractClient";
 
 type CacheEntry<T> = {
   data: T;
@@ -401,6 +403,174 @@ export async function getSenderEvents(senderAddress: string, limit: number = 10)
 
 export function clearCache() {
   cache.clear();
+}
+
+/**
+ * Contract-based stream operations
+ * These use the Soroban contract directly via RPC simulation (read-only)
+ * or transaction building (write operations requiring wallet signing)
+ */
+
+export interface CreateStreamContractPayload {
+  sender: string;
+  recipient: string;
+  token: string;
+  totalAmount: bigint;
+  startTime: bigint;
+  endTime: bigint;
+  cliffSeconds: bigint;
+  metadata?: Map<string, string>;
+}
+
+/**
+ * Create a stream via the Soroban contract.
+ * Returns transaction XDR for wallet signing (Freighter, etc.).
+ */
+export async function createStreamContract(
+  payload: CreateStreamContractPayload
+): Promise<string> {
+  if (!streamContract) {
+    throw new Error("Contract not configured. Set VITE_CONTRACT_ID in .env");
+  }
+  return streamContract.buildCreateStreamTransaction({
+    sender: payload.sender,
+    recipient: payload.recipient,
+    token: payload.token,
+    total_amount: payload.totalAmount,
+    start_time: payload.startTime,
+    end_time: payload.endTime,
+    cliff_seconds: payload.cliffSeconds,
+    metadata: payload.metadata ?? null,
+  });
+}
+
+/**
+ * Get claimable amount for a stream directly from the contract.
+ * No backend needed - reads from chain via RPC simulation.
+ */
+export async function getClaimableContract(
+  streamId: string,
+  atTime: number = Math.floor(Date.now() / 1000)
+): Promise<bigint> {
+  if (!streamContract) {
+    throw new Error("Contract not configured. Set VITE_CONTRACT_ID in .env");
+  }
+  return streamContract.claimable(BigInt(streamId), BigInt(atTime));
+}
+
+/**
+ * Get claimable amounts for multiple streams in a single call.
+ */
+export async function getClaimableBatchContract(
+  streamIds: string[],
+  atTime: number = Math.floor(Date.now() / 1000)
+): Promise<Map<bigint, bigint>> {
+  if (!streamContract) {
+    throw new Error("Contract not configured. Set VITE_CONTRACT_ID in .env");
+  }
+  return streamContract.getClaimableBatch(
+    streamIds.map((id) => BigInt(id)),
+    BigInt(atTime)
+  );
+}
+
+/**
+ * Claim vested tokens via the contract.
+ * Returns transaction XDR for wallet signing by the recipient.
+ */
+export async function claimStreamContract(
+  streamId: string,
+  recipient: string,
+  amount: bigint
+): Promise<string> {
+  if (!streamContract) {
+    throw new Error("Contract not configured. Set VITE_CONTRACT_ID in .env");
+  }
+  return streamContract.buildClaimTransaction({
+    stream_id: BigInt(streamId),
+    recipient,
+    amount,
+  });
+}
+
+/**
+ * Cancel a stream via the contract.
+ * Returns transaction XDR for wallet signing by the sender.
+ */
+export async function cancelStreamContract(
+  streamId: string,
+  sender: string
+): Promise<string> {
+  if (!streamContract) {
+    throw new Error("Contract not configured. Set VITE_CONTRACT_ID in .env");
+  }
+  return streamContract.buildCancelTransaction({
+    stream_id: BigInt(streamId),
+    sender,
+  });
+}
+
+/**
+ * Pause a stream via the contract.
+ * Returns transaction XDR for wallet signing by the sender.
+ */
+export async function pauseStreamContract(
+  streamId: string,
+  sender: string
+): Promise<string> {
+  if (!streamContract) {
+    throw new Error("Contract not configured. Set VITE_CONTRACT_ID in .env");
+  }
+  return streamContract.buildPauseStreamTransaction({
+    stream_id: BigInt(streamId),
+    sender,
+  });
+}
+
+/**
+ * Resume a paused stream via the contract.
+ * Returns transaction XDR for wallet signing by the sender.
+ */
+export async function resumeStreamContract(
+  streamId: string,
+  sender: string
+): Promise<string> {
+  if (!streamContract) {
+    throw new Error("Contract not configured. Set VITE_CONTRACT_ID in .env");
+  }
+  return streamContract.buildResumeStreamTransaction({
+    stream_id: BigInt(streamId),
+    sender,
+  });
+}
+
+/**
+ * Get a stream directly from the contract (bypasses backend).
+ */
+export async function getStreamContract(streamId: string): Promise<Stream> {
+  if (!streamContract) {
+    throw new Error("Contract not configured. Set VITE_CONTRACT_ID in .env");
+  }
+  const stream = await streamContract.getStream(BigInt(streamId));
+  
+  // Map contract Stream type to frontend Stream type
+  return {
+    id: streamId,
+    sender: stream.sender,
+    recipient: stream.recipient,
+    asset: stream.token,
+    total_amount: stream.total_amount.toString(),
+    claimed_amount: stream.claimed_amount.toString(),
+    start_time: Number(stream.start_time),
+    end_time: Number(stream.end_time),
+    cliff_seconds: Number(stream.cliff_seconds),
+    canceled: stream.canceled,
+    paused: stream.paused,
+    pause_started_at: stream.pause_started_at ? Number(stream.pause_started_at) : undefined,
+    metadata: stream.metadata ? Object.fromEntries(stream.metadata) : undefined,
+    created_at: Number(stream.start_time),
+    updated_at: Number(stream.start_time),
+  };
 }
 
 
