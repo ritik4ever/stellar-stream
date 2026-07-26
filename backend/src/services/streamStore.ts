@@ -453,9 +453,6 @@ export function calculateProgress(
   const effectiveAt =
     stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
 
-  const elapsed = Math.max(0, Math.min(effectiveAt - stream.startAt - stream.pausedDuration, stream.durationSeconds));
-
-  const ratio = Math.min(1, elapsed / stream.durationSeconds);
   const elapsed = Math.max(0, Math.max(0, effectiveAt - stream.startAt) - stream.pausedDuration);
   const ratio = stream.durationSeconds <= 0 ? 1 : Math.min(1, elapsed / stream.durationSeconds);
   const elapsedSeconds = stream.durationSeconds <= 0 ? 0 : Math.min(elapsed, stream.durationSeconds);
@@ -1178,19 +1175,21 @@ export async function cancelStream(
     logger.warn({ err, streamId: id }, "failed to get refund amount from chain");
   }
 
-  // Invalidate cache
-  await invalidateCache(`stream:${id}`);
-  await invalidateCache("streams:list:");
-  await invalidateCache("streams:export:");
-  resetStatsCache();
-  resetStreamMetricsCache();
-
   // Atomically write the updated stream row and the cancellation event.
+  // DB must be updated BEFORE cache invalidation to prevent a race where a
+  // concurrent GET /api/streams re-caches the stale (pre-cancel) state.
   const db = getDb();
   db.transaction(() => {
     upsertStream(stream);
     recordEventWithDb(db, stream.id, "canceled", stream.canceledAt!, stream.sender);
   })();
+
+  // Invalidate cache after DB commit so the next read picks up canceled status.
+  await invalidateCache(`stream:${id}`);
+  await invalidateCache("streams:list:");
+  await invalidateCache("streams:export:");
+  resetStatsCache();
+  resetStreamMetricsCache();
 
   // Webhook fires after the transaction commits.
   triggerWebhook("canceled", stream);
