@@ -280,6 +280,45 @@ export async function listOpenIssues(): Promise<OpenIssue[]> {
   return body.data;
 }
 
+export async function getAdminOpsCircuitBreakers(): Promise<any[]> {
+  const headers: Record<string, string> = {};
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+
+  const response = await fetch(`${API_BASE}/admin/ops/circuit-breakers`, { headers });
+  const body = await parseResponse<{ data: any[] }>(response);
+  return body.data;
+}
+
+export async function getAdminOpsQueueHealth(): Promise<any> {
+  const headers: Record<string, string> = {};
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+
+  const response = await fetch(`${API_BASE}/admin/ops/queue-health`, { headers });
+  const body = await parseResponse<{ data: any }>(response);
+  return body.data;
+}
+
+export async function resetAdminOpsCircuitBreaker(portfolioId: string): Promise<any> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+
+  const response = await fetch(`${API_BASE}/admin/ops/circuit-breakers/${portfolioId}/reset`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ portfolioId }),
+  });
+  const body = await parseResponse<{ data: any }>(response);
+  return body.data;
+}
+
 export interface StreamEvent {
   id: number;
   streamId: string;

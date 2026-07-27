@@ -40,6 +40,10 @@ export class CircuitBreaker {
   private state: CircuitState = CircuitState.CLOSED;
   private failureCount: number = 0;
   private lastFailureTime: number = 0;
+  private openedAt: number | null = null;
+  private lastFailureAt: number | null = null;
+  private lastSuccessAt: number | null = null;
+  private reason: string | null = null;
   private readonly failureThreshold: number = 5;
   private readonly timeoutMs: number;
 
@@ -52,15 +56,18 @@ export class CircuitBreaker {
       const now = Date.now();
       if (now - this.lastFailureTime >= this.timeoutMs) {
         this.setState(CircuitState.HALF_OPEN);
+        this.reason = "Half-open probe ready";
       }
     }
     return this.state;
   }
 
   public onSuccess(): void {
+    this.lastSuccessAt = Date.now();
     if (this.state !== CircuitState.CLOSED) {
       logger.info("circuit breaker probe succeeded");
       this.setState(CircuitState.CLOSED);
+      this.reason = null;
     }
     this.failureCount = 0;
   }
@@ -68,14 +75,54 @@ export class CircuitBreaker {
   public onFailure(): void {
     this.failureCount++;
     this.lastFailureTime = Date.now();
+    this.lastFailureAt = this.lastFailureTime;
 
     if (this.state === CircuitState.CLOSED && this.failureCount >= this.failureThreshold) {
       logger.warn({ failureThreshold: this.failureThreshold }, "circuit breaker failure threshold reached");
+      this.openedAt = this.lastFailureTime;
+      this.reason = "Failure threshold reached";
       this.setState(CircuitState.OPEN);
     } else if (this.state === CircuitState.HALF_OPEN) {
       logger.warn("circuit breaker probe failed");
+      this.openedAt = this.lastFailureTime;
+      this.reason = "Probe failed";
       this.setState(CircuitState.OPEN);
     }
+  }
+
+  public reset(): void {
+    this.state = CircuitState.CLOSED;
+    this.failureCount = 0;
+    this.lastFailureTime = 0;
+    this.openedAt = null;
+    this.lastFailureAt = null;
+    this.lastSuccessAt = Date.now();
+    this.reason = null;
+    this.setState(CircuitState.CLOSED);
+  }
+
+  public getSnapshot(): {
+    portfolioId: string;
+    state: CircuitState;
+    healthy: boolean;
+    isOpen: boolean;
+    failureCount: number;
+    reason: string | null;
+    openedAt: number | null;
+    lastFailureAt: number | null;
+    lastSuccessAt: number | null;
+  } {
+    return {
+      portfolioId: "indexer",
+      state: this.getState(),
+      healthy: this.getState() !== CircuitState.OPEN,
+      isOpen: this.getState() === CircuitState.OPEN,
+      failureCount: this.failureCount,
+      reason: this.reason,
+      openedAt: this.openedAt,
+      lastFailureAt: this.lastFailureAt,
+      lastSuccessAt: this.lastSuccessAt,
+    };
   }
 
   private setState(newState: CircuitState): void {
@@ -96,6 +143,15 @@ const circuitBreaker = new CircuitBreaker(CIRCUIT_BREAKER_TIMEOUT_MS);
 
 export function getCircuitBreakerStatus(): CircuitState {
   return circuitBreaker.getState();
+}
+
+export function getCircuitBreakerSnapshot() {
+  return circuitBreaker.getSnapshot();
+}
+
+export function resetCircuitBreaker() {
+  circuitBreaker.reset();
+  return circuitBreaker.getSnapshot();
 }
 
 function isFallbackPollingEnabled(): boolean {

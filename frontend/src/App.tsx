@@ -1,11 +1,13 @@
 ﻿import { lazy, Suspense, useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, useNavigate, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useNavigate, useLocation, Navigate } from "react-router-dom";
 import { DarkModeToggle } from "./components/DarkModeToggle";
 import { OfflineBanner } from "./components/OfflineBanner";
 import { WalletButton } from "./components/WalletButton";
 import { useFreighter } from "./hooks/useFreighter";
 import { useTheme } from "./hooks/useTheme";
 import { DashboardPage } from "./pages/DashboardPage";
+import { AdminOpsPage } from "./pages/AdminOps";
+import { isAdminUser } from "./services/auth";
 
 const SenderDashboard = lazy(() =>
   import("./components/SenderDashboard").then((m) => ({ default: m.SenderDashboard })),
@@ -14,15 +16,21 @@ const RecipientDashboard = lazy(() =>
   import("./components/RecipientDashboard").then((m) => ({ default: m.RecipientDashboard })),
 );
 
+function AdminOpsRoute() {
+  const isAdmin = isAdminUser();
+  return isAdmin ? <AdminOpsPage isAdmin /> : <Navigate to="/" replace />;
+}
+
 function AppContent() {
   const wallet = useFreighter();
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
+  const isAdmin = isAdminUser();
 
   useEffect(() => {
     const path = location.pathname;
-    if (path !== "/" && path !== "/sender" && path !== "/recipient") {
+    if (path !== "/" && path !== "/sender" && path !== "/recipient" && path !== "/admin/ops") {
       navigate("/");
     }
   }, [location.pathname, navigate]);
@@ -32,7 +40,9 @@ function AppContent() {
       ? "sender"
       : location.pathname === "/recipient"
         ? "recipient"
-        : "dashboard";
+        : location.pathname === "/admin/ops"
+          ? "admin-ops"
+          : "dashboard";
 
   return (
     <div className="app-shell">
@@ -75,6 +85,15 @@ function AppContent() {
         >
           Recipient dashboard
         </button>
+        {isAdmin ? (
+          <button
+            type="button"
+            className={`app-nav-link ${currentTab === "admin-ops" ? "app-nav-link--active" : ""}`}
+            onClick={() => navigate("/admin/ops")}
+          >
+            Admin Ops
+          </button>
+        ) : null}
       </nav>
 
       <OfflineBanner />
@@ -90,6 +109,7 @@ function AppContent() {
             path="/recipient"
             element={<RecipientDashboard recipientAddress={wallet.address} />}
           />
+          <Route path="/admin/ops" element={<AdminOpsRoute />} />
         </Routes>
       </Suspense>
     </div>

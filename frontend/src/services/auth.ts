@@ -1,4 +1,22 @@
+import { getAuthToken } from "./api";
+
 const API_BASE = import.meta.env.VITE_API_URL ?? "/api";
+
+export function isAdminUser(): boolean {
+  const token = getAuthToken();
+  if (!token) return false;
+
+  const payload = token.split(".")[1];
+  if (!payload) return false;
+
+  try {
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const decoded = JSON.parse(atob(normalized)) as { role?: string; isAdmin?: boolean; accountId?: string };
+    return decoded.role === "admin" || decoded.isAdmin === true || decoded.accountId === "admin";
+  } catch {
+    return false;
+  }
+}
 
 export async function getAuthChallenge(accountId: string): Promise<string> {
   const response = await fetch(

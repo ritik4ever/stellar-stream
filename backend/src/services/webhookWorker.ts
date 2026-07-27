@@ -7,12 +7,47 @@ import { logger } from "../logger";
 
 let isProcessing = false;
 let pollingInterval: NodeJS.Timeout | null = null;
+let workerRunning = false;
+let lastHeartbeatAt: number | null = null;
+let lastRunAt: number | null = null;
+let consecutiveErrors = 0;
+
+export function getWebhookWorkerHealth(): {
+  healthy: boolean;
+  status: string;
+  running: boolean;
+  lastHeartbeatAt: number | null;
+  lastRunAt: number | null;
+  consecutiveErrors: number;
+} {
+  const healthy = workerRunning && !!lastHeartbeatAt && Date.now() / 1000 - lastHeartbeatAt < 120;
+  return {
+    healthy,
+    status: healthy ? "healthy" : "degraded",
+    running: workerRunning,
+    lastHeartbeatAt,
+    lastRunAt,
+    consecutiveErrors,
+  };
+}
+
+export function getPendingWebhookDeliveryCount(): number {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT COUNT(*) as count FROM webhook_deliveries WHERE status = 'pending'")
+    .get() as { count: number };
+  return row.count;
+}
 
 export const processWebhookQueue = async () => {
   if (isProcessing) return;
   isProcessing = true;
 
   try {
+    const now = Math.floor(Date.now() / 1000);
+    lastRunAt = now;
+    lastHeartbeatAt = now;
+
     const url = process.env.WEBHOOK_DESTINATION_URL;
     if (!url) {
       isProcessing = false;
@@ -27,7 +62,7 @@ export const processWebhookQueue = async () => {
     }
 
     const db = getDb();
-    const now = Math.floor(Date.now() / 1000);
+    const runAt = Math.floor(Date.now() / 1000);
 
     // Fetch pending deliveries that are due
     const pendingDeliveries = db
@@ -36,7 +71,7 @@ export const processWebhookQueue = async () => {
          WHERE status = 'pending' AND next_retry_at <= ? 
          ORDER BY next_retry_at ASC LIMIT 10`
       )
-      .all(now);
+      .all(runAt);
 
     for (const delivery of pendingDeliveries) {
       const { id, event, payload, attempt, max_attempts } = delivery;
@@ -62,12 +97,14 @@ export const processWebhookQueue = async () => {
         success = true;
       } catch (error: any) {
         errorMsg = error.message || "Unknown error";
+        consecutiveErrors += 1;
         logger.error({ err: error, deliveryId: id, attempt: attempt + 1 }, "webhook delivery attempt failed");
       }
 
       const updateNow = Math.floor(Date.now() / 1000);
 
       if (success) {
+        consecutiveErrors = 0;
         // Mark as success
         db.prepare(
           `UPDATE webhook_deliveries SET status = 'success', last_attempt_at = ? WHERE id = ?`
@@ -103,6 +140,7 @@ export const processWebhookQueue = async () => {
       }
     }
   } catch (err: any) {
+    consecutiveErrors += 1;
     logger.error({ err }, "error processing webhook queue");
   } finally {
     isProcessing = false;
@@ -113,6 +151,8 @@ export const startWebhookWorker = (intervalMs: number = 5000) => {
   if (pollingInterval) {
     clearInterval(pollingInterval);
   }
+  workerRunning = true;
+  lastHeartbeatAt = Math.floor(Date.now() / 1000);
   // Immediately process
   processWebhookQueue();
   // Set interval
@@ -126,4 +166,6 @@ export const stopWebhookWorker = () => {
     pollingInterval = null;
     logger.info("webhook worker stopped");
   }
+  workerRunning = false;
+  lastHeartbeatAt = null;
 };

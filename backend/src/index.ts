@@ -31,6 +31,8 @@ import {
   initIndexer,
   startIndexer,
   getCircuitBreakerStatus,
+  getCircuitBreakerSnapshot,
+  resetCircuitBreaker,
 } from "./services/indexer";
 import { adminAuth } from "./middleware/adminAuth";
 import { deleteStreamById, reconcileStream } from "./services/streamStore";
@@ -41,7 +43,7 @@ import { getStreamMetrics } from "./services/streamMetrics";
 import { startReconciliationJob } from "./services/reconciliationJob";
 import { startArchiveJob } from "./services/archiveJob";
 import { startStreamProgressBroadcaster } from "./services/streamProgressBroadcaster";
-import { startWebhookWorker } from "./services/webhookWorker";
+import { startWebhookWorker, getPendingWebhookDeliveryCount, getWebhookWorkerHealth } from "./services/webhookWorker";
 import {
   getDeadLetters,
   countDeadLetters,
@@ -515,6 +517,27 @@ app.post(["/api/admin/auth", "/api/auth/admin"], (req: Request, res: Response) =
   }
   const token = jwt.sign({ role: "admin", accountId: "admin", isAdmin: true }, getJwtSecret(), { expiresIn: "24h" });
   res.json({ token });
+});
+
+app.get("/api/admin/ops/circuit-breakers", adminJwtAuth, (_req: Request, res: Response) => {
+  res.json({ data: [getCircuitBreakerSnapshot()] });
+});
+
+app.post("/api/admin/ops/circuit-breakers/:portfolioId/reset", adminJwtAuth, (req: Request, res: Response) => {
+  const portfolioId = req.params.portfolioId;
+  if (portfolioId !== "indexer") {
+    sendApiError(req, res, 404, "Portfolio not found", { code: "NOT_FOUND" });
+    return;
+  }
+
+  const snapshot = resetCircuitBreaker();
+  res.json({ data: snapshot });
+});
+
+app.get("/api/admin/ops/queue-health", adminJwtAuth, (_req: Request, res: Response) => {
+  const backlogDepth = getPendingWebhookDeliveryCount();
+  const worker = getWebhookWorkerHealth();
+  res.json({ data: { backlogDepth, worker } });
 });
 
 app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
@@ -1044,51 +1067,22 @@ app.get(
       progress: calculateProgress(stream, now),
     }));
 
-  const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
-  if (!parsedQuery.success) {
-    sendValidationError(req, res, parsedQuery.error.issues);
-    return;
-  }
-  const query = parsedQuery.data;
-
-  let data = listStreamsByRecipient(accountId)
-    .map((stream) => ({
-      ...stream,
-      progress: calculateProgress(stream),
-    }));
-
-  if (query.status) {
-    data = data.filter((stream) => stream.progress.status === query.status);
-  }
-  if (query.sender) {
-    data = data.filter(
-      (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
-    );
-  }
-  if (query.asset) {
-    data = data.filter(
-      (stream) => stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
-    );
-  }
-  if (query.assetCode && query.assetCode.length > 0) {
-    data = data.filter((stream) =>
-      query.assetCode!.includes(stream.assetCode.toUpperCase()),
-    );
-  }
-  if (query.q && query.q.length > 0) {
-    const searchTerm = query.q.toLowerCase();
-    data = data.filter((stream) => {
-      return (
-        stream.id.toLowerCase().includes(searchTerm) ||
-        stream.sender.toLowerCase().includes(searchTerm) ||
-        stream.recipient.toLowerCase().includes(searchTerm) ||
-        stream.assetCode.toLowerCase().includes(searchTerm)
+    if (query.status) {
+      data = data.filter((stream) => stream.progress.status === query.status);
+    }
+    if (query.sender) {
+      data = data.filter(
+        (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
       );
     }
     if (query.asset) {
       data = data.filter(
-        (stream) =>
-          stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
+        (stream) => stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
+      );
+    }
+    if (query.assetCode && query.assetCode.length > 0) {
+      data = data.filter((stream) =>
+        query.assetCode!.includes(stream.assetCode.toUpperCase()),
       );
     }
     if (query.q && query.q.length > 0) {
@@ -1102,6 +1096,12 @@ app.get(
         );
       });
     }
+    if (query.minAmount !== undefined) {
+      data = data.filter((stream) => stream.totalAmount >= query.minAmount!);
+    }
+    if (query.maxAmount !== undefined) {
+      data = data.filter((stream) => stream.totalAmount <= query.maxAmount!);
+    }
 
     const hasPage = req.query.page !== undefined;
     const hasLimit = req.query.limit !== undefined;
@@ -1114,12 +1114,7 @@ app.get(
     const offset = (page - 1) * limit;
     const paginatedData = data.slice(offset, offset + limit);
 
-    res.json({
-      data: paginatedData,
-      total,
-      page,
-      limit,
-    });
+    res.json({ data: paginatedData, total, page, limit });
   },
 );
 
