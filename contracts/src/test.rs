@@ -763,6 +763,7 @@ fn test_vested_amount_fuzz_invariants() {
         canceled: false,
         paused: false,
         pause_started_at: None,
+        completed: false,
         metadata: None,
     };
 
@@ -1419,6 +1420,7 @@ fn test_resume_stream_panic_on_missing_timestamp() {
         canceled: false,
         paused: true,
         pause_started_at: None,
+        completed: false,
         metadata: None,
     };
 
@@ -2331,4 +2333,162 @@ fn test_cancel_after_partial_claim_full_lifecycle() {
     // Step 7: Token conservation: sender_refund + claimed == total original amount
     let recipient_balance = token_client.balance(&recipient);
     assert_eq!(sender_refund + recipient_balance, 100);
+}
+
+// =============================================================================
+// #592 — Contract-level stream expiry and auto-complete logic
+// =============================================================================
+
+/// A stream is not marked completed the instant before its end time.
+#[test]
+fn test_stream_not_completed_before_end_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 999);
+    let stream = client.get_stream(&stream_id);
+    assert!(!stream.completed);
+}
+
+/// Boundary: get_stream reports completed == true exactly when now == end_time.
+#[test]
+fn test_get_stream_completed_exactly_at_end_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    let stream = client.get_stream(&stream_id);
+    assert!(stream.completed);
+}
+
+/// Boundary: get_stream still reports completed == true one second after end_time.
+#[test]
+fn test_get_stream_completed_one_second_after_end_time() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 1001);
+    let stream = client.get_stream(&stream_id);
+    assert!(stream.completed);
+}
+
+/// A claim call made after end_time finalizes the stream: the completed flag is
+/// persisted and a StreamCompleted event is emitted.
+#[test]
+fn test_claim_after_end_time_finalizes_stream_and_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    // Exactly at end_time — the full amount is claimable and the claim finalizes the stream.
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    let claimed = client.claim(&stream_id, &recipient, &1000);
+    assert_eq!(claimed, 1000);
+
+    let stream = client.get_stream(&stream_id);
+    assert!(stream.completed);
+
+    let last_event = env.events().all().last().unwrap();
+    assert_eq!(last_event.0, contract_id);
+    assert_eq!(
+        last_event.1,
+        (symbol_short!("Stream"), symbol_short!("Completed")).into_val(&env)
+    );
+    let event_data: StreamCompleted = last_event.2.into_val(&env);
+    assert_eq!(event_data.stream_id, stream_id);
+    assert_eq!(event_data.recipient, recipient);
+    assert_eq!(event_data.total_amount, 1000);
+    assert_eq!(event_data.completed_at, 1000);
+}
+
+/// Once a stream is completed (fully vested and fully claimed), no further claims
+/// are accepted — even one second after end_time.
+#[test]
+#[should_panic(expected = "amount exceeds claimable")]
+fn test_no_further_claims_after_completion() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    client.claim(&stream_id, &recipient, &1000);
+
+    // One second after end_time, everything has already been claimed.
+    env.ledger().with_mut(|l| l.timestamp = 1001);
+    client.claim(&stream_id, &recipient, &1);
+}
+
+/// A canceled stream is never reported as completed, even long after its
+/// (shortened) end_time has passed — cancellation and completion are distinct
+/// terminal states.
+#[test]
+fn test_canceled_stream_is_never_marked_completed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.cancel(&stream_id, &sender);
+
+    env.ledger().with_mut(|l| l.timestamp = 9999);
+    let stream = client.get_stream(&stream_id);
+    assert!(stream.canceled);
+    assert!(!stream.completed);
 }

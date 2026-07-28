@@ -25,6 +25,7 @@ pub struct Stream {
     pub canceled: bool,
     pub paused: bool,
     pub pause_started_at: Option<u64>,
+    pub completed: bool,
 
     pub metadata: Option<Map<String, String>>,
 }
@@ -76,6 +77,15 @@ pub struct StreamClaimed {
 pub struct StreamCanceled {
     pub stream_id: u64,
     pub sender: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamCompleted {
+    pub stream_id: u64,
+    pub recipient: Address,
+    pub total_amount: i128,
+    pub completed_at: u64,
 }
 
 #[contracttype]
@@ -213,6 +223,7 @@ impl StellarStreamContract {
             canceled: false,
             paused: false,
             pause_started_at: None,
+            completed: false,
 
             metadata: metadata.clone(),
         };
@@ -311,6 +322,7 @@ impl StellarStreamContract {
                 canceled: false,
                 paused: false,
                 pause_started_at: None,
+                completed: false,
                 metadata: None,
             };
             
@@ -361,7 +373,11 @@ impl StellarStreamContract {
     }
 
     pub fn get_stream(env: Env, stream_id: u64) -> Stream {
-        read_stream(&env, stream_id)
+        let mut stream = read_stream(&env, stream_id);
+        if !stream.completed && !stream.canceled && env.ledger().timestamp() >= stream.end_time {
+            stream.completed = true;
+        }
+        stream
     }
 
     pub fn get_next_stream_id(env: Env) -> u64 {
@@ -444,14 +460,32 @@ impl StellarStreamContract {
         token_client.transfer(&contract_address, &recipient, &amount);
 
         stream.claimed_amount += amount;
+
+        let newly_completed = !stream.completed && !stream.canceled && now >= stream.end_time;
+        if newly_completed {
+            stream.completed = true;
+        }
+
         env.storage()
             .persistent()
             .set(&DataKey::Stream(stream_id), &stream);
 
         env.events().publish(
             (symbol_short!("Stream"), symbol_short!("Claimed")),
-            StreamClaimed { stream_id, recipient, amount },
+            StreamClaimed { stream_id, recipient: recipient.clone(), amount },
         );
+
+        if newly_completed {
+            env.events().publish(
+                (symbol_short!("Stream"), symbol_short!("Completed")),
+                StreamCompleted {
+                    stream_id,
+                    recipient,
+                    total_amount: stream.total_amount,
+                    completed_at: now,
+                },
+            );
+        }
 
         amount
     }
