@@ -36,6 +36,8 @@ interface StreamDetailDrawerProps {
   onPause?: (streamId: string) => Promise<void>;
   /** Called when resume action is triggered from the drawer */
   onResume?: (streamId: string) => Promise<void>;
+  /** Called when transfer action is triggered from the drawer */
+  onTransfer?: (streamId: string, newRecipient: string) => Promise<void>;
   /**
    * Sign an arbitrary action payload before mutating actions.
    * Receives { action, streamId, timestamp } and returns the signature.
@@ -69,6 +71,7 @@ function eventIcon(type: StreamEvent["eventType"]): string {
     start_time_updated: "✎",
     paused: "⏸",
     resumed: "▶",
+    transferred: "⇄",
   };
   return icons[type] ?? "•";
 }
@@ -81,6 +84,7 @@ function eventLabel(type: StreamEvent["eventType"]): string {
     start_time_updated: "Start time updated",
     paused: "Stream paused",
     resumed: "Stream resumed",
+    transferred: "Stream transferred",
   };
   return labels[type] ?? type;
 }
@@ -102,6 +106,7 @@ export function StreamDetailDrawer({
   onCancel,
   onPause,
   onResume,
+  onTransfer,
   signAction,
   walletAddress,
 }: StreamDetailDrawerProps) {
@@ -114,6 +119,10 @@ export function StreamDetailDrawer({
   const [pausing, setPausing] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [transferring, setTransferring] = useState(false);
+  const [showTransferInput, setShowTransferInput] = useState(false);
+  const [newRecipient, setNewRecipient] = useState("");
+  const [transferError, setTransferError] = useState<string | null>(null);
 
   // Abort controller to avoid race conditions on rapid open/close
   const abortRef = useRef<AbortController | null>(null);
@@ -224,6 +233,31 @@ export function StreamDetailDrawer({
     }
   }
 
+  async function handleTransfer() {
+    if (!stream || !onTransfer) return;
+    const recipient = newRecipient.trim();
+    if (!recipient) {
+      setTransferError("Please enter a new recipient address.");
+      return;
+    }
+    if (!/^G[A-Z2-7]{55}$/.test(recipient)) {
+      setTransferError("Please enter a valid Stellar account ID (starts with G, 56 chars).");
+      return;
+    }
+    setTransferring(true);
+    setTransferError(null);
+    try {
+      await onTransfer(stream.id, recipient);
+      setShowTransferInput(false);
+      setNewRecipient("");
+      await fetchData(stream.id);
+    } catch (err) {
+      setTransferError(err instanceof Error ? err.message : "Transfer failed.");
+    } finally {
+      setTransferring(false);
+    }
+  }
+
   const isFinalised = stream
     ? stream.progress.status === "completed" || stream.progress.status === "canceled"
     : false;
@@ -246,7 +280,12 @@ export function StreamDetailDrawer({
     !!signAction &&
     stream?.progress.status === "paused";
 
-  const hasActions = !!onCancel || showPause || showResume;
+  const showTransfer =
+    isSender &&
+    !!onTransfer &&
+    !isFinalised;
+
+  const hasActions = !!onCancel || showPause || showResume || showTransfer;
 
   return (
     <div
@@ -438,6 +477,9 @@ export function StreamDetailDrawer({
                   {actionError && (
                     <p className="drawer-cancel-error" role="alert">{actionError}</p>
                   )}
+                  {transferError && (
+                    <p className="drawer-cancel-error" role="alert">{transferError}</p>
+                  )}
 
                   <div className="action-cell">
                     {/* Pause — active streams, sender only */}
@@ -464,6 +506,63 @@ export function StreamDetailDrawer({
                       >
                         {resuming ? "Resuming…" : "▶ Resume"}
                       </button>
+                    )}
+
+                    {/* Transfer — active/scheduled/paused streams, sender only */}
+                    {showTransfer && (
+                      <>
+                        {!showTransferInput ? (
+                          <button
+                            type="button"
+                            className="btn-ghost"
+                            onClick={() => {
+                              setShowTransferInput(true);
+                              setTransferError(null);
+                            }}
+                          >
+                            ⇄ Transfer Stream
+                          </button>
+                        ) : (
+                          <div className="transfer-input-group">
+                            <input
+                              type="text"
+                              className="transfer-recipient-input"
+                              placeholder="New recipient Stellar address (G...)"
+                              value={newRecipient}
+                              onChange={(e) => {
+                                setNewRecipient(e.target.value);
+                                setTransferError(null);
+                              }}
+                              disabled={transferring}
+                              aria-label="New recipient address"
+                              autoFocus
+                            />
+                            <div className="transfer-input-actions">
+                              <button
+                                type="button"
+                                className="btn-ghost"
+                                disabled={transferring || !newRecipient.trim()}
+                                onClick={handleTransfer}
+                                aria-busy={transferring}
+                              >
+                                {transferring ? "Transferring…" : "Confirm Transfer"}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-ghost"
+                                disabled={transferring}
+                                onClick={() => {
+                                  setShowTransferInput(false);
+                                  setNewRecipient("");
+                                  setTransferError(null);
+                                }}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </>
                     )}
 
                     {/* Cancel */}

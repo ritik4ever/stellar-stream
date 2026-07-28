@@ -254,6 +254,23 @@ export async function resumeStream(streamId: string): Promise<Stream> {
   return body.data;
 }
 
+export async function transferStream(streamId: string, sender: string, newRecipient: string): Promise<Stream> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (authToken) {
+    headers["Authorization"] = `Bearer ${authToken}`;
+  }
+
+  const response = await fetch(`${API_BASE}/streams/${streamId}/transfer`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ sender, newRecipient }),
+  });
+  const body = await parseResponse<{ data: Stream }>(response);
+  return body.data;
+}
+
 export async function updateStreamStartAt(
   streamId: string,
   startAt: number,
@@ -283,7 +300,7 @@ export async function listOpenIssues(): Promise<OpenIssue[]> {
 export interface StreamEvent {
   id: number;
   streamId: string;
-  eventType: "created" | "claimed" | "canceled" | "start_time_updated" | "paused" | "resumed" | "cliff_reached";
+  eventType: "created" | "claimed" | "canceled" | "start_time_updated" | "paused" | "resumed" | "transferred" | "cliff_reached";
   timestamp: number;
   actor?: string;
   amount?: number;
