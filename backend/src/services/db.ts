@@ -339,8 +339,12 @@ export function syncFtsIndex(_id: string, _sender: string, _recipient: string, _
         `INSERT OR REPLACE INTO streams_fts (id, sender, recipient, asset_code) VALUES (?, ?, ?, ?)`,
       )
       .run(_id, _sender, _recipient, _assetCode);
-  } catch {
-    // FTS table may not exist yet; ignore silently.
+  } catch (err: any) {
+    // Only suppress the expected missing-table error during initialization.
+    if (err?.message && err.message.includes("no such table")) return;
+    const logger = require("../logger").logger;
+    logger.error({ err }, "FTS index update failed");
+    throw err;
   }
 }
 
@@ -354,7 +358,11 @@ export function searchStreamsFts(_query: string): string[] {
       )
       .all(_query) as Array<{ id: string }>;
     return rows.map((r) => r.id);
-  } catch {
-    return [];
+  } catch (err: any) {
+    // Only suppress the expected missing-table error during initialization.
+    if (err?.message && err.message.includes("no such table")) return [];
+    const logger = require("../logger").logger;
+    logger.error({ err }, "FTS search failed");
+    throw err;
   }
 }

@@ -270,21 +270,23 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
   }
 
   async function handleTransfer(streamId: string, newRecipient: string): Promise<void> {
+    if (!wallet.address) {
+      showToast("Wallet not connected.", "error");
+      throw new Error("Wallet not connected.");
+    }
     try {
-      if (!wallet.address) {
-        showToast("Wallet not connected.", "error");
-        return;
-      }
-      await transferStream(streamId, wallet.address, newRecipient);
+      await transferStream(streamId, newRecipient);
       await refreshStreams(apiFilters);
       void refreshUnfilteredCount();
       showToast("Stream transferred successfully", "success");
     } catch (err) {
       if (err instanceof ApiError) {
         showToast(`Transfer failed (${err.statusCode}): ${err.message}`, "error");
-        return;
+        throw err;
       }
-      showToast(err instanceof Error ? err.message : "Failed to transfer the stream.", "error");
+      const msg = err instanceof Error ? err.message : "Failed to transfer the stream.";
+      showToast(msg, "error");
+      throw err;
     }
   }
 

@@ -1408,14 +1408,6 @@ app.post(
       return;
     }
 
-    // Validate that the sender in the body matches the authenticated user
-    if (parsedBody.data.sender !== user.accountId) {
-      sendApiError(req, res, 403, "Sender in request body does not match authenticated user.", {
-        code: "FORBIDDEN",
-      });
-      return;
-    }
-
     try {
       const updated = await transferStream(parsedId.value, parsedBody.data.newRecipient);
       res.json({

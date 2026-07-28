@@ -129,8 +129,8 @@ function upsertStream(record: StreamRecord): void {
   const db = getDb();
   db.prepare(
     `
-    INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at, canceled_at, completed_at, refunded_amount, archived_at, paused_at, paused_duration, cliff_seconds, metadata)
-    VALUES (@id, @sender, @recipient, @assetCode, @totalAmount, @durationSeconds, @startAt, @createdAt, @canceledAt, @completedAt, @refundedAmount, @archivedAt, @pausedAt, @pausedDuration, @cliffSeconds, @metadata)
+    INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at, canceled_at, completed_at, refunded_amount, paused_at, paused_duration, cliff_seconds, metadata)
+    VALUES (@id, @sender, @recipient, @assetCode, @totalAmount, @durationSeconds, @startAt, @createdAt, @canceledAt, @completedAt, @refundedAmount, @pausedAt, @pausedDuration, @cliffSeconds, @metadata)
     ON CONFLICT(id) DO UPDATE SET
       sender = excluded.sender,
       recipient = excluded.recipient,
@@ -142,7 +142,6 @@ function upsertStream(record: StreamRecord): void {
       canceled_at = excluded.canceled_at,
       completed_at = excluded.completed_at,
       refunded_amount = excluded.refunded_amount,
-      archived_at = excluded.archived_at,
       paused_at = excluded.paused_at,
       paused_duration = excluded.paused_duration,
       cliff_seconds = excluded.cliff_seconds,
@@ -160,7 +159,6 @@ function upsertStream(record: StreamRecord): void {
     canceledAt: record.canceledAt ?? null,
     completedAt: record.completedAt ?? null,
     refundedAmount: record.refundedAmount ?? null,
-    archivedAt: null,
     pausedAt: record.pausedAt ?? null,
     pausedDuration: record.pausedDuration ?? 0,
     cliffSeconds: record.cliffSeconds ?? 0,
@@ -1194,19 +1192,7 @@ export async function cancelStream(
   return stream;
 }
 
-/**
- * Transfers a stream to a new recipient on-chain and updates the local DB.
- * Submits a Soroban transfer_stream transaction, then updates the recipient
- * field in SQLite and records a stream_transferred event.
- *
- * Only the sender may transfer. The stream must not be finalized
- * (canceled/completed).
- *
- * @param id   - Stream ID
- * @param newRecipient - New Stellar recipient address
- * @returns Promise resolving to the updated stream record
- * @throws Error with statusCode if the stream cannot be transferred
- */
+/** Transfers stream to a new recipient on-chain and updates local DB. */
 export async function transferStream(
   id: string,
   newRecipient: string,
@@ -1260,14 +1246,11 @@ export async function transferStream(
         const sendRes = await retryWithBackoff(() => rpcServer!.sendTransaction(built));
         if (sendRes.status === "PENDING") {
           let txResult;
-          let attempts = 0;
-          while (attempts < 10) {
-            txResult = await retryWithBackoff(() =>
-              rpcServer!.getTransaction(sendRes.hash),
-            );
+          // Poll for on-chain confirmation (up to ~10s)
+          for (let attempt = 0; attempt < 10; attempt++) {
+            txResult = await rpcServer!.getTransaction(sendRes.hash);
             if (txResult.status !== "NOT_FOUND") break;
             await new Promise((r) => setTimeout(r, 1000));
-            attempts++;
           }
 
           if (txResult?.status !== "SUCCESS") {
@@ -1285,24 +1268,24 @@ export async function transferStream(
   }
 
   const now = nowInSeconds();
-  stream.recipient = newRecipient;
-
-  // Invalidate cache
-  await invalidateCache(`stream:${id}`);
-  await invalidateCache("streams:list:");
-  await invalidateCache("streams:export:");
-  resetStatsCache();
-  resetStreamMetricsCache();
 
   // Atomically write the updated stream row and the transfer event.
   const db = getDb();
   db.transaction(() => {
+    stream.recipient = newRecipient;
     upsertStream(stream);
     recordEventWithDb(db, stream.id, "transferred", now, stream.sender, undefined, {
       oldRecipient,
       newRecipient,
     });
   })();
+
+  // Invalidate cache only after the write is durable.
+  await invalidateCache(`stream:${id}`);
+  await invalidateCache("streams:list:");
+  await invalidateCache("streams:export:");
+  resetStatsCache();
+  resetStreamMetricsCache();
 
   // Webhook fires after the transaction commits.
   triggerWebhook("transferred", stream);

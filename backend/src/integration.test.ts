@@ -1466,7 +1466,6 @@ describe("Backend Integration Tests", () => {
           .post(`/api/streams/${transferStreamId}/transfer`)
           .set("Authorization", `Bearer ${senderToken}`)
           .send({
-            sender: senderKeypair.publicKey(),
             newRecipient: newRecipientKeypair.publicKey(),
           });
 
@@ -1486,7 +1485,10 @@ describe("Backend Integration Tests", () => {
           .prepare(`SELECT * FROM stream_events WHERE stream_id = ? AND event_type = 'transferred'`)
           .all(transferStreamId) as any[];
         expect(events).toHaveLength(1);
-        expect(events[0].metadata).toContain(newRecipientKeypair.publicKey());
+        const metadata = JSON.parse(events[0].metadata);
+        expect(metadata.newRecipient).toBe(newRecipientKeypair.publicKey());
+        expect(metadata.oldRecipient).toBeDefined();
+        expect(metadata.oldRecipient).not.toBe(metadata.newRecipient);
       });
 
       it("should return 403 when a non-sender tries to transfer", async () => {
@@ -1501,7 +1503,6 @@ describe("Backend Integration Tests", () => {
           .post(`/api/streams/${transferStreamId}/transfer`)
           .set("Authorization", `Bearer ${nonSenderToken}`)
           .send({
-            sender: nonSenderKeypair.publicKey(),
             newRecipient: newRecipientKeypair.publicKey(),
           });
 
@@ -1509,20 +1510,7 @@ describe("Backend Integration Tests", () => {
         expect(response.body.code).toBe("FORBIDDEN");
       });
 
-      it("should return 403 when sender in body does not match authenticated user", async () => {
-        const otherKeypair = Keypair.random();
 
-        const response = await request(app)
-          .post(`/api/streams/${transferStreamId}/transfer`)
-          .set("Authorization", `Bearer ${senderToken}`)
-          .send({
-            sender: otherKeypair.publicKey(),
-            newRecipient: newRecipientKeypair.publicKey(),
-          });
-
-        expect(response.status).toBe(403);
-        expect(response.body.code).toBe("FORBIDDEN");
-      });
 
       it("should return 400 when transferring to same recipient", async () => {
         const db = getDb();
@@ -1534,7 +1522,6 @@ describe("Backend Integration Tests", () => {
           .post(`/api/streams/${transferStreamId}/transfer`)
           .set("Authorization", `Bearer ${senderToken}`)
           .send({
-            sender: senderKeypair.publicKey(),
             newRecipient: stream.recipient,
           });
 
@@ -1550,7 +1537,6 @@ describe("Backend Integration Tests", () => {
           .post(`/api/streams/${transferStreamId}/transfer`)
           .set("Authorization", `Bearer ${senderToken}`)
           .send({
-            sender: senderKeypair.publicKey(),
             newRecipient: newRecipientKeypair.publicKey(),
           });
 
@@ -1562,7 +1548,6 @@ describe("Backend Integration Tests", () => {
           .post(`/api/streams/99999/transfer`)
           .set("Authorization", `Bearer ${senderToken}`)
           .send({
-            sender: senderKeypair.publicKey(),
             newRecipient: newRecipientKeypair.publicKey(),
           });
 
@@ -1574,7 +1559,6 @@ describe("Backend Integration Tests", () => {
           .post(`/api/streams/invalid/transfer`)
           .set("Authorization", `Bearer ${senderToken}`)
           .send({
-            sender: senderKeypair.publicKey(),
             newRecipient: newRecipientKeypair.publicKey(),
           });
 
@@ -1585,7 +1569,6 @@ describe("Backend Integration Tests", () => {
         const response = await request(app)
           .post(`/api/streams/${transferStreamId}/transfer`)
           .send({
-            sender: senderKeypair.publicKey(),
             newRecipient: newRecipientKeypair.publicKey(),
           });
 

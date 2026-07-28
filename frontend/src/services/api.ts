@@ -254,7 +254,7 @@ export async function resumeStream(streamId: string): Promise<Stream> {
   return body.data;
 }
 
-export async function transferStream(streamId: string, sender: string, newRecipient: string): Promise<Stream> {
+export async function transferStream(streamId: string, newRecipient: string): Promise<Stream> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -265,7 +265,7 @@ export async function transferStream(streamId: string, sender: string, newRecipi
   const response = await fetch(`${API_BASE}/streams/${streamId}/transfer`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ sender, newRecipient }),
+    body: JSON.stringify({ newRecipient }),
   });
   const body = await parseResponse<{ data: Stream }>(response);
   return body.data;

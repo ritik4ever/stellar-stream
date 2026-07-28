@@ -109,6 +109,27 @@ export interface ValidatedConfig {
 }
 
 export function validateEnv(): ValidatedConfig {
+  // Support backward compatibility: map between legacy and canonical env vars
+  // so deployments using either naming convention work correctly.
+  if (!process.env.STELLAR_CONTRACT_ID && process.env.CONTRACT_ID) {
+    process.env.STELLAR_CONTRACT_ID = process.env.CONTRACT_ID;
+  }
+  if (!process.env.CONTRACT_ID && process.env.STELLAR_CONTRACT_ID) {
+    process.env.CONTRACT_ID = process.env.STELLAR_CONTRACT_ID;
+  }
+  if (!process.env.SOROBAN_RPC_URL && process.env.RPC_URL) {
+    process.env.SOROBAN_RPC_URL = process.env.RPC_URL;
+  }
+  if (!process.env.RPC_URL && process.env.SOROBAN_RPC_URL) {
+    process.env.RPC_URL = process.env.SOROBAN_RPC_URL;
+  }
+  if (!process.env.STELLAR_NETWORK && process.env.NETWORK_PASSPHRASE) {
+    process.env.STELLAR_NETWORK = process.env.NETWORK_PASSPHRASE;
+  }
+  if (!process.env.NETWORK_PASSPHRASE && process.env.STELLAR_NETWORK) {
+    process.env.NETWORK_PASSPHRASE = process.env.STELLAR_NETWORK;
+  }
+
   // Parse environment variables
   const parsed = envSchema.safeParse(process.env);
 

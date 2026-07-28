@@ -218,7 +218,6 @@ export const bulkCancelStreamsSchema = z.object({
 });
 
 export const transferStreamSchema = z.object({
-  sender: stellarAccountIdSchema,
   newRecipient: stellarAccountIdSchema,
 });
 

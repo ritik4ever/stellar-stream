@@ -127,6 +127,7 @@ export function StreamDetailDrawer({
   // Abort controller to avoid race conditions on rapid open/close
   const abortRef = useRef<AbortController | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const transferTriggerRef = useRef<HTMLButtonElement>(null);
 
   const fetchData = useCallback(async (id: string) => {
     abortRef.current?.abort();
@@ -156,6 +157,9 @@ export function StreamDetailDrawer({
 
   // Fetch whenever streamId changes
   useEffect(() => {
+    setShowTransferInput(false);
+    setNewRecipient("");
+    setTransferError(null);
     fetchData(streamId);
     return () => { abortRef.current?.abort(); };
   }, [streamId, fetchData]);
@@ -250,6 +254,7 @@ export function StreamDetailDrawer({
       await onTransfer(stream.id, recipient);
       setShowTransferInput(false);
       setNewRecipient("");
+      transferTriggerRef.current?.focus();
       await fetchData(stream.id);
     } catch (err) {
       setTransferError(err instanceof Error ? err.message : "Transfer failed.");
@@ -513,6 +518,7 @@ export function StreamDetailDrawer({
                       <>
                         {!showTransferInput ? (
                           <button
+                            ref={transferTriggerRef}
                             type="button"
                             className="btn-ghost"
                             onClick={() => {
@@ -555,6 +561,7 @@ export function StreamDetailDrawer({
                                   setShowTransferInput(false);
                                   setNewRecipient("");
                                   setTransferError(null);
+                                  transferTriggerRef.current?.focus();
                                 }}
                               >
                                 Cancel
