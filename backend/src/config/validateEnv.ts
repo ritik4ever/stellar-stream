@@ -121,25 +121,8 @@ export function validateEnv(): ValidatedConfig {
     process.exit(1);
     throw new Error("Environment validation failed"); // Ensure execution stops in tests
   }
-  if (norm === "public" || norm === "mainnet" || norm === "public global stellar network ; october 2015") {
-    return "Public Global Stellar Network ; October 2015";
-  }
-  return network;
-}
 
-export function validateEnv(): ValidatedConfig {
-  // Support backwards compatibility: map old variables to new ones if new ones are not set
-  if (!process.env.STELLAR_CONTRACT_ID && process.env.CONTRACT_ID) {
-    process.env.STELLAR_CONTRACT_ID = process.env.CONTRACT_ID;
-  }
-  if (!process.env.SOROBAN_RPC_URL && process.env.RPC_URL) {
-    process.env.SOROBAN_RPC_URL = process.env.RPC_URL;
-  }
-  if (!process.env.STELLAR_NETWORK && process.env.NETWORK_PASSPHRASE) {
-    process.env.STELLAR_NETWORK = process.env.NETWORK_PASSPHRASE;
-  }
-
-  const isProduction = process.env.NODE_ENV === "production";
+  const env = parsed.data;
   const sorobanDisabled = process.env.SOROBAN_DISABLED?.toLowerCase() === "true";
 
   if (!sorobanDisabled) {
