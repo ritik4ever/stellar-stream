@@ -349,7 +349,11 @@ export function syncFtsIndex(_id: string, _sender: string, _recipient: string, _
 }
 
 export function searchStreamsFts(_query: string): string[] {
-  if (isPostgres()) return [];
+  if (isPostgres()) {
+    const err: any = new Error("Full-text search is not available with the current database backend.");
+    err.statusCode = 400;
+    throw err;
+  }
   try {
     const database = getDb();
     const rows = database

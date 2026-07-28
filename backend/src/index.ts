@@ -642,9 +642,15 @@ app.get("/api/streams/search", readLimiter, (req: Request, res: Response) => {
       total: results.length,
       query: q.data,
     });
-  } catch (err) {
+  } catch (err: any) {
     logger.error({ err }, "search failed");
-    sendApiError(req, res, 500, "Search failed.", { code: "SEARCH_ERROR" });
+    const normalizedError = normalizeUnknownApiError(
+      err,
+      "Search failed.",
+    );
+    sendApiError(req, res, normalizedError.statusCode, normalizedError.message, {
+      code: normalizedError.code ?? "SEARCH_ERROR",
+    });
   }
 });
 

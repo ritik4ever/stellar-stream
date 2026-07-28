@@ -167,6 +167,20 @@ function upsertStream(record: StreamRecord): void {
   syncFtsIndex(record.id, record.sender, record.recipient, record.assetCode);
 }
 
+/**
+ * Validates that a stream ID is a fully numeric string and parses it as an integer.
+ * Rejects values like "12abc" or "abc" that parseInt would silently coerce.
+ * @throws {Error} with statusCode 400 if the ID is not fully numeric.
+ */
+function parseStreamIdAsNumber(id: string): number {
+  if (!/^\d+$/.test(id)) {
+    const err: any = new Error("Invalid stream ID: must be a numeric value.");
+    err.statusCode = 400;
+    throw err;
+  }
+  return parseInt(id, 10);
+}
+
 function listLocalStreamIds(): Set<string> {
   const db = getDb();
   const rows = db.prepare("SELECT id FROM streams").all() as Array<{ id: string }>;
@@ -482,7 +496,7 @@ export async function getOnChainClaimableAmount(
     sorobanContext.contract,
     sourceAccount,
     "claimable",
-    nativeToScVal(parseInt(id), { type: "u64" }),
+    nativeToScVal(parseStreamIdAsNumber(id), { type: "u64" }),
     nativeToScVal(at, { type: "u64" }),
   );
 
@@ -1136,7 +1150,7 @@ export async function cancelStream(
         const contract = new Contract(contractId);
         const tx = contract.call(
           "cancel_stream",
-          nativeToScVal(parseInt(id), { type: "u64" }),
+          nativeToScVal(parseStreamIdAsNumber(id), { type: "u64" }),
         );
 
         const built = await rpcServer.prepareTransaction(
@@ -1228,7 +1242,7 @@ export async function transferStream(
         const contract = new Contract(contractId);
         const tx = contract.call(
           "transfer_stream",
-          nativeToScVal(parseInt(id), { type: "u64" }),
+          nativeToScVal(parseStreamIdAsNumber(id), { type: "u64" }),
           new Address(newRecipient).toScVal(),
         );
 
