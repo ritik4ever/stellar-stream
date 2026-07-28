@@ -534,6 +534,54 @@ td {
   align-items: center;
 }
 
+/* ── Transfer input group ──────────────────────────────── */
+
+.transfer-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.transfer-recipient-input {
+  border: 1.5px solid #d1d5db;
+  border-radius: 8px;
+  min-height: 38px;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.9rem;
+  font-family: ui-monospace, monospace;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.transfer-recipient-input:focus {
+  border-color: #0ea5a5;
+  box-shadow: 0 0 0 3px rgba(14, 165, 165, 0.15);
+}
+
+.transfer-recipient-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.transfer-input-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+/* Dark mode for transfer input */
+.dark .transfer-recipient-input {
+  border-color: var(--border-input);
+  background: var(--bg-input);
+  color: var(--color-text);
+}
+
+.dark .transfer-recipient-input:focus {
+  border-color: #0ea5a5;
+  box-shadow: 0 0 0 3px rgba(14, 165, 165, 0.25);
+}
+
 .btn-edit {
   font-size: 0.8rem;
   color: #0369a1;

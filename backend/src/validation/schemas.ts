@@ -128,7 +128,7 @@ export const updateStreamStartAtSchema = z.object({
   }
 });
 
-const VALID_EVENT_TYPES = ["created", "claimed", "canceled", "start_time_updated", "paused", "resumed", "completed"] as const;
+const VALID_EVENT_TYPES = ["created", "claimed", "canceled", "start_time_updated", "paused", "resumed", "completed", "transferred"] as const;
 
 export const webhookRegistrationSchema = z.object({
   url: z
@@ -215,6 +215,10 @@ export const bulkCancelStreamsSchema = z.object({
     .min(1, "At least one stream ID is required")
     .max(20, "Maximum 20 stream IDs per request"),
   sender: stellarAccountIdSchema,
+});
+
+export const transferStreamSchema = z.object({
+  newRecipient: stellarAccountIdSchema,
 });
 
 export type CreateStreamPayload = z.infer<typeof createStreamPayloadSchema>;

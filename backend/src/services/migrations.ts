@@ -78,6 +78,21 @@ function seedBaselineMigrations(db: any, migrations: Migration[]): void {
 
   db.transaction(() => {
     for (const migration of migrations) {
+      const upSql = loadMigrationSql(migration.upPath);
+      try {
+        db.exec(upSql);
+      } catch (err: any) {
+        // Only suppress "already exists" errors from legacy schemas
+        // (e.g., CREATE TABLE, ALTER TABLE ADD COLUMN). Rethrow others.
+        if (err?.message && (
+          err.message.includes("already exists") ||
+          err.message.includes("duplicate column")
+        )) {
+          // Expected — migration already reflected in legacy schema.
+        } else {
+          throw err;
+        }
+      }
       insert.run(migration.version, migration.name, now);
     }
   })();
@@ -98,11 +113,11 @@ export function runMigrations(db: any, migrationsDir?: string): void {
   const migrations = discoverMigrations(dir);
 
   ensureSchemaMigrationsTable(db);
-  const applied = getAppliedVersions(db);
+  let applied = getAppliedVersions(db);
 
   if (applied.size === 0 && hasExistingSchema(db)) {
     seedBaselineMigrations(db, migrations);
-    return;
+    applied = getAppliedVersions(db);
   }
 
   for (const migration of migrations) {

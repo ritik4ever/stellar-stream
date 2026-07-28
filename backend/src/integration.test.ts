@@ -1425,6 +1425,156 @@ describe("Backend Integration Tests", () => {
         expect(response.body.code).toBe("RATE_LIMIT_EXCEEDED");
       });
     });
+
+    describe("POST /api/streams/:id/transfer", () => {
+      let senderKeypair: ReturnType<typeof Keypair.random>;
+      let newRecipientKeypair: ReturnType<typeof Keypair.random>;
+      let transferStreamId: string;
+      let senderToken: string;
+      let testCounter = 300;
+
+      beforeEach(() => {
+        senderKeypair = Keypair.random();
+        newRecipientKeypair = Keypair.random();
+        const now = Math.floor(Date.now() / 1000);
+        transferStreamId = String(testCounter++);
+
+        const db = getDb();
+        db.prepare(`
+          INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          transferStreamId,
+          senderKeypair.publicKey(),
+          Keypair.random().publicKey(),
+          "USDC",
+          1000,
+          3600,
+          now - 1800,
+          now - 1800,
+        );
+
+        senderToken = jwt.sign(
+          { accountId: senderKeypair.publicKey() },
+          getJwtSecret(),
+          { expiresIn: "1h" },
+        );
+      });
+
+      it("should transfer an active stream to a new recipient", async () => {
+        const response = await request(app)
+          .post(`/api/streams/${transferStreamId}/transfer`)
+          .set("Authorization", `Bearer ${senderToken}`)
+          .send({
+            newRecipient: newRecipientKeypair.publicKey(),
+          });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data.recipient).toBe(newRecipientKeypair.publicKey());
+        expect(response.body.data.progress).toBeDefined();
+
+        // Verify SQLite was updated
+        const db = getDb();
+        const updatedStream = db
+          .prepare(`SELECT * FROM streams WHERE id = ?`)
+          .get(transferStreamId) as any;
+        expect(updatedStream.recipient).toBe(newRecipientKeypair.publicKey());
+
+        // Verify transfer event recorded
+        const events = db
+          .prepare(`SELECT * FROM stream_events WHERE stream_id = ? AND event_type = 'transferred'`)
+          .all(transferStreamId) as any[];
+        expect(events).toHaveLength(1);
+        const metadata = JSON.parse(events[0].metadata);
+        expect(metadata.newRecipient).toBe(newRecipientKeypair.publicKey());
+        expect(metadata.oldRecipient).toBeDefined();
+        expect(metadata.oldRecipient).not.toBe(metadata.newRecipient);
+      });
+
+      it("should return 403 when a non-sender tries to transfer", async () => {
+        const nonSenderKeypair = Keypair.random();
+        const nonSenderToken = jwt.sign(
+          { accountId: nonSenderKeypair.publicKey() },
+          getJwtSecret(),
+          { expiresIn: "1h" },
+        );
+
+        const response = await request(app)
+          .post(`/api/streams/${transferStreamId}/transfer`)
+          .set("Authorization", `Bearer ${nonSenderToken}`)
+          .send({
+            newRecipient: newRecipientKeypair.publicKey(),
+          });
+
+        expect(response.status).toBe(403);
+        expect(response.body.code).toBe("FORBIDDEN");
+      });
+
+
+
+      it("should return 400 when transferring to same recipient", async () => {
+        const db = getDb();
+        const stream = db
+          .prepare(`SELECT recipient FROM streams WHERE id = ?`)
+          .get(transferStreamId) as any;
+
+        const response = await request(app)
+          .post(`/api/streams/${transferStreamId}/transfer`)
+          .set("Authorization", `Bearer ${senderToken}`)
+          .send({
+            newRecipient: stream.recipient,
+          });
+
+        expect(response.status).toBe(400);
+      });
+
+      it("should return 400 for canceled stream", async () => {
+        const db = getDb();
+        db.prepare(`UPDATE streams SET canceled_at = ? WHERE id = ?`)
+          .run(Math.floor(Date.now() / 1000), transferStreamId);
+
+        const response = await request(app)
+          .post(`/api/streams/${transferStreamId}/transfer`)
+          .set("Authorization", `Bearer ${senderToken}`)
+          .send({
+            newRecipient: newRecipientKeypair.publicKey(),
+          });
+
+        expect(response.status).toBe(400);
+      });
+
+      it("should return 404 for non-existent stream", async () => {
+        const response = await request(app)
+          .post(`/api/streams/99999/transfer`)
+          .set("Authorization", `Bearer ${senderToken}`)
+          .send({
+            newRecipient: newRecipientKeypair.publicKey(),
+          });
+
+        expect(response.status).toBe(404);
+      });
+
+      it("should return 400 for invalid stream ID", async () => {
+        const response = await request(app)
+          .post(`/api/streams/invalid/transfer`)
+          .set("Authorization", `Bearer ${senderToken}`)
+          .send({
+            newRecipient: newRecipientKeypair.publicKey(),
+          });
+
+        expect(response.status).toBe(400);
+      });
+
+      it("should return 401 when no auth token is provided", async () => {
+        const response = await request(app)
+          .post(`/api/streams/${transferStreamId}/transfer`)
+          .send({
+            newRecipient: newRecipientKeypair.publicKey(),
+          });
+
+        expect(response.status).toBe(401);
+      });
+    });
   });
 
   describe("Stream History", () => {

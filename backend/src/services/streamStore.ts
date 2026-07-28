@@ -129,8 +129,8 @@ function upsertStream(record: StreamRecord): void {
   const db = getDb();
   db.prepare(
     `
-    INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at, canceled_at, completed_at, refunded_amount, archived_at, paused_at, paused_duration, cliff_seconds, metadata)
-    VALUES (@id, @sender, @recipient, @assetCode, @totalAmount, @durationSeconds, @startAt, @createdAt, @canceledAt, @completedAt, @refundedAmount, @archivedAt, @pausedAt, @pausedDuration, @cliffSeconds, @metadata)
+    INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at, canceled_at, completed_at, refunded_amount, paused_at, paused_duration, cliff_seconds, metadata)
+    VALUES (@id, @sender, @recipient, @assetCode, @totalAmount, @durationSeconds, @startAt, @createdAt, @canceledAt, @completedAt, @refundedAmount, @pausedAt, @pausedDuration, @cliffSeconds, @metadata)
     ON CONFLICT(id) DO UPDATE SET
       sender = excluded.sender,
       recipient = excluded.recipient,
@@ -142,7 +142,6 @@ function upsertStream(record: StreamRecord): void {
       canceled_at = excluded.canceled_at,
       completed_at = excluded.completed_at,
       refunded_amount = excluded.refunded_amount,
-      archived_at = excluded.archived_at,
       paused_at = excluded.paused_at,
       paused_duration = excluded.paused_duration,
       cliff_seconds = excluded.cliff_seconds,
@@ -160,13 +159,26 @@ function upsertStream(record: StreamRecord): void {
     canceledAt: record.canceledAt ?? null,
     completedAt: record.completedAt ?? null,
     refundedAmount: record.refundedAmount ?? null,
-    archivedAt: null,
     pausedAt: record.pausedAt ?? null,
     pausedDuration: record.pausedDuration ?? 0,
     cliffSeconds: record.cliffSeconds ?? 0,
     metadata: record.metadata ? JSON.stringify(record.metadata) : null,
   });
   syncFtsIndex(record.id, record.sender, record.recipient, record.assetCode);
+}
+
+/**
+ * Validates that a stream ID is a fully numeric string and parses it as an integer.
+ * Rejects values like "12abc" or "abc" that parseInt would silently coerce.
+ * @throws {Error} with statusCode 400 if the ID is not fully numeric.
+ */
+function parseStreamIdAsNumber(id: string): number {
+  if (!/^\d+$/.test(id)) {
+    const err: any = new Error("Invalid stream ID: must be a numeric value.");
+    err.statusCode = 400;
+    throw err;
+  }
+  return parseInt(id, 10);
 }
 
 function listLocalStreamIds(): Set<string> {
@@ -453,9 +465,6 @@ export function calculateProgress(
   const effectiveAt =
     stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
 
-  const elapsed = Math.max(0, Math.min(effectiveAt - stream.startAt - stream.pausedDuration, stream.durationSeconds));
-
-  const ratio = Math.min(1, elapsed / stream.durationSeconds);
   const elapsed = Math.max(0, Math.max(0, effectiveAt - stream.startAt) - stream.pausedDuration);
   const ratio = stream.durationSeconds <= 0 ? 1 : Math.min(1, elapsed / stream.durationSeconds);
   const elapsedSeconds = stream.durationSeconds <= 0 ? 0 : Math.min(elapsed, stream.durationSeconds);
@@ -487,7 +496,7 @@ export async function getOnChainClaimableAmount(
     sorobanContext.contract,
     sourceAccount,
     "claimable",
-    nativeToScVal(parseInt(id), { type: "u64" }),
+    nativeToScVal(parseStreamIdAsNumber(id), { type: "u64" }),
     nativeToScVal(at, { type: "u64" }),
   );
 
@@ -1141,7 +1150,7 @@ export async function cancelStream(
         const contract = new Contract(contractId);
         const tx = contract.call(
           "cancel_stream",
-          nativeToScVal(parseInt(id), { type: "u64" }),
+          nativeToScVal(parseStreamIdAsNumber(id), { type: "u64" }),
         );
 
         const built = await rpcServer.prepareTransaction(
@@ -1197,6 +1206,105 @@ export async function cancelStream(
   return stream;
 }
 
+/** Transfers stream to a new recipient on-chain and updates local DB. */
+export async function transferStream(
+  id: string,
+  newRecipient: string,
+): Promise<StreamRecord> {
+  const stream = getStream(id);
+  if (!stream) {
+    const err: any = new Error("Stream not found.");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const status = computeStatus(stream, nowInSeconds());
+  if (status === "canceled" || status === "completed") {
+    const err: any = new Error("Cannot transfer a finalized stream.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const oldRecipient = stream.recipient;
+  if (oldRecipient === newRecipient) {
+    const err: any = new Error("New recipient must differ from the current recipient.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Submit on-chain transfer_stream transaction
+  try {
+    const sorobanContext = getSorobanContext();
+    if (sorobanContext && rpcServer && serverKeypair) {
+      const contractId = process.env.CONTRACT_ID;
+      if (contractId) {
+        const sourceAccount = await rpcServer.getAccount(serverKeypair.publicKey());
+        const contract = new Contract(contractId);
+        const tx = contract.call(
+          "transfer_stream",
+          nativeToScVal(parseStreamIdAsNumber(id), { type: "u64" }),
+          new Address(newRecipient).toScVal(),
+        );
+
+        const built = await rpcServer.prepareTransaction(
+          new TransactionBuilder(sourceAccount, {
+            fee: "1000",
+            networkPassphrase: process.env.NETWORK_PASSPHRASE || Networks.TESTNET,
+          })
+            .addOperation(tx)
+            .setTimeout(30)
+            .build(),
+        );
+
+        built.sign(serverKeypair);
+        const sendRes = await retryWithBackoff(() => rpcServer!.sendTransaction(built));
+        if (sendRes.status === "PENDING") {
+          let txResult;
+          // Poll for on-chain confirmation (up to ~10s)
+          for (let attempt = 0; attempt < 10; attempt++) {
+            txResult = await rpcServer!.getTransaction(sendRes.hash);
+            if (txResult.status !== "NOT_FOUND") break;
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+
+          if (txResult?.status !== "SUCCESS") {
+            throw new Error("On-chain transfer_stream transaction failed: " + JSON.stringify(txResult));
+          }
+        } else {
+          throw new Error("Failed to send transfer_stream transaction: " + JSON.stringify(sendRes));
+        }
+      }
+    }
+  } catch (err: any) {
+    if (err.statusCode) throw err;
+    logger.warn({ err, streamId: id }, "on-chain transfer_stream failed");
+    throw new Error("On-chain transfer failed: " + (err.message || JSON.stringify(err)));
+  }
+
+  const now = nowInSeconds();
+
+  // Atomically write the updated stream row and the transfer event.
+  const db = getDb();
+  db.transaction(() => {
+    stream.recipient = newRecipient;
+    upsertStream(stream);
+    recordEventWithDb(db, stream.id, "transferred", now, stream.sender, undefined, {
+      oldRecipient,
+      newRecipient,
+    });
+  })();
+
+  // Invalidate cache only after the write is durable.
+  await invalidateCache(`stream:${id}`);
+  await invalidateCache("streams:list:");
+  await invalidateCache("streams:export:");
+  resetStatsCache();
+  resetStreamMetricsCache();
+
+  // Webhook fires after the transaction commits.
+  triggerWebhook("transferred", stream);
+  return stream;
+}
 
 /**
  * Updates the start time of a scheduled stream.

@@ -324,9 +324,49 @@ export function initDb(): void {
     db.pragma("synchronous = NORMAL");
     db.pragma("busy_timeout = 5000");
     db.pragma("cache_size = -64000");
+
+    runMigrations(db);
   }
+}
 
+// FTS is SQLite-only; stub for PostgreSQL compatibility.
+export function syncFtsIndex(_id: string, _sender: string, _recipient: string, _assetCode: string): void {
+  if (isPostgres()) return;
+  try {
+    const database = getDb();
+    database
+      .prepare(
+        `INSERT OR REPLACE INTO streams_fts (id, sender, recipient, asset_code) VALUES (?, ?, ?, ?)`,
+      )
+      .run(_id, _sender, _recipient, _assetCode);
+  } catch (err: any) {
+    // Only suppress the expected missing-table error during initialization.
+    if (err?.message && err.message.includes("no such table")) return;
+    const logger = require("../logger").logger;
+    logger.error({ err }, "FTS index update failed");
+    throw err;
+  }
+}
 
-
-
+export function searchStreamsFts(_query: string): string[] {
+  if (isPostgres()) {
+    const err: any = new Error("Full-text search is not available with the current database backend.");
+    err.statusCode = 400;
+    throw err;
+  }
+  try {
+    const database = getDb();
+    const rows = database
+      .prepare(
+        `SELECT id FROM streams_fts WHERE streams_fts MATCH ? ORDER BY rank LIMIT 50`,
+      )
+      .all(_query) as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  } catch (err: any) {
+    // Only suppress the expected missing-table error during initialization.
+    if (err?.message && err.message.includes("no such table")) return [];
+    const logger = require("../logger").logger;
+    logger.error({ err }, "FTS search failed");
+    throw err;
+  }
 }
