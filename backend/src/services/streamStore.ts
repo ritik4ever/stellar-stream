@@ -453,9 +453,6 @@ export function calculateProgress(
   const effectiveAt =
     stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
 
-  const elapsed = Math.max(0, Math.min(effectiveAt - stream.startAt - stream.pausedDuration, stream.durationSeconds));
-
-  const ratio = Math.min(1, elapsed / stream.durationSeconds);
   const elapsed = Math.max(0, Math.max(0, effectiveAt - stream.startAt) - stream.pausedDuration);
   const ratio = stream.durationSeconds <= 0 ? 1 : Math.min(1, elapsed / stream.durationSeconds);
   const elapsedSeconds = stream.durationSeconds <= 0 ? 0 : Math.min(elapsed, stream.durationSeconds);
@@ -1197,6 +1194,120 @@ export async function cancelStream(
   return stream;
 }
 
+/**
+ * Transfers a stream to a new recipient on-chain and updates the local DB.
+ * Submits a Soroban transfer_stream transaction, then updates the recipient
+ * field in SQLite and records a stream_transferred event.
+ *
+ * Only the sender may transfer. The stream must not be finalized
+ * (canceled/completed).
+ *
+ * @param id   - Stream ID
+ * @param newRecipient - New Stellar recipient address
+ * @returns Promise resolving to the updated stream record
+ * @throws Error with statusCode if the stream cannot be transferred
+ */
+export async function transferStream(
+  id: string,
+  newRecipient: string,
+): Promise<StreamRecord> {
+  const stream = getStream(id);
+  if (!stream) {
+    const err: any = new Error("Stream not found.");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const status = computeStatus(stream, nowInSeconds());
+  if (status === "canceled" || status === "completed") {
+    const err: any = new Error("Cannot transfer a finalized stream.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const oldRecipient = stream.recipient;
+  if (oldRecipient === newRecipient) {
+    const err: any = new Error("New recipient must differ from the current recipient.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Submit on-chain transfer_stream transaction
+  try {
+    const sorobanContext = getSorobanContext();
+    if (sorobanContext && rpcServer && serverKeypair) {
+      const contractId = process.env.CONTRACT_ID;
+      if (contractId) {
+        const sourceAccount = await rpcServer.getAccount(serverKeypair.publicKey());
+        const contract = new Contract(contractId);
+        const tx = contract.call(
+          "transfer_stream",
+          nativeToScVal(parseInt(id), { type: "u64" }),
+          new Address(newRecipient).toScVal(),
+        );
+
+        const built = await rpcServer.prepareTransaction(
+          new TransactionBuilder(sourceAccount, {
+            fee: "1000",
+            networkPassphrase: process.env.NETWORK_PASSPHRASE || Networks.TESTNET,
+          })
+            .addOperation(tx)
+            .setTimeout(30)
+            .build(),
+        );
+
+        built.sign(serverKeypair);
+        const sendRes = await retryWithBackoff(() => rpcServer!.sendTransaction(built));
+        if (sendRes.status === "PENDING") {
+          let txResult;
+          let attempts = 0;
+          while (attempts < 10) {
+            txResult = await retryWithBackoff(() =>
+              rpcServer!.getTransaction(sendRes.hash),
+            );
+            if (txResult.status !== "NOT_FOUND") break;
+            await new Promise((r) => setTimeout(r, 1000));
+            attempts++;
+          }
+
+          if (txResult?.status !== "SUCCESS") {
+            throw new Error("On-chain transfer_stream transaction failed: " + JSON.stringify(txResult));
+          }
+        } else {
+          throw new Error("Failed to send transfer_stream transaction: " + JSON.stringify(sendRes));
+        }
+      }
+    }
+  } catch (err: any) {
+    if (err.statusCode) throw err;
+    logger.warn({ err, streamId: id }, "on-chain transfer_stream failed");
+    throw new Error("On-chain transfer failed: " + (err.message || JSON.stringify(err)));
+  }
+
+  const now = nowInSeconds();
+  stream.recipient = newRecipient;
+
+  // Invalidate cache
+  await invalidateCache(`stream:${id}`);
+  await invalidateCache("streams:list:");
+  await invalidateCache("streams:export:");
+  resetStatsCache();
+  resetStreamMetricsCache();
+
+  // Atomically write the updated stream row and the transfer event.
+  const db = getDb();
+  db.transaction(() => {
+    upsertStream(stream);
+    recordEventWithDb(db, stream.id, "transferred", now, stream.sender, undefined, {
+      oldRecipient,
+      newRecipient,
+    });
+  })();
+
+  // Webhook fires after the transaction commits.
+  triggerWebhook("transferred", stream);
+  return stream;
+}
 
 /**
  * Updates the start time of a scheduled stream.
