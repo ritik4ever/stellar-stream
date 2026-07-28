@@ -69,6 +69,7 @@ import {
   StreamRecord,
   StreamStatus,
   syncStreams,
+  transferStream,
   updateStreamStartAt,
   getOnChainStreamCount,
 } from "./services/streamStore";
@@ -89,6 +90,7 @@ import {
   recipientAccountIdSchema,
   senderAccountIdSchema,
   streamIdSchema,
+  transferStreamSchema,
   updateStreamStartAtSchema,
 } from "./validation/schemas";
 import { validateEnv } from "./config/validateEnv";
@@ -1044,19 +1046,6 @@ app.get(
       progress: calculateProgress(stream, now),
     }));
 
-  const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
-  if (!parsedQuery.success) {
-    sendValidationError(req, res, parsedQuery.error.issues);
-    return;
-  }
-  const query = parsedQuery.data;
-
-  let data = listStreamsByRecipient(accountId)
-    .map((stream) => ({
-      ...stream,
-      progress: calculateProgress(stream),
-    }));
-
   if (query.status) {
     data = data.filter((stream) => stream.progress.status === query.status);
   }
@@ -1084,24 +1073,8 @@ app.get(
         stream.recipient.toLowerCase().includes(searchTerm) ||
         stream.assetCode.toLowerCase().includes(searchTerm)
       );
-    }
-    if (query.asset) {
-      data = data.filter(
-        (stream) =>
-          stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
-      );
-    }
-    if (query.q && query.q.length > 0) {
-      const searchTerm = query.q.toLowerCase();
-      data = data.filter((stream) => {
-        return (
-          stream.id.toLowerCase().includes(searchTerm) ||
-          stream.sender.toLowerCase().includes(searchTerm) ||
-          stream.recipient.toLowerCase().includes(searchTerm) ||
-          stream.assetCode.toLowerCase().includes(searchTerm)
-        );
-      });
-    }
+    });
+  }
 
     const hasPage = req.query.page !== undefined;
     const hasLimit = req.query.limit !== undefined;
@@ -1400,6 +1373,73 @@ app.post(
     }
 
     res.json({ canceled, failed });
+  },
+);
+
+// POST /api/streams/:id/transfer — sender transfers stream to a new recipient
+app.post(
+  "/api/streams/:id/transfer",
+  mutationLimiter,
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    const user = (req as any).user;
+    if (stream.sender !== user.accountId) {
+      sendApiError(req, res, 403, "Only the sender can transfer this stream.", {
+        code: "FORBIDDEN",
+      });
+      return;
+    }
+
+    const parsedBody = transferStreamSchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      sendValidationError(req, res, parsedBody.error.issues);
+      return;
+    }
+
+    // Validate that the sender in the body matches the authenticated user
+    if (parsedBody.data.sender !== user.accountId) {
+      sendApiError(req, res, 403, "Sender in request body does not match authenticated user.", {
+        code: "FORBIDDEN",
+      });
+      return;
+    }
+
+    try {
+      const updated = await transferStream(parsedId.value, parsedBody.data.newRecipient);
+      res.json({
+        data: {
+          ...updated,
+          progress: calculateProgress(updated),
+        },
+      });
+    } catch (error: any) {
+      logger.error({ err: error, streamId: parsedId.value }, "failed to transfer stream");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to transfer stream.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        {
+          code: normalizedError.code ?? "INTERNAL_ERROR",
+        },
+      );
+    }
   },
 );
 
