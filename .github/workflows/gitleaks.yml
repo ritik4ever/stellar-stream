@@ -10,13 +10,13 @@ jobs:
   gitleaks:
     name: Secret Detection
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Full history for comprehensive scan
-          
+
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
@@ -24,7 +24,7 @@ jobs:
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }} # Optional: for gitleaks pro features
         with:
           config-path: gitleaks.toml
-          
+
       - name: Upload Gitleaks Report
         if: failure()
         uses: actions/upload-artifact@v4
@@ -32,3 +32,23 @@ jobs:
           name: gitleaks-report
           path: results.sarif
           retention-days: 30
+
+  # -----------------------------------------------------------------------
+  # Notify on any secret-detection failure — security findings on any branch
+  # are high-signal events that always warrant immediate notification.
+  # -----------------------------------------------------------------------
+  notify-failure:
+    name: Notify Slack on Failure
+    runs-on: ubuntu-latest
+    needs: [gitleaks]
+    if: failure()
+    steps:
+      - name: Checkout (required to resolve local composite action)
+        uses: actions/checkout@v4
+
+      - name: Send Slack failure notification
+        uses: ./.github/actions/notify-slack-failure
+        with:
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          failing-step: "Secret detected — review Gitleaks report artifact"
+          workflow-name: "Gitleaks Security Scan"

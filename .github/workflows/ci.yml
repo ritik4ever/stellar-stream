@@ -55,12 +55,30 @@ jobs:
         run: npm run build
 
 
+  # -----------------------------------------------------------------------
+  # Slack failure notification — only runs on push to main, never on PRs.
+  # `needs` lists every job above so this job waits for all of them and can
+  # detect failures across any of them via the always()/failure() combo.
+  # -----------------------------------------------------------------------
+  notify-failure:
+    name: Notify Slack on Failure
+    runs-on: ubuntu-latest
+    # Wait for all build jobs regardless of their outcome
+    needs: [backend-build, frontend-build]
+    # Only notify when:
+    #   1. At least one upstream job failed, AND
+    #   2. This is a push to main (not a PR) — PRs are noise, not signal
+    if: >
+      failure() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
     steps:
-      - name: Checkout code
+      - name: Checkout (required to resolve local composite action)
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Send Slack failure notification
+        uses: ./.github/actions/notify-slack-failure
         with:
-          node-version: 18
-
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          failing-step: "Build failed — check backend-build / frontend-build jobs"
+          workflow-name: "CI - Build Checks"

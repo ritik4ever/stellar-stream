@@ -1,0 +1,115 @@
+name: Notify Slack on Failure
+description: >
+  Posts a Slack failure notification with repo, branch, failing step, and a
+  direct link to the failed run. Only call this step when a job has failed
+  (use `if: failure()` on the job or step).
+
+inputs:
+  slack-webhook-url:
+    description: Slack Incoming Webhook URL (store as a repository secret SLACK_WEBHOOK_URL)
+    required: true
+  failing-step:
+    description: Human-readable name of the step or job that failed
+    required: true
+  workflow-name:
+    description: Display name of the workflow (defaults to github.workflow)
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Build and send Slack message
+      shell: bash
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
+        FAILING_STEP: ${{ inputs.failing-step }}
+        WORKFLOW_DISPLAY: ${{ inputs.workflow-name }}
+        REPO: ${{ github.repository }}
+        BRANCH: ${{ github.ref_name }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        ACTOR: ${{ github.actor }}
+        WORKFLOW: ${{ github.workflow }}
+        SHA: ${{ github.sha }}
+      run: |
+        # Use the override display name if provided, otherwise fall back to the
+        # workflow name supplied by the runner environment.
+        DISPLAY_NAME="${WORKFLOW_DISPLAY:-$WORKFLOW}"
+
+        # Short commit SHA (7 chars) for compact display
+        SHORT_SHA="${SHA:0:7}"
+
+        # Build the Slack Block Kit payload. Using blocks gives rich formatting
+        # while staying within the 60-second delivery requirement (pure HTTP POST).
+        PAYLOAD=$(cat <<EOF
+        {
+          "blocks": [
+            {
+              "type": "header",
+              "text": {
+                "type": "plain_text",
+                "text": ":red_circle: CI Failure — ${DISPLAY_NAME}",
+                "emoji": true
+              }
+            },
+            {
+              "type": "section",
+              "fields": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*Repository:*\n<https://github.com/${REPO}|${REPO}>"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Branch:*\n\`${BRANCH}\`"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Failing step:*\n${FAILING_STEP}"
+                },
+                {
+                  "type": "mrkdwn",
+                  "text": "*Triggered by:*\n${ACTOR}"
+                }
+              ]
+            },
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "*Commit:* \`${SHORT_SHA}\`"
+              }
+            },
+            {
+              "type": "actions",
+              "elements": [
+                {
+                  "type": "button",
+                  "text": {
+                    "type": "plain_text",
+                    "text": ":mag: View Failed Run",
+                    "emoji": true
+                  },
+                  "style": "danger",
+                  "url": "${RUN_URL}"
+                }
+              ]
+            }
+          ]
+        }
+        EOF
+        )
+
+        HTTP_STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" \
+          --max-time 15 \
+          -X POST \
+          -H "Content-Type: application/json" \
+          --data "${PAYLOAD}" \
+          "${SLACK_WEBHOOK_URL}")
+
+        if [ "${HTTP_STATUS}" -ne 200 ]; then
+          echo "::warning::Slack notification returned HTTP ${HTTP_STATUS}. Check SLACK_WEBHOOK_URL secret."
+          exit 1
+        fi
+
+        echo "Slack notification sent (HTTP ${HTTP_STATUS})."
