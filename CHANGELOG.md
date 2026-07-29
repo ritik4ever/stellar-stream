@@ -1,3 +1,41 @@
+# Changelog
+
+All notable changes to this project will be documented in this file. This file is managed by [release-please](https://github.com/googleapis/release-please).
+
+## Pre-1.0.0 History
+
+These milestones predate the automated release-please setup and are preserved for historical reference.
+
+### 2026-04-27
+
+- Split streams support in the Soroban contract, including parent/child stream linkage and `create_split_stream`.
+- Contract tests covering split stream creation, child stream lookup, and per-substream claim/cancel behavior.
+
+### 2026-04-26
+
+- Stream pause and resume support in the contract.
+- Contract test coverage for pause/resume behavior and vesting extension after a pause.
+- JWT hardening and related contract test coverage improvements.
+
+### 2026-03-27
+
+- Initial backend API and frontend UI for the Stellar Stream application.
+
+### 2026-03-26
+
+- Global event history API at `GET /api/events`.
+- Webhook retry queue support for delivery failures.
+
+### 2026-02-26
+
+- Webhook notifications with exponential backoff.
+
+### 2026-02-24
+
+- Stream event history system.
+
+---
+
 # 1.0.0 (2026-04-28)
 
 
@@ -79,58 +117,3 @@
 * Standardize request ID in all error responses ([07a54b5](https://github.com/godamongstmen897/stellar-stream/commit/07a54b51cbff4ae399b6dbc259b2a643d740d487)), closes [#154](https://github.com/godamongstmen897/stellar-stream/issues/154)
 * update test.rs ([5cc4d85](https://github.com/godamongstmen897/stellar-stream/commit/5cc4d85ecbdaa51874617e1e60cd3ca3afd486fd))
 * **wave4:** add reliability, performance, and data accuracy improvements ([1bf095a](https://github.com/godamongstmen897/stellar-stream/commit/1bf095add9a803b15fe70c5019ce73d703abda5a)), closes [#133](https://github.com/godamongstmen897/stellar-stream/issues/133) [#132](https://github.com/godamongstmen897/stellar-stream/issues/132) [#134](https://github.com/godamongstmen897/stellar-stream/issues/134) [#137](https://github.com/godamongstmen897/stellar-stream/issues/137) [#133](https://github.com/godamongstmen897/stellar-stream/issues/133) [#132](https://github.com/godamongstmen897/stellar-stream/issues/132) [#134](https://github.com/godamongstmen897/stellar-stream/issues/134) [#137](https://github.com/godamongstmen897/stellar-stream/issues/137)
-# Changelog
-
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project currently tracks history by milestone date.
-
-## [Unreleased]
-
-### Added
-
-- Initial changelog scaffold for back-filled release history.
-
-## [2026-04-27]
-
-### Added
-
-- Split streams support in the Soroban contract, including parent/child stream linkage and `create_split_stream`.
-- Contract tests covering split stream creation, child stream lookup, and per-substream claim/cancel behavior.
-
-## [2026-04-26]
-
-### Added
-
-- Stream pause and resume support in the contract.
-- Contract test coverage for pause/resume behavior and vesting extension after a pause.
-
-### Changed
-
-- JWT hardening and related contract test coverage improvements.
-
-## [2026-03-27]
-
-### Added
-
-- Initial backend API and frontend UI for the Stellar Stream application.
-
-## [2026-03-26]
-
-### Added
-
-- Global event history API at `GET /api/events`.
-- Webhook retry queue support for delivery failures.
-
-## [2026-02-26]
-
-### Added
-
-- Webhook notifications with exponential backoff.
-
-## [2026-02-24]
-
-### Added
-
-- Stream event history system.
