@@ -4,6 +4,10 @@ This document explains how to generate, version, and consume TypeScript bindings
 for the StellarStream Soroban contract. Follow this guide whenever the contract
 ABI changes or you are setting up the frontend for the first time.
 
+> **Stream vesting math** — for the formula derivations behind `claimable()`,
+> `claim()`, and `cancel()` accounting (including worked examples and edge cases),
+> see [STREAM_MATH.md](./STREAM_MATH.md).
+
 ---
 
 ## Overview
