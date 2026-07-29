@@ -150,6 +150,8 @@ sequenceDiagram
 
 3) Stream Math Model
 
+> **Full derivations, worked examples, and edge cases:** [docs/STREAM_MATH.md](docs/STREAM_MATH.md)
+
 For each stream defined by a total amount ($A_{total}$), a start timestamp ($t_{start}$), and a duration in seconds ($d$), the completion timestamp ($t_{end}$) is calculated as:
 
 $$t_{end} = t_{start} + d$$
