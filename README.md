@@ -495,13 +495,34 @@ Event indexer polls every 10 seconds (configurable).
 
 Contract bindings must be regenerated locally after each deployment.
 
-11) Suggested Next Steps
-Move stream source of truth from memory to Soroban state.
+11) Roadmap
 
-Add wallet-authenticated transaction signing flow.
+StellarStream is developed in waves. Each wave document tracks deliverables with a status marker
+(Done / In Progress / Planned) and a timeline estimate.
 
-Wire frontend application to call the contract client directly.
+| Wave | Period | Focus | Document |
+|---|---|---|---|
+| Wave 4 | Feb 2026 – Apr 2026 | Production hardening · Soroban integration · advanced streaming features · developer experience | [wave4.md](./wave4.md) |
+| Wave 5 | May 2026 – Jul 2026 | Security hardening · observability · frontend polish · testing coverage gates | [wave5.md](./wave5.md) |
 
-Add automated contract integration pipelines.
+**Wave 4** (complete — v1.0.0) shipped 73 deliverables across the contract, backend, frontend, and
+infrastructure. Highlights include cliff vesting, split streams, pause/resume, SEP-10 auth, webhook
+dead-letter queues, an RPC circuit breaker, Prometheus metrics, WebSocket real-time push, and a
+full dark-mode UI.
 
-Add real-time event notifications via WebSockets.
+**Wave 5** (in progress) has 56 tracked items. Ten are already complete (body-size limits, `helmet`
+headers, structured logging, metrics history endpoint, Dependabot). Five are actively in progress
+(reconciliation interval config, metrics chart wiring, stats panel, stream detail timeline). The
+remaining 41 cover JWT claim hardening, Prometheus `collectDefaultMetrics`, cursor-based event
+pagination, WCAG accessibility, coverage CI gates, and Docker hardening.
+
+12) Suggested Next Steps
+Complete Wave 5 security items (JWT `aud`/`iss` validation, dual-secret rotation, input sanitisation).
+
+Wire `useMetricsHistory` and `StatsPanel` to their live API endpoints.
+
+Add `ErrorBoundary` and skeleton loaders for resilient frontend loading states.
+
+Enforce 70 % backend and 60 % frontend coverage gates in CI.
+
+Harden the Docker image (non-root user, `HEALTHCHECK` instruction).
