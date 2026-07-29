@@ -61,4 +61,48 @@ connect-src 'self' https://rpc-futurenet.stellar.org
 
 Implementation: `frontend/vite.config.ts` (`content-security-policy` plugin and dev/preview headers).
 
+## Stellar-Specific Security Considerations
 
+### Testnet vs Mainnet Safety Checklist
+
+Before deploying or interacting with contracts, confirm which network you're targeting:
+
+- [ ] Verify `NETWORK_PASSPHRASE` matches the intended network (Testnet: `Test SDF Network ; September 2015`, Mainnet: `Public Global Stellar Network ; September 2015`).
+- [ ] Confirm the Horizon/RPC endpoint URL points to the correct network before signing transactions.
+- [ ] Never reuse Testnet keypairs for Mainnet accounts — treat them as fully separate identities.
+- [ ] Double-check contract IDs; a valid contract ID on Testnet has no relationship to the same ID on Mainnet.
+- [ ] Use a wallet or signer that clearly displays which network is active before every transaction approval.
+- [ ] Run integration tests exclusively against Testnet/Futurenet; never point CI against Mainnet.
+
+### Private Key Management Best Practices
+
+- **Never commit secret keys** (`S...` seed values) to source control, `.env` files tracked by git, or CI logs.
+- Store signing keys in a hardware wallet (e.g., Ledger) or OS-level secure storage for any Mainnet operations.
+- Use multi-signature (multisig) setups for contract admin/upgrade keys rather than a single signer.
+- Rotate deployment/admin keys if there's any suspicion of exposure, and prefer short-lived keys for CI/CD automation over long-lived ones.
+- For frontend apps, never request or handle raw secret keys — rely on wallet-based signing (Freighter, xBull, etc.) so keys never touch application code.
+- Environment variables holding sensitive keys should be scoped narrowly (per-environment) and excluded via `.gitignore`.
+
+### Contract Upgrade Security Considerations
+
+- Restrict upgrade authority to a multisig or governance-controlled address — never a single EOA-equivalent signer.
+- Emit an event on every upgrade so upgrades are auditable on-chain.
+- Consider a timelock between proposing and executing an upgrade, giving users/auditors time to react.
+- Validate that new WASM hashes are reviewed and, where possible, verified against a reproducible build before upgrade execution.
+- Ensure upgraded contracts preserve storage layout compatibility to avoid state corruption.
+- Document and test a rollback plan in case an upgrade introduces a critical bug.
+
+### Oracle Manipulation Attack Vectors and Mitigations
+
+**Attack vectors:**
+- **Price manipulation via low liquidity**: An attacker manipulates a thinly-traded pair to distort a price feed the contract relies on.
+- **Flash-loan-assisted manipulation**: Large, short-term capital is used to skew an on-chain price within a single transaction/block.
+- **Stale data reliance**: Contract logic uses outdated oracle data because it doesn't check the data's freshness/timestamp.
+- **Single-source dependency**: Relying on one oracle/price feed creates a single point of failure.
+
+**Mitigations:**
+- Use decentralized, multi-source oracle aggregation rather than a single feed.
+- Enforce staleness checks — reject oracle data older than a defined threshold.
+- Apply circuit breakers or maximum deviation checks: reject price updates that swing beyond a sane percentage in a short window.
+- Prefer time-weighted average price (TWAP) over spot price for any calculation vulnerable to short-term manipulation.
+- Cross-validate critical price data against a secondary source before executing high-value operations.
