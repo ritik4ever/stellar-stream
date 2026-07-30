@@ -13,6 +13,24 @@ For production setup and operations, see `DEPLOYMENT.md` and `RUNBOOK.md`.
 For security policy and reporting vulnerabilities, see `SECURITY.md`.
 We are committed to a welcoming environment; see our `CODE_OF_CONDUCT.md`.
 
+## Video Walkthroughs
+
+The following GIFs demonstrate key StellarStream workflows:
+
+### Create Stream
+![Create stream walkthrough](https://github.com/YOUR_USERNAME/stellar-stream/releases/download/v1.0.0/create-stream.gif)
+*Alt text: Animated GIF showing how to create a new payment stream by filling in sender, recipient, asset, amount, and duration fields, then confirming the stream creation.*
+
+### Monitor Vesting
+![Monitor vesting walkthrough](https://github.com/YOUR_USERNAME/stellar-stream/releases/download/v1.0.0/monitor-vesting.gif)
+*Alt text: Animated GIF showing the recipient dashboard displaying active streams with real-time vesting progress, claimable amounts, and completion percentages.*
+
+### Claim Tokens
+![Claim tokens walkthrough](https://github.com/YOUR_USERNAME/stellar-stream/releases/download/v1.0.0/claim-tokens.gif)
+*Alt text: Animated GIF demonstrating how to claim vested tokens from active streams using the claim button, including wallet connection and transaction confirmation.*
+
+---
+
 1) What The Project Does
 
 StellarStream models a payment stream where a sender allocates a total amount over a fixed duration.
