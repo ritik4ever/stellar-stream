@@ -113,13 +113,38 @@ vi.mock("@stellar/stellar-sdk", () => {
         };
       }
 
+      if (operation.method === "create_stream") {
+        return {
+          kind: "success",
+          result: { retval: 101 },
+        };
+      }
+
       throw new Error(`Unexpected contract method: ${operation.method}`);
+    }
+
+    async prepareTransaction(tx: any) {
+      return {
+        ...tx,
+        sign: vi.fn(),
+      };
+    }
+
+    async sendTransaction(_tx: any) {
+      return { status: "PENDING", hash: "mock-hash-123" };
+    }
+
+    async getTransaction(_hash: string) {
+      return { status: "SUCCESS", returnValue: 101 };
     }
   }
 
   return {
     Keypair: {
-      fromSecret: vi.fn(),
+      fromSecret: vi.fn(() => ({
+        publicKey: () => "GB3K5Z74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        sign: vi.fn(),
+      })),
     },
     rpc: {
       Server: MockServer,
@@ -130,7 +155,10 @@ vi.mock("@stellar/stellar-sdk", () => {
     Contract: MockContract,
     nativeToScVal: (value: any) => value,
     scValToNative: (value: any) => value,
-    Address: class MockAddress {},
+    Address: class MockAddress {
+      constructor(private addr: string) {}
+      toScVal() { return this.addr; }
+    },
     TimeoutInfinite: {},
     TransactionBuilder: MockTransactionBuilder,
     Networks: {
@@ -789,6 +817,10 @@ describe("metadata round-trip", () => {
   });
 });
 
+describe("createStream", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
 describe("getStreamById", () => {
   const frozenTime = Math.floor(Date.now() / 1000);
 
@@ -804,6 +836,70 @@ describe("getStreamById", () => {
     mockState.createdEventIds = new Set<string>();
 
     dbMocks.initDb.mockImplementation(() => undefined);
+    dbMocks.getDb.mockReturnValue(createDbMock());
+
+    delete process.env.SOROBAN_DISABLED;
+    delete process.env.SOROBAN_ENABLED;
+    process.env.CONTRACT_ID = "C1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890";
+    process.env.RPC_URL = "https://soroban-testnet.stellar.org:443";
+    process.env.STELLAR_SECRET_KEY = "SDUMMYSECRETKEY12345678901234567890123456789012345678901";
+  });
+
+  it("builds, simulates, signs, and submits Soroban tx when configured", async () => {
+    const { initSoroban, createStream } = await import("./streamStore");
+    await initSoroban();
+
+    const stream = await createStream({
+      sender: "GB3K5Z74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+      recipient: "GDESTINATION1234567890123456789012345678901234567890123",
+      assetCode: "USDC",
+      totalAmount: 500,
+      durationSeconds: 3600,
+    });
+
+    expect(stream.id).toBe("101");
+    expect(stream.totalAmount).toBe(500);
+    expect(mockState.upsertedStreams).toHaveLength(1);
+    expect(mockState.upsertedStreams[0].id).toBe("101");
+  });
+
+  it("uses SQLite fallback when SOROBAN_ENABLED=false or SOROBAN_DISABLED=true", async () => {
+    process.env.SOROBAN_ENABLED = "false";
+    const { initSoroban, createStream } = await import("./streamStore");
+    await initSoroban();
+
+    const dbMockWithMax = {
+      prepare(sql: string) {
+        if (sql.includes("SELECT MAX(CAST(id AS INTEGER))")) {
+          return { get: () => ({ maxId: 41 }) };
+        }
+        if (sql.includes("INSERT INTO streams")) {
+          return {
+            run: (params: any) => {
+              mockState.upsertedStreams.push(params);
+              return { changes: 1 };
+            },
+          };
+        }
+        throw new Error(`Unexpected SQL: ${sql}`);
+      },
+      transaction<T extends (...args: any[]) => any>(callback: T): T {
+        return ((...args: Parameters<T>) => callback(...args)) as T;
+      },
+    };
+    dbMocks.getDb.mockReturnValue(dbMockWithMax);
+
+    const stream = await createStream({
+      sender: "GB3K5Z74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+      recipient: "GDESTINATION1234567890123456789012345678901234567890123",
+      assetCode: "XLM",
+      totalAmount: 100,
+      durationSeconds: 1800,
+    });
+
+    expect(stream.id).toBe("42");
+  });
+});
   });
 
   afterEach(() => {
