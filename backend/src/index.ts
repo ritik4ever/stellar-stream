@@ -33,7 +33,7 @@ import {
   getCircuitBreakerStatus,
 } from "./services/indexer";
 import { adminAuth } from "./middleware/adminAuth";
-import { deleteStreamById, reconcileStream } from "./services/streamStore";
+import { clawbackStream, deleteStreamById, reconcileStream } from "./services/streamStore";
 import { getCache } from "./services/cache";
 import { getStreamStats } from "./services/stats";
 import { getStreamMetrics } from "./services/streamMetrics";
@@ -274,6 +274,23 @@ const reconcileLimiter = rateLimit({
       : 60;
     res.set("Retry-After", String(Math.max(1, retryAfter)));
     sendApiError(req, res, 429, "Too many reconcile requests for this stream. Please try again later.", {
+      code: "RATE_LIMIT_EXCEEDED",
+    });
+  },
+});
+
+const adminClawbackLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req: Request, res: Response, next: NextFunction) => {
+    const resetTime = (req as any).rateLimit?.resetTime;
+    const retryAfter = resetTime
+      ? Math.ceil((resetTime.getTime() - Date.now()) / 1000)
+      : 60;
+    res.set("Retry-After", String(Math.max(1, retryAfter)));
+    sendApiError(req, res, 429, "Too many clawback requests. Please try again later.", {
       code: "RATE_LIMIT_EXCEEDED",
     });
   },
@@ -1971,6 +1988,76 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+
+const clawbackBodySchema = z.object({
+  amount: z.number().positive("amount must be positive"),
+});
+
+app.post(
+  "/api/admin/streams/:id/clawback",
+  adminClawbackLimiter,
+  adminAuth,
+  async (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const parsedBody = clawbackBodySchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      sendValidationError(req, res, parsedBody.error.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    try {
+      const result = await clawbackStream(parsedId.value, parsedBody.data.amount);
+
+      const db = (await import("./services/db")).getDb();
+      const { recordEventWithDb } = await import("./services/eventHistory");
+      const now = Math.floor(Date.now() / 1000);
+
+      recordEventWithDb(
+        db,
+        stream.id,
+        "clawed_back",
+        now,
+        stream.sender,
+        result.actualAmount,
+        { txHash: result.txHash, requestedAmount: parsedBody.data.amount },
+      );
+
+      res.json({
+        result: {
+          txHash: result.txHash,
+          actualAmount: result.actualAmount,
+          requestedAmount: parsedBody.data.amount,
+        },
+      });
+    } catch (error: any) {
+      logger.error({ err: error, streamId: parsedId.value }, "failed to execute clawback");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to execute clawback.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        {
+          code: normalizedError.code ?? "INTERNAL_ERROR",
+        },
+      );
+    }
+  },
+);
 
 app.delete("/api/streams/:id", adminAuth, (req: Request, res: Response) => {
   const parsedId = parseStreamId(req.params.id);
