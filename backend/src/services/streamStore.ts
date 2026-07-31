@@ -1173,6 +1173,51 @@ export async function pauseStream(id: string): Promise<StreamRecord> {
   }
 
   stream.pausedAt = nowInSeconds();
+
+  // Submit on-chain pause_stream transaction before updating local state.
+  try {
+    const sorobanContext = getSorobanContext();
+    if (sorobanContext && rpcServer && serverKeypair) {
+      const contractId = process.env.CONTRACT_ID;
+      if (contractId) {
+        const sourceAccount = await rpcServer.getAccount(serverKeypair.publicKey());
+        const contract = new Contract(contractId);
+        const tx = contract.call(
+          "pause_stream",
+          nativeToScVal(parseInt(id), { type: "u64" }),
+          new Address(stream.sender).toScVal(),
+        );
+
+        const built = await rpcServer.prepareTransaction(
+          new TransactionBuilder(sourceAccount, {
+            fee: "1000",
+            networkPassphrase: process.env.NETWORK_PASSPHRASE || Networks.TESTNET,
+          })
+            .addOperation(tx)
+            .setTimeout(30)
+            .build(),
+        );
+
+        built.sign(serverKeypair);
+        const sendRes = await retryWithBackoff(() => rpcServer!.sendTransaction(built));
+        if (sendRes.status === "PENDING") {
+          let txResult;
+          let attempts = 0;
+          while (attempts < 10) {
+            txResult = await retryWithBackoff(() =>
+              rpcServer!.getTransaction(sendRes.hash),
+            );
+            if (txResult.status !== "NOT_FOUND") break;
+            await new Promise((r) => setTimeout(r, 1000));
+            attempts++;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, streamId: id }, "failed to pause stream on chain");
+  }
+
   const db = getDb();
   db.transaction(() => {
     upsertStream(stream);
@@ -1208,6 +1253,50 @@ export async function resumeStream(id: string): Promise<StreamRecord> {
   stream.pausedDuration = (stream.pausedDuration ?? 0) + elapsed;
   stream.durationSeconds += elapsed;
   stream.pausedAt = undefined;
+
+  // Submit on-chain resume_stream transaction before updating local state.
+  try {
+    const sorobanContext = getSorobanContext();
+    if (sorobanContext && rpcServer && serverKeypair) {
+      const contractId = process.env.CONTRACT_ID;
+      if (contractId) {
+        const sourceAccount = await rpcServer.getAccount(serverKeypair.publicKey());
+        const contract = new Contract(contractId);
+        const tx = contract.call(
+          "resume_stream",
+          nativeToScVal(parseInt(id), { type: "u64" }),
+          new Address(stream.sender).toScVal(),
+        );
+
+        const built = await rpcServer.prepareTransaction(
+          new TransactionBuilder(sourceAccount, {
+            fee: "1000",
+            networkPassphrase: process.env.NETWORK_PASSPHRASE || Networks.TESTNET,
+          })
+            .addOperation(tx)
+            .setTimeout(30)
+            .build(),
+        );
+
+        built.sign(serverKeypair);
+        const sendRes = await retryWithBackoff(() => rpcServer!.sendTransaction(built));
+        if (sendRes.status === "PENDING") {
+          let txResult;
+          let attempts = 0;
+          while (attempts < 10) {
+            txResult = await retryWithBackoff(() =>
+              rpcServer!.getTransaction(sendRes.hash),
+            );
+            if (txResult.status !== "NOT_FOUND") break;
+            await new Promise((r) => setTimeout(r, 1000));
+            attempts++;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, streamId: id }, "failed to resume stream on chain");
+  }
 
   const db = getDb();
   db.transaction(() => {
