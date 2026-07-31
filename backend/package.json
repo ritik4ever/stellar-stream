@@ -4,9 +4,9 @@
   "description": "Backend API for StellarStream",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
+    "dev": "node api.js && ts-node-dev --respawn src/index.ts",
+    "build": "node api.js && tsc",
+    "start": "node api.js && node dist/index.js",
     "test": "vitest",
     "lint": "eslint src"
   },
