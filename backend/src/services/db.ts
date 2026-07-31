@@ -326,7 +326,5 @@ export function initDb(): void {
     db.pragma("cache_size = -64000");
   }
 
-
-
-
+  runMigrations(db);
 }

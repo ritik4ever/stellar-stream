@@ -111,6 +111,8 @@ export function StreamsTable({
   const [columnsOpen, setColumnsOpen] = useState(false);
   const columnsRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const tableWrapperRef = useRef<HTMLDivElement>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const [streamProgressUpdates, setStreamProgressUpdates] = useState<Map<string, Stream["progress"]>>(new Map());
 
   const wsUrl = import.meta.env.VITE_WS_URL ?? "";
@@ -285,6 +287,29 @@ export function StreamsTable({
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [columnsOpen]);
 
+  useEffect(() => {
+  const container = tableWrapperRef.current;
+  if (!container) return;
+
+  const handleKeyDown = (e: KeyboardEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.tagName === "INPUT" && target.getAttribute("type") !== "checkbox") return;
+
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      handleSelectAllToggle();
+    } else if (e.key === "Escape") {
+      setSelectedStreamIds(new Set());
+    } else if ((e.key === "Delete" || e.key === "Backspace") && selectedStreamIds.size > 0) {
+      e.preventDefault();
+      cancelButtonRef.current?.focus();
+    }
+  };
+
+  container.addEventListener("keydown", handleKeyDown);
+  return () => container.removeEventListener("keydown", handleKeyDown);
+}, [selectedStreamIds, handleSelectAllToggle]);
+
   const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
   const shouldVirtualize = !loading && sortedStreams.length >= VIRTUALIZATION_THRESHOLD;
 
@@ -401,7 +426,7 @@ export function StreamsTable({
           <span>Live updates paused - using polling for progress updates</span>
         </div>
       )}
-      <div className="card">
+      <div className="card" ref={tableWrapperRef}>
         <FilterBar filters={filters} onChange={onFiltersChange} setUrlFilters={setUrlFilters} />
         <div
           className="streams-table-toolbar"
@@ -569,6 +594,7 @@ export function StreamsTable({
           onCancel={handleBulkCancel}
           isCanceling={isBulkCanceling}
           progress={bulkCancelProgress}
+          buttonRef={cancelButtonRef}
         />
       )}
     </>
@@ -580,6 +606,7 @@ interface BulkActionBarProps {
   onCancel: () => void;
   isCanceling: boolean;
   progress: { current: number; total: number };
+  buttonRef?: React.Ref<HTMLButtonElement>;
 }
 
 function BulkActionBar({
@@ -587,6 +614,7 @@ function BulkActionBar({
   onCancel,
   isCanceling,
   progress,
+  buttonRef,        // ← add this line to the destructured props
 }: BulkActionBarProps) {
   return (
     <div className="bulk-action-bar">
@@ -595,6 +623,7 @@ function BulkActionBar({
           {selectedCount} stream{selectedCount !== 1 ? "s" : ""} selected
         </span>
         <button
+          ref={buttonRef}
           className="bulk-action-bar__button"
           onClick={onCancel}
           disabled={isCanceling}
