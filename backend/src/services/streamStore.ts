@@ -194,11 +194,12 @@ export async function initSoroban() {
     process.env.RPC_URL || "https://soroban-testnet.stellar.org:443";
   rpcServer = new rpc.Server(rpcUrl);
 
-  if (process.env.SERVER_PRIVATE_KEY) {
-    serverKeypair = Keypair.fromSecret(process.env.SERVER_PRIVATE_KEY);
+  const secretKey = process.env.STELLAR_SECRET_KEY || process.env.SERVER_PRIVATE_KEY;
+  if (secretKey) {
+    serverKeypair = Keypair.fromSecret(secretKey);
   } else {
     logger.warn(
-      "SERVER_PRIVATE_KEY missing. Creating streams on-chain will fail.",
+      "SERVER_PRIVATE_KEY / STELLAR_SECRET_KEY missing. Creating streams on-chain will fail.",
     );
   }
 }
@@ -779,49 +780,73 @@ export async function reconcileMissingStreams(): Promise<number> {
 
 export async function createStream(input: StreamInput): Promise<StreamRecord> {
   const startAt = input.startAt ?? nowInSeconds();
+  const sorobanDisabled =
+    process.env.SOROBAN_DISABLED?.toLowerCase() === "true" ||
+    process.env.SOROBAN_ENABLED?.toLowerCase() === "false";
+
   const contractId = process.env.CONTRACT_ID;
   const netPass =
     process.env.NETWORK_PASSPHRASE || "Test SDF Network ; September 2015";
 
-  if (!contractId || !rpcServer || !serverKeypair) {
-    throw new Error("Backend not configured for Soroban.");
-  }
+  let streamIdStr: string;
 
-  const sourceAccount = await rpcServer.getAccount(serverKeypair.publicKey());
-  const tx = createStreamOperation(contractId, input, startAt);
+  if (sorobanDisabled || !contractId || !rpcServer || !serverKeypair) {
+    if (!sorobanDisabled && (!contractId || !rpcServer || !serverKeypair)) {
+      logger.warn(
+        "Soroban configuration incomplete or serverKeypair missing, falling back to local SQLite creation.",
+      );
+    }
+    // Fallback SQLite-only path (e.g., local dev or SOROBAN_ENABLED=false)
+    const db = getDb();
+    const row = db
+      .prepare("SELECT MAX(CAST(id AS INTEGER)) as maxId FROM streams")
+      .get() as { maxId: number | null } | undefined;
+    const nextNumericId = (row?.maxId ?? 0) + 1;
+    streamIdStr = nextNumericId.toString();
+  } else {
+    // Soroban path: build, simulate, sign, and submit transaction
+    const sourceAccount = await rpcServer.getAccount(serverKeypair.publicKey());
+    const op = createStreamOperation(contractId, input, startAt);
 
+    const txToSimulate = new TransactionBuilder(sourceAccount, {
   const built = await rpcServer.prepareTransaction(
     new TransactionBuilder(sourceAccount, {
       fee: "1000",
       networkPassphrase: netPass,
     })
-      .addOperation(tx)
+      .addOperation(op)
       .setTimeout(30)
-      .build(),
-  );
+      .build();
 
-  built.sign(serverKeypair);
+    const simRes = await rpcServer.simulateTransaction(txToSimulate);
+    if (!rpc.Api.isSimulationSuccess(simRes)) {
+      throw new Error("Soroban RPC simulation failed: " + JSON.stringify(simRes));
+    }
 
-  const sendRes = await retryWithBackoff(() => rpcServer!.sendTransaction(built));
-  if (sendRes.status !== "PENDING") {
-    throw new Error("Failed to send transaction: " + JSON.stringify(sendRes));
+    const preparedTx = await rpcServer.prepareTransaction(txToSimulate);
+    preparedTx.sign(serverKeypair);
+
+    const sendRes = await retryWithBackoff(() => rpcServer!.sendTransaction(preparedTx));
+    if (sendRes.status !== "PENDING") {
+      throw new Error("Failed to send transaction: " + JSON.stringify(sendRes));
+    }
+
+    let txResult;
+    let attempts = 0;
+    while (attempts < 10) {
+      txResult = await retryWithBackoff(() => rpcServer!.getTransaction(sendRes.hash));
+      if (txResult.status !== "NOT_FOUND") break;
+      await new Promise((r) => setTimeout(r, 1000));
+      attempts++;
+    }
+
+    if (txResult?.status !== "SUCCESS" || !txResult.returnValue) {
+      throw new Error("Tx failed on chain: " + JSON.stringify(txResult));
+    }
+
+    const streamIdVal = scValToNative(txResult.returnValue);
+    streamIdStr = streamIdVal.toString();
   }
-
-  let txResult;
-  let attempts = 0;
-  while (attempts < 10) {
-    txResult = await retryWithBackoff(() => rpcServer!.getTransaction(sendRes.hash));
-    if (txResult.status !== "NOT_FOUND") break;
-    await new Promise((r) => setTimeout(r, 1000));
-    attempts++;
-  }
-
-  if (txResult?.status !== "SUCCESS" || !txResult.returnValue) {
-    throw new Error("Tx failed on chain: " + JSON.stringify(txResult));
-  }
-
-  const streamIdVal = scValToNative(txResult.returnValue);
-  const streamIdStr = streamIdVal.toString();
 
   const stream: StreamRecord = {
     id: streamIdStr,
@@ -860,6 +885,8 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
   resetStatsCache();
   resetStreamMetricsCache();
 
+  // Webhook fires after the transaction commits — a webhook failure
+  // must never roll back an already-persisted stream.
   triggerWebhook("created", stream);
   return stream;
 }
