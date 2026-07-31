@@ -9,13 +9,14 @@ A lightweight playbook for maintainers covering issue triage, label hygiene, rel
 4. [Label System](#label-system)
 5. [PR Review Process](#pr-review-process)
 6. [Local Verification Steps](#local-verification-steps)
-7. [Release Checklist](#release-checklist)
+7. [Release Process](#release-process)
 8. [Contract Readiness](#contract-readiness)
 9. [Known Limitations & Watchlist](#known-limitations--watchlist)
 10. [Conflict Resolution](#conflict-resolution)
 11. [Deployment & Monitoring](#deployment--monitoring)
 12. [Security & Maintenance](#security--maintenance)
-13. [Maintainer Handoff](#maintainer-handoff)
+13. [Community Management Guidelines](#community-management-guidelines)
+14. [Maintainer Handoff](#maintainer-handoff)
 
 ---
 
@@ -113,69 +114,79 @@ During each release cycle, review open issues with `backlog` or `help wanted` la
 
 ## PR Review Process
 
+### Review Goals
+Every review should answer three questions:
+1. Does the change solve the stated problem?
+2. Does it preserve the project's reliability and security?
+3. Is the implementation clear enough for a future maintainer to understand?
+
 ### Pre-Review Checklist
-Before reviewing any PR, verify:
-- [ ] CI/CD pipeline passes (GitHub Actions)
-- [ ] No merge conflicts with main
-- [ ] PR description is clear and references an issue
-- [ ] Branch is based on recent main (< 3 days old)
+Before reviewing a PR, verify:
+- [ ] CI/CD checks are green or the failures are clearly unrelated
+- [ ] The branch has no unresolved merge conflicts with main
+- [ ] The PR description explains the problem, the change, and the testing performed
+- [ ] The PR links to the relevant issue or ticket
+- [ ] The diff is scoped to the stated work and does not include unrelated changes
 
-### Review Checklist
+### Objective Review Checklist
+Use the following rubric for each review:
 
-#### Code Quality
-- [ ] Code follows project style (ESLint, Prettier)
-- [ ] No console.log or debug statements left behind
-- [ ] Error handling is appropriate
-- [ ] No hardcoded secrets or sensitive data
-- [ ] Comments explain "why", not "what"
+#### Correctness
+- [ ] The change matches the issue requirements and does not introduce regressions
+- [ ] Error handling is explicit and user-facing failures are understandable
+- [ ] Edge cases and failure modes are considered
 
 #### Testing
-- [ ] Tests are included for new features
-- [ ] Existing tests still pass
-- [ ] Test coverage hasn't decreased
-- [ ] Edge cases are covered
+- [ ] New or changed behavior is covered by tests when appropriate
+- [ ] Existing relevant tests still pass
+- [ ] No test was weakened or removed without explanation
 
-#### Documentation
-- [ ] README updated if needed
-- [ ] API changes documented
-- [ ] Complex logic has comments
-- [ ] CHANGELOG entry added (if applicable)
+#### Security
+- [ ] No secrets, tokens, or credentials are introduced into code or config
+- [ ] Input validation and authorization checks are present where needed
+- [ ] Sensitive data is not exposed in logs, responses, or error messages
 
-#### Architecture
-- [ ] Changes align with project architecture
-- [ ] No unnecessary dependencies added
-- [ ] Performance impact considered
-- [ ] Backwards compatibility maintained
+#### Maintainability
+- [ ] The implementation follows project conventions and existing patterns
+- [ ] Comments explain intent where the logic is non-obvious
+- [ ] No unnecessary dependencies or large refactors are included
+- [ ] Documentation is updated when behavior, API surface, or deployment changes
 
-### Review Comments Template
+### Reviewer Decision Rules
+- **Approve** when the required checks pass and no critical concerns remain.
+- **Request changes** when the PR is missing tests, introduces a security risk, or changes behavior without sufficient justification.
+- **Comment only** when you have a concrete suggestion; avoid style-only nits unless they materially affect readability or consistency.
+- For large or risky changes, ask for a short walkthrough or design note before approval.
+
+### Review Comment Templates
 
 **For Approval:**
 ```
-✅ Looks good! This PR:
-- Fixes [issue #X]
-- Follows our code standards
-- Has good test coverage
-- Ready to merge!
+✅ Looks good. This PR:
+- Implements the requested change for [issue #X]
+- Includes appropriate validation and tests
+- Does not introduce obvious regressions
+- Ready to merge.
 ```
 
 **For Changes Requested:**
 ```
-Thanks for the PR! I have a few suggestions:
+Thanks for the PR. I have a few blocking concerns:
 
-1. **[File or Function]**: [Specific feedback]
+1. **[File/Function]**: [Specific feedback]
    - Why: [Explanation]
-   - Suggestion: [How to fix]
+   - Suggested fix: [How to address it]
 
 2. **[File/Function]**: [Specific feedback]
 
-Please address these and let me know when ready for re-review.
+Please address these items and re-request review when ready.
 ```
 
 ### Merge Strategy
-- Use **"Squash and merge"** for small PRs (< 5 commits)
-- Use **"Create a merge commit"** for larger features (preserves history)
-- Use **"Rebase and merge"** for hotfixes (clean linear history)
-- Always delete the branch after merging
+- Use **Squash and merge** for small PRs or routine fixes
+- Use **Create a merge commit** when preserving multiple logical commits matters
+- Use **Rebase and merge** for small, time-sensitive hotfixes when history should stay linear
+- Delete the branch after merge unless there is a documented reason to keep it open
 
 ---
 
@@ -272,34 +283,58 @@ sqlite> .quit
 
 ## Release Process
 
-StellarStream uses `release-please` to automate versioning and changelog generation.
+StellarStream uses the GitHub workflow in [.github/workflows/release.yml](.github/workflows/release.yml) to automate versioning, changelog updates, and container image publishing.
 
-### How it works
-1. **Conventional Commits**: All PRs merged into `main` must follow [Conventional Commits](https://www.conventionalcommits.org/).
-   - `fix:` triggers a patch release.
-   - `feat:` triggers a minor release.
-   - `feat!:` or `fix!:` (with a `BREAKING CHANGE` footer) triggers a major release.
-2. **Release PR**: `release-please` automatically opens a "Release PR" when new commits are pushed to `main`. This PR updates `package.json` and `CHANGELOG.md`.
-3. **Merging Release PR**: When the Release PR is merged:
-   - A GitHub Release is created.
-   - A git tag (e.g., `v1.1.0`) is created.
-   - Docker images are automatically built and pushed to **GitHub Container Registry (GHCR)**.
+### Step-by-Step Release Checklist
+1. **Confirm release readiness**
+   - Review open PRs and ensure the changelog, docs, and deployment notes are updated.
+   - Make sure the main branch is green and that the release scope is clear.
 
-### Docker Images
-Images are available at:
-- `ghcr.io/<owner>/stellar-stream-backend`
-- `ghcr.io/<owner>/stellar-stream-frontend`
+2. **Verify the codebase locally**
+   ```bash
+   npm run install:all
+   cd backend && npm run test
+   cd ../frontend && npm run test
+   cd .. && npm run build
+   ```
+   - If a change affects deployment or configuration, also review the relevant docs in [DEPLOYMENT.md](DEPLOYMENT.md) and [RUNBOOK.md](RUNBOOK.md).
 
-Each image is tagged with `latest` and the version tag (e.g., `v1.1.0`).
+3. **Use conventional commits for merged work**
+   - `fix:` → patch release
+   - `feat:` → minor release
+   - `feat!:` or `fix!:` with a `BREAKING CHANGE` footer → major release
+   - If a PR merges without a conventional commit prefix, adjust the title or ask the author to amend it before release.
 
-### Manual Release Tagging (Legacy)
-Previously, releases were tagged manually. This is no longer recommended.
+4. **Wait for the release-please PR**
+   - The workflow opens a release PR automatically after changes land on main.
+   - Review the generated PR for the version bump, changelog entries, and any unexpected file changes.
 
-### Post-Release
-- [ ] Verify health endpoint responds on deployed instance: `GET /api/health`
-- [ ] Create a new stream via the frontend and confirm it appears in the stream list
-- [ ] Cancel the test stream and confirm status updates to canceled
-- [ ] Close the GitHub milestone (if used) and open the next one
+5. **Merge the release PR**
+   - Merging it creates the GitHub Release and the version tag.
+   - The publish job builds and pushes Docker images to GHCR.
+
+6. **Verify the release artifacts**
+   - Confirm the GitHub Release exists and the tag points to the expected commit.
+   - Confirm the backend and frontend images are published to GHCR.
+   - Validate the deployed health endpoint and a basic smoke test against the live environment.
+
+7. **Communicate the release**
+   - Share the release summary in the project channels.
+   - Note any migration steps, breaking changes, or follow-up work in the release notes.
+
+### Expected Release Artifacts
+- GitHub Release and git tag (for example, `v1.1.0`)
+- Updated [CHANGELOG.md](CHANGELOG.md)
+- Docker images tagged with `latest` and the version tag
+
+### Manual Fallback (Only if Needed)
+If the automated release workflow fails or does not open a release PR, inspect the recent merge history and confirm the commit messages follow conventional commit rules before creating a release manually. Avoid manual tagging unless the automation is clearly broken.
+
+### Post-Release Checklist
+- [ ] Verify `GET /api/health` responds on the deployed instance
+- [ ] Create a test stream via the frontend and confirm it appears in the list
+- [ ] Cancel the test stream and confirm its status updates correctly
+- [ ] Close the current milestone (if used) and open the next one
 
 ---
 
@@ -457,46 +492,50 @@ npm update     # Update to latest compatible versions
 - Review breaking changes
 - Test thoroughly
 - Update documentation
-- Create PR for review
+- Create a PR for review
 
-### Security Reporting
-- Do NOT create public issues for security vulnerabilities.
-- Direct researchers to the [Security Policy](SECURITY.md).
-- Ensure **GitHub Security Advisories** are enabled for the repository to allow private reporting.
-- Follow responsible disclosure (30-day window).
-- SLA: 48h acknowledgement, 7d initial assessment, 30d fix target.
-- Credit reporters in release notes.
+### Handling Security Disclosures
+- Do not open a public issue for a security vulnerability. Report it privately through the GitHub Security Advisory form linked in [SECURITY.md](SECURITY.md).
+- Acknowledge the report within 48 hours and confirm whether the report is valid within 7 days.
+- Keep the discussion private until a fix is ready. If the issue is urgent, rotate exposed credentials and disable the affected path or deployment while mitigation is prepared.
+- Coordinate disclosure timing with the reporter, then publish a concise advisory and release note once the fix is available.
+- If a fix affects a supported release line, backport it to the relevant branch and note the affected versions clearly.
 
 ### Code Security Review
-- Check for SQL injection (SQLite queries in `backend/src/services/db.ts`)
-- Verify no hardcoded secrets
-- Validate user inputs (stream amounts, durations)
-- Check for XSS vulnerabilities in frontend
-- Verify authentication/authorization on API endpoints
+- Check for SQL injection or unsafe query handling in the backend data layer
+- Verify no hardcoded secrets or tokens are introduced into code or config
+- Validate user inputs, especially stream amounts, durations, and asset identifiers
+- Review frontend rendering paths for XSS or unsafe DOM usage
+- Confirm authentication and authorization are enforced on endpoints that modify state
 
 ### Dependency Vulnerabilities
-- Use `npm audit` regularly
-- Subscribe to security advisories
-- Update critical dependencies immediately
-- Document why non-critical updates are deferred
+- Run `npm audit` regularly and review findings in the context of the current release
+- Update critical dependencies immediately when a fix is available
+- Document why non-critical updates are deferred when they are not yet safe to adopt
 
 ---
 
-## Communication
+## Community Management Guidelines
 
-### Channels
-- **GitHub Issues**: Bug reports, feature requests
-- **GitHub Discussions**: Design decisions, questions
-- **GitHub PRs**: Code review, implementation
-- **Email**: Security reports (private)
-- **Team Chat**: Real-time coordination (if applicable)
+The project benefits from a welcoming, constructive, and solution-oriented community. Maintainers should model that tone in every interaction.
 
-### Response Time SLAs
-- **Critical bugs**: 4 hours
-- **High priority**: 24 hours
-- **Medium priority**: 48 hours
-- **Low priority**: 1 week
-- **Questions**: 48 hours
+### Community Expectations
+- Keep issues, PRs, and discussions focused on the project and the underlying problem
+- Encourage reproducible bug reports with steps to reproduce, expected behavior, and observed behavior
+- Thank contributors for their effort, even when the change needs follow-up
+- Avoid taking disagreements personally or escalating them in public when a private conversation would be more productive
+
+### Response Guidelines
+- **Bug reports**: Ask for reproduction steps, relevant environment details, and whether the issue is still reproducible
+- **Feature requests**: Clarify the use case and link to existing roadmap or related issues when possible
+- **Support questions**: Point the user to the docs first, then redirect to GitHub Discussions when appropriate
+- **Negative or hostile behavior**: Remind the user of the code of conduct and, if needed, mute or hide disruptive comments
+
+### When to Escalate
+Escalate to a senior maintainer or the repository owner when:
+- A contributor is repeatedly disrespectful or disruptive
+- A report appears to involve a serious security issue
+- The discussion is blocked by a fundamental disagreement about the project direction
 
 ### Announcement Template
 For major changes or releases:
@@ -516,10 +555,9 @@ For major changes or releases:
 ```
 
 ### Contributor Recognition
-- Thank contributors in release notes
-- Highlight major contributions in README
-- Celebrate milestones (100 stars, 1st PR, etc.)
-- Invite active contributors to become maintainers
+- Thank contributors in release notes and PRs
+- Highlight major contributions in README or release notes when appropriate
+- Invite active contributors to become maintainers when they have demonstrated reliable judgment and contribution quality
 
 ---
 
@@ -595,5 +633,5 @@ git cherry-pick <commit-hash>
 
 ---
 
-**Last Updated**: March 2026
+**Last Updated**: July 2026
 **Maintained By**: StellarStream Core Team

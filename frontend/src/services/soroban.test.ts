@@ -8,6 +8,8 @@ const signTransaction = vi.fn();
 const contractCall = vi.fn();
 const addOperation = vi.fn();
 const fromXDR = vi.fn();
+const reconcileStreamMock = vi.fn();
+const getStreamHistoryMock = vi.fn();
 
 const fakePreparedTransaction = {
   toXDR: vi.fn(() => "prepared-claim-xdr"),
@@ -16,6 +18,12 @@ const fakeSignedTransaction = { kind: "signed-tx" };
 
 vi.mock("@stellar/freighter-api", () => ({
   signTransaction,
+}));
+
+vi.mock("./api", () => ({
+  getAuthToken: vi.fn(() => "mock-token"),
+  reconcileStream: reconcileStreamMock,
+  getStreamHistory: getStreamHistoryMock,
 }));
 
 vi.mock("@stellar/stellar-sdk", () => {
@@ -103,6 +111,10 @@ describe("claimStream", () => {
     sendTransaction.mockResolvedValue({ status: "PENDING", hash: "txhash123" });
     getTransaction.mockResolvedValue({ status: "SUCCESS" });
     signTransaction.mockResolvedValue("signed-claim-xdr");
+    reconcileStreamMock.mockResolvedValue({ id: "1" });
+    getStreamHistoryMock.mockResolvedValue([
+      { id: 1, streamId: "1", eventType: "claimed", timestamp: 1000, actor: "GRECIPIENT", amount: 500 },
+    ]);
 
     contractCall.mockClear();
     addOperation.mockClear();
@@ -136,5 +148,27 @@ describe("claimStream", () => {
       assetCode: "USDC",
       txHash: "txhash123",
     });
+  });
+
+  it("reconciles the tx hash and fetches history after successful claim", async () => {
+    const { claimStream } = await import("./soroban");
+
+    const response = await claimStream("1", "GRECIPIENT", 500, "USDC");
+
+    expect(reconcileStreamMock).toHaveBeenCalledWith("1", "txhash123");
+    expect(getStreamHistoryMock).toHaveBeenCalledWith("1");
+    expect(response.history).toHaveLength(1);
+    expect(response.history[0].eventType).toBe("claimed");
+  });
+
+  it("returns empty history when reconcile fails (non-fatal)", async () => {
+    reconcileStreamMock.mockRejectedValueOnce(new Error("network error"));
+
+    const { claimStream } = await import("./soroban");
+
+    const response = await claimStream("1", "GRECIPIENT", 500, "USDC");
+
+    expect(response.result.txHash).toBe("txhash123");
+    expect(response.history).toEqual([]);
   });
 });
