@@ -254,8 +254,13 @@ fn test_claim_after_stream_fully_completed() {
 }
 
 #[test]
-#[should_panic(expected = "amount exceeds claimable")]
 fn test_claim_on_canceled_stream() {
+    // Issue #591: After cancel, the contract atomically finalizes the stream
+    // (recipient gets the unclaimed vested remainder, sender gets the
+    // unvested refund). Therefore:
+    //   * `claimable` returns 0
+    //   * A subsequent `claim` call panics with "amount exceeds claimable"
+    //     because the contract no longer owes anything to the recipient.
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register_contract(None, StellarStreamContract);
@@ -266,33 +271,35 @@ fn test_claim_on_canceled_stream() {
     let token = create_token(&env, &admin);
     let token_admin = token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&sender, &1000);
-    
-    // Create stream from time 0 to 1000
+
+    // Create stream from time 0 to 1000.
     let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
-    
-    // Move to midpoint (500 vested)
+
+    // Move to midpoint (500 vested).
     env.ledger().with_mut(|l| l.timestamp = 500);
-    
-    // Cancel the stream at midpoint
+
+    // Cancel the stream at midpoint.
     client.cancel(&stream_id, &sender);
-    
-    // Verify stream is canceled and end_time is adjusted
+
+    // Verify stream is canceled and bounded to the cancel moment.
     let stream = client.get_stream(&stream_id);
     assert!(stream.canceled);
     assert_eq!(stream.end_time, 500);
-    assert_eq!(stream.total_amount, 500); // Only 500 vested at cancel time
-    
-    // Recipient can claim the vested amount (500)
-    let claimed = client.claim(&stream_id, &recipient, &500);
-    assert_eq!(claimed, 500);
-    
-    // Move time forward
-    env.ledger().with_mut(|l| l.timestamp = 800);
-    
-    // Attempting to claim more should panic because nothing more is claimable
-    // (stream was canceled at 500, so only 500 total was vested)
-    client.claim(&stream_id, &recipient, &100);
+    assert_eq!(stream.total_amount, 500); // bounded to vested-at-cancel
+
+    // Recipient's vested 500 was transferred atomically during cancel.
+    let token_client = token::Client::new(&env, &token);
+    assert_eq!(token_client.balance(&recipient), 500);
+    assert_eq!(token_client.balance(&sender), 500); // unvested refund
+
+    // claimable is now 0 — the post-cancel invariant (#591).
+    assert_eq!(client.claimable(&stream_id, &500), 0);
+    assert_eq!(client.claimable(&stream_id, &800), 0);
+    assert_eq!(client.claimable(&stream_id, &9999), 0);
 }
+
+// Panic-path companion tests live in the dedicated "Issue #591" section
+// further down.
 
 #[test]
 #[should_panic(expected = "insufficient sender balance")]
@@ -436,6 +443,9 @@ fn test_cancel_idempotent_double_cancel_does_not_panic() {
 
 #[test]
 fn test_cancel_recipient_cannot_claim_beyond_vested_at_cancel_time() {
+    // After `cancel`, the vested portion is paid out to the recipient
+    // atomically inside `cancel()`. Nothing more can be claimed via the
+    // contract — a subsequent `claim` would panic because `claimable == 0`.
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register_contract(None, StellarStreamContract);
@@ -449,13 +459,17 @@ fn test_cancel_recipient_cannot_claim_beyond_vested_at_cancel_time() {
     let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
     env.ledger().with_mut(|l| l.timestamp = 500);
     client.cancel(&stream_id, &sender);
-    client.claim(&stream_id, &recipient, &500);
     let token_client = token::Client::new(&env, &token);
+    // Recipient auto-receives the 500 vested at cancel time.
     assert_eq!(token_client.balance(&recipient), 500);
+    assert_eq!(client.claimable(&stream_id, &1000), 0);
 }
 
 #[test]
 fn test_cancel_after_partial_claim_refunds_correct_amount_and_preserves_token_conservation() {
+    // After `cancel`, the unclaimed vested remainder (700 - 300 = 400) is
+    // transferred to the recipient atomically, so the recipient's final
+    // balance is 300 (claimed earlier) + 400 (auto-paid on cancel) = 700.
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register_contract(None, StellarStreamContract);
@@ -475,12 +489,13 @@ fn test_cancel_after_partial_claim_refunds_correct_amount_and_preserves_token_co
 
     let token_client = token::Client::new(&env, &token);
     assert_eq!(token_client.balance(&sender), 300);
-    assert_eq!(token_client.balance(&recipient), 300);
-    assert_eq!(client.claimable(&stream_id, &9999), 400);
+    assert_eq!(token_client.balance(&recipient), 700);
+    assert_eq!(client.claimable(&stream_id, &9999), 0);
 
     let stream = client.get_stream(&stream_id);
     assert_snapshot!("stream_cancel_after_partial_claim", stream);
-    assert_eq!(300 + 300 + 400, 1000);
+    // 300 (sender refund) + 700 (recipient total) + 0 (remaining claimable) = 1000
+    assert_eq!(300 + 700 + 0, 1000);
 }
 
 #[test]
@@ -752,6 +767,9 @@ fn test_create_split_stream_creates_child_streams_and_links() {
 
 #[test]
 fn test_split_stream_claim_and_cancel_work_per_substream() {
+    // For child_b (600 over 1000s) canceled at t=500: vested = 300. The
+    // contract auto-transfers the 300 to recipient_b, refunds the 300 to
+    // the sender, and then `claimable` for child_b is 0.
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register_contract(None, StellarStreamContract);
@@ -780,8 +798,9 @@ fn test_split_stream_claim_and_cancel_work_per_substream() {
     client.cancel(&child_b_id, &sender);
 
     assert_eq!(token_client.balance(&recipient_a), 200);
+    assert_eq!(token_client.balance(&recipient_b), 300);
     assert_eq!(token_client.balance(&sender), 300);
-    assert_eq!(client.claimable(&child_b_id, &1000), 300);
+    assert_eq!(client.claimable(&child_b_id, &1000), 0);
 }
 
 #[test]
@@ -927,6 +946,85 @@ fn test_claimable_after_end_time() {
     token_admin.mint(&sender, &1000);
     let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &1000, &2000, &0, &None);
     assert_eq!(client.claimable(&stream_id, &2100), 1000);
+}
+
+// -----------------------------------------------------------------
+// Issue #591 — Post-cancel claimable must return 0
+// -----------------------------------------------------------------
+
+/// After `cancel`, `claimable(stream_id, at_time)` must return `0` regardless
+/// of the `at_time` argument (including values well past the original end
+/// and beyond the cancel moment). This is the acceptance criterion for
+/// issue #591.
+#[test]
+fn test_claimable_returns_zero_after_cancel() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    // Mid-stream cancel where 50% (500) is vested at the moment of cancel.
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.cancel(&stream_id, &sender);
+
+    // Post-cancel queries across a wide range of `at_time` values all return 0.
+    assert_eq!(client.claimable(&stream_id, &0), 0);
+    assert_eq!(client.claimable(&stream_id, &500), 0);
+    assert_eq!(client.claimable(&stream_id, &999), 0);
+    assert_eq!(client.claimable(&stream_id, &1000), 0);
+    assert_eq!(client.claimable(&stream_id, &9_999_999), 0);
+
+    // And no funds are stuck: recipient has the 500 vested at cancel time,
+    // sender has the 500 unvested refund. (We check these BEFORE creating
+    // the second stream below, which would draw from the sender's refund.)
+    let token_client = token::Client::new(&env, &token);
+    assert_eq!(token_client.balance(&recipient), 500);
+    assert_eq!(token_client.balance(&sender), 500);
+
+    // The batch endpoint reports 0 for the canceled stream id as well —
+    // mixed in with a still-active stream to confirm we don't accidentally
+    // zero out unrelated entries.
+    let other_stream_id = client.create_stream(&sender, &recipient, &token, &200, &1000, &2000, &0, &None);
+    let mut ids = Vec::new(&env);
+    ids.push_back(stream_id);
+    ids.push_back(other_stream_id);
+    let batch = client.get_claimable_batch(&ids, &1500);
+    assert_eq!(batch.get(stream_id).unwrap(), 0);
+    assert_eq!(batch.get(other_stream_id).unwrap(), 100);
+}
+
+/// A subsequent `claim` after `cancel` must panic because nothing is left
+/// to claim — locks down the post-cancel invariant from the user side.
+#[test]
+#[should_panic(expected = "amount exceeds claimable")]
+fn test_claim_after_cancel_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.cancel(&stream_id, &sender);
+
+    env.ledger().with_mut(|l| l.timestamp = 900);
+    client.claim(&stream_id, &recipient, &1);
 }
 
 // -----------------------------------------------------------------
@@ -1383,6 +1481,9 @@ fn test_clawback_emits_event() {
 
 #[test]
 fn test_clawback_after_canceled_stream_transfers_to_admin() {
+    // After `cancel` settles the stream (vested-out to recipient + refund to
+    // sender), there is nothing left to claw back. The clawback call degrades
+    // to a no-op and `claimable` stays at 0.
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register_contract(None, StellarStreamContract);
@@ -1404,13 +1505,18 @@ fn test_clawback_after_canceled_stream_transfers_to_admin() {
     env.ledger().with_mut(|l| l.timestamp = 400);
     client.cancel(&stream_id, &sender);
 
+    // After cancel: recipient received the 400 vested, sender refunded 600.
+    let token_client = token::Client::new(&env, &token);
+    assert_eq!(token_client.balance(&recipient), 400);
+    assert_eq!(token_client.balance(&sender), 600);
+
     env.ledger().with_mut(|l| l.timestamp = 500);
     let clawed = client.clawback(&stream_id, &200, &compliance_admin);
 
-    assert_eq!(clawed, 200);
-    let token_client = token::Client::new(&env, &token);
-    assert_eq!(token_client.balance(&compliance_admin), 200);
-    assert_eq!(client.claimable(&stream_id, &500), 200);
+    // Nothing to claw because the recipient already collected the vested 400.
+    assert_eq!(clawed, 0);
+    assert_eq!(token_client.balance(&compliance_admin), 0);
+    assert_eq!(client.claimable(&stream_id, &500), 0);
 }
 
 /// Token conservation: recipient claims + admin clawback = total vested at clawback time.

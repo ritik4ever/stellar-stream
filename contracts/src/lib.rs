@@ -491,8 +491,18 @@ impl StellarStreamContract {
             .unwrap_or(0)
     }
 
+    /// Returns the claimable amount for `stream_id` at `at_time`.
+    ///
+    /// A canceled stream has already had its final settlement executed inside
+    /// `cancel()` itself (sender refund + recipient payout), so no further
+    /// amount can be claimed via the contract — the returned value is `0`.
+    /// Pre-cancel, the value is the vested amount minus what has already been
+    /// claimed by the recipient.
     pub fn claimable(env: Env, stream_id: u64, at_time: u64) -> i128 {
         let stream = read_stream(&env, stream_id);
+        if stream.canceled {
+            return 0;
+        }
         let vested = vested_amount(&stream, at_time);
         let claimable = vested - stream.claimed_amount;
         if claimable < 0 { 0 } else { claimable }
@@ -507,12 +517,18 @@ impl StellarStreamContract {
             let stream_opt: Option<Stream> = env.storage().persistent().get(&DataKey::Stream(stream_id));
             let amount = match stream_opt {
                 Some(stream) => {
-                    let vested = vested_amount(&stream, at_time);
-                    let claimable = vested - stream.claimed_amount;
-                    if claimable < 0 {
+                    // Post-cancel, streams are fully settled (see `cancel()`),
+                    // so nothing more can be claimed via this batch query.
+                    if stream.canceled {
                         0
                     } else {
-                        claimable
+                        let vested = vested_amount(&stream, at_time);
+                        let claimable = vested - stream.claimed_amount;
+                        if claimable < 0 {
+                            0
+                        } else {
+                            claimable
+                        }
                     }
                 }
                 None => 0,
@@ -591,6 +607,20 @@ impl StellarStreamContract {
         amount
     }
 
+    /// Cancels a stream and fully settles it in a single atomic call.
+    ///
+    /// Settlement semantics:
+    ///   * The sender is refunded the unvested portion (`total_amount - vested`).
+    ///   * The recipient is paid out any vested-but-unclaimed amount
+    ///     (`vested - claimed_amount`) immediately.
+    ///   * `claimed_amount` is bumped to track the recipient payout, and
+    ///     `total_amount` / `end_time` are bounded to the cancel moment so
+    ///     subsequent `claimable(...)` queries can short-circuit to `0`.
+    ///
+    /// This guarantees that once `cancel` has succeeded no further token
+    /// movement can ever occur for the stream — which is what makes the
+    /// post-cancel `claimable(...) == 0` invariant safe (otherwise the
+    /// payout would be trapped inside the contract).
     pub fn cancel(env: Env, stream_id: u64, sender: Address) {
         let mut stream = read_stream(&env, stream_id);
         if stream.sender != sender {
@@ -603,27 +633,41 @@ impl StellarStreamContract {
         }
 
         let now = env.ledger().timestamp();
-        stream.canceled = true;
 
         let vested = vested_amount(&stream, now);
-        let sender_refund = stream.total_amount - vested;
+        // `saturating_sub` keeps `recipient_payout` non-negative if a caller has
+        // somehow claimed more than is vested (defensive — the regular `claim`
+        // path already prevents this, but cancel must still be safe).
+        let recipient_payout = vested.saturating_sub(stream.claimed_amount);
+        let sender_refund = stream.total_amount.saturating_sub(vested);
 
+        // Mark canceled and bound the stream's vesting schedule to the
+        // cancel moment so any future claimable() query is bounded by `vested`.
+        stream.canceled = true;
         let min_end = if now > stream.start_time { now } else { stream.start_time };
         if min_end < stream.end_time {
             stream.end_time = min_end;
-            stream.total_amount = vested;
+        }
+        stream.total_amount = vested;
+
+        // Resolve the actual token contract (handles the native sentinel).
+        let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
+        let actual_token = if is_native {
+            env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+        } else {
+            stream.token.clone()
+        };
+        let token_client = TokenClient::new(&env, &actual_token);
+        let contract_address = env.current_contract_address();
+
+        // Payout the vested-but-unclaimed remainder to the recipient.
+        if recipient_payout > 0 {
+            token_client.transfer(&contract_address, &stream.recipient, &recipient_payout);
+            stream.claimed_amount += recipient_payout;
         }
 
+        // Refund the unvested portion to the sender.
         if sender_refund > 0 {
-            let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
-            let actual_token = if is_native {
-                env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
-            } else {
-                stream.token.clone()
-            };
-            let token_client = TokenClient::new(&env, &actual_token);
-            let contract_address = env.current_contract_address();
-            
             token_client.transfer(&contract_address, &sender, &sender_refund);
         }
 
