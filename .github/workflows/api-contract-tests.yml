@@ -1,0 +1,49 @@
+name: API Contract Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/src/**'
+      - '.github/workflows/api-contract-tests.yml'
+      - 'scripts/run-api-contract-tests.sh'
+  pull_request:
+    paths:
+      - 'backend/src/**'
+      - '.github/workflows/api-contract-tests.yml'
+      - 'scripts/run-api-contract-tests.sh'
+
+jobs:
+  schemathesis-contract-test:
+    name: Run Schemathesis API Contract Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          cd backend && npm ci
+          pip install schemathesis
+
+      - name: Make test script executable
+        run: chmod +x scripts/run-api-contract-tests.sh
+
+      - name: Run API Contract Tests
+        run: ./scripts/run-api-contract-tests.sh
