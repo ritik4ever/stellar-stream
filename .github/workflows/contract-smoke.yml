@@ -10,6 +10,9 @@ jobs:
   smoke-test:
     name: Deploy and Smoke Test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
 
     steps:
       - name: Checkout code
@@ -49,6 +52,37 @@ jobs:
           CONTRACT_ID=$(cat contracts/contract_id.txt)
           echo "CONTRACT_ID=$CONTRACT_ID" >> $GITHUB_ENV
           echo "Contract deployed with ID: $CONTRACT_ID"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Auto-Regenerate Contract Bindings
+        run: |
+          chmod +x scripts/generate-contract-bindings.sh
+          npm run gen:bindings
+
+      - name: Validate Frontend TypeScript Compilation
+        working-directory: frontend
+        run: |
+          npx tsc --noEmit
+
+      - name: Create Pull Request with Updated Bindings
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore(contracts): auto-regenerate contract bindings after testnet deploy"
+          title: "chore(contracts): update contract bindings after smoke test deploy"
+          body: |
+            Automated PR created after testnet contract deployment in smoke test.
+
+            - Deployed Contract ID: `${{ env.CONTRACT_ID }}`
+            - TypeScript bindings auto-generated via `npm run gen:bindings`
+            - Frontend TypeScript check (`tsc --noEmit`) verified clean compilation
+          branch: auto-update-contract-bindings
+          delete-branch: true
 
       - name: Initialize Contract
         run: |

@@ -1,0 +1,86 @@
+name: Contract Deploy & Auto-Regenerate Bindings
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'contracts/**'
+      - 'scripts/deploy.sh'
+      - 'scripts/generate-contract-bindings.sh'
+  workflow_dispatch:
+
+jobs:
+  deploy-and-regenerate:
+    name: Deploy Contract, Auto-Regenerate Bindings & Verify TS
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Soroban CLI
+        run: |
+          cargo install --locked soroban-cli --version 21.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Create Test Account / Prepare Secret
+        run: |
+          if [ -z "${{ secrets.SECRET_KEY }}" ]; then
+            echo "SECRET_KEY secret not set, generating temporary deployer account..."
+            DEPLOYER_SECRET=$(soroban keys generate deployer --network testnet --format secret)
+            DEPLOYER_PUBLIC=$(soroban keys address deployer)
+            echo "SECRET_KEY=$DEPLOYER_SECRET" >> $GITHUB_ENV
+            echo "DEPLOYER_PUBLIC=$DEPLOYER_PUBLIC" >> $GITHUB_ENV
+            curl -s -X GET "https://friendbot.stellar.org?addr=$DEPLOYER_PUBLIC" > /dev/null
+          else
+            echo "Using SECRET_KEY from secrets"
+            echo "SECRET_KEY=${{ secrets.SECRET_KEY }}" >> $GITHUB_ENV
+          fi
+
+      - name: Build and Deploy Contract to Testnet
+        run: |
+          chmod +x scripts/deploy.sh
+          ./scripts/deploy.sh
+          CONTRACT_ID=$(cat contracts/contract_id.txt)
+          echo "CONTRACT_ID=$CONTRACT_ID" >> $GITHUB_ENV
+          echo "Contract deployed successfully with ID: $CONTRACT_ID"
+
+      - name: Auto-Regenerate Contract Bindings
+        run: |
+          chmod +x scripts/generate-contract-bindings.sh
+          npm run gen:bindings
+
+      - name: Validate Frontend TypeScript Compilation
+        working-directory: frontend
+        run: |
+          npx tsc --noEmit
+
+      - name: Create Pull Request with Updated Bindings
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore(contracts): auto-regenerate contract bindings after testnet deploy"
+          title: "chore(contracts): update contract bindings after deploy"
+          body: |
+            Automated PR created after testnet contract deployment.
+
+            - Deployed Contract ID: `${{ env.CONTRACT_ID }}`
+            - TypeScript bindings generated via `npm run gen:bindings`
+            - Frontend TypeScript check (`tsc --noEmit`) verified clean compilation
+          branch: auto-update-contract-bindings
+          delete-branch: true
