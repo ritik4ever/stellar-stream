@@ -1,5 +1,6 @@
 {
   ".": "1.0.0",
   "backend": "1.0.0",
-  "frontend": "1.0.0"
+  "frontend": "1.0.0",
+  "contracts": "0.1.0"
 }

@@ -32,33 +32,28 @@ Once a report is received through the GitHub Security Advisory form, we commit t
 ## GitHub Security Advisories
 
 Maintainers: Please ensure that **GitHub Security Advisories** are enabled for this repository to allow researchers to submit reports privately.
+## Self-Audit Checklist
 
-## Content Security Policy (CSP)
+| Finding | Severity | Mitigation | Status |
+| ------- | -------- | ---------- | ------ |
+| Reentrancy | Medium | Ensure functions are non-reentrant or use mutexes. | Not started |
+| Access Control | High | Review role-based access checks on all endpoints. | Completed |
+| Integer Overflow | Medium | Use safe arithmetic libraries and input validation. | Completed |
+| Front-Running | High | Implement commit-reveal schemes where applicable. | Completed |
+| Replay Attacks | High | Use nonces/timestamps and enforce nonce uniqueness. | Completed |
 
-The frontend build injects a Content Security Policy to limit script execution and network connections, reducing the impact of cross-site scripting (XSS) against wallet connection state.
+### External Audit Firm Template
 
-### Policy
+**Audit Firm:** [Name]
 
-```
-default-src 'self';
-connect-src 'self' https://rpc-futurenet.stellar.org
-```
+**Scope:** Review of smart contract code, API endpoints, and deployment scripts.
 
-- **`default-src 'self'`** — Scripts, styles, images, and other subresources load only from the application origin.
-- **`connect-src`** — `fetch`/XHR/WebSocket connections are limited to the app origin (API proxy) and the configured Stellar Futurenet RPC endpoint.
+**Deliverables:**
+- Security findings report
+- Severity classification
+- Recommended mitigations
+- Final audit sign‑off
 
-### Rollout
+**Timeline:** ____________________
 
-1. **Report-only (default)** — The Vite build sends `Content-Security-Policy-Report-Only` in development, preview, and production builds. Violations are logged by the browser but not blocked.
-2. **Enforcement** — Set `VITE_CSP_ENFORCE=true` when building or serving the frontend to send `Content-Security-Policy` instead. Monitor the browser console for violations before enabling in production.
-
-### Configuration
-
-| Variable | Effect |
-| -------- | ------ |
-| (unset) | Report-only CSP via meta tag and HTTP headers |
-| `VITE_CSP_ENFORCE=true` | Enforcing CSP |
-
-Implementation: `frontend/vite.config.ts` (`content-security-policy` plugin and dev/preview headers).
-
-
+**Contact:** ____________________

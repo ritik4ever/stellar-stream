@@ -67,6 +67,13 @@
 3. Selection automatically cleaned up to only show 3 selected
 4. Action bar updates count accordingly
 
+### Scenario 4: Keyboard-Driven Selection
+1. User clicks anywhere inside the table to give it focus context
+2. User presses **Ctrl/Cmd + A** — all eligible streams are selected, action bar appears
+3. User presses **Delete** — focus moves to the "Cancel X Streams" button (no action taken yet)
+4. User presses **Enter** — bulk cancellation begins
+5. Alternatively, pressing **Escape** at any point before confirming clears the selection and dismisses the action bar
+
 ## State Management
 
 ### Selection State
@@ -165,6 +172,9 @@ User clicks "Cancel 5 Streams"
 - Space to toggle selection
 - Tab to action bar button
 - Enter to execute bulk cancel
+- **Ctrl/Cmd + A**: Select or deselect all eligible (active/scheduled) streams at once
+- **Escape**: Clear the current selection entirely
+- **Delete / Backspace**: When streams are selected, moves focus to the "Cancel X Streams" button rather than canceling immediately — requires an explicit Enter/click to confirm
 
 ### Screen Reader Announcements
 - "2 streams selected"

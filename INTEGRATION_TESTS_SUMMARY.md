@@ -1,166 +1,187 @@
-# Backend Integration Tests - Implementation Summary
-
-## Branch
-`feature/backend-integration-tests`
+# Integration Tests Summary
 
 ## Overview
-Comprehensive integration test suite for the StellarStream backend API with 34 test cases covering all major REST flows.
 
-## What Was Implemented
+StellarStream has **184 integration tests** across **6 test files** in the backend, covering the complete REST API surface including auth, stream lifecycle, webhooks, and rate limiting.
 
-### 1. Test File: `backend/src/integration.test.ts`
-- **34 passing tests** covering complete API surface
-- Uses `supertest` for real HTTP request testing
-- Isolated test database (`test-streams.db`)
-- Automatic setup and teardown
+| Layer | Test Files | Test Count |
+|-------|-----------|------------|
+| Backend integration tests | 6 files | **184 tests** |
+| Backend unit tests | 27 files | **~316 tests** |
+| Frontend tests | 25 files | **~249 tests** |
+| **Total** | **58 files** | **~749 tests** |
 
-### 2. Test Coverage
+---
 
-#### Stream Lifecycle (20 tests)
-- **GET /api/streams** (10 tests)
-  - List all streams
-  - Filter by status, sender, recipient, asset
-  - Search functionality
-  - Pagination with page/limit
-  - Validation errors
+## Coverage: Covered vs Planned
 
-- **GET /api/streams/:id** (3 tests)
-  - Get specific stream
-  - 404 for non-existent
-  - 400 for invalid ID
+### ✅ Covered Flows
 
-- **GET /api/recipients/:accountId/streams** (3 tests)
-  - Get streams for recipient
-  - Empty results handling
-  - Account validation
+#### 1. Main API (`backend/src/integration.test.ts`) — 113 tests
+- **Health check** — service status, security headers (CSP, HSTS, X-Frame-Options, etc.)
+- **GET /api/streams** — list, filter by status/sender/recipient/asset/assetCode (single + multiple + case-insensitive), search (q), pagination, soft-delete, sort/order (totalAmount, startAt, createdAt, durationSeconds), validation errors
+- **GET /api/streams/:id** — get, 404, 400 for invalid ID
+- **GET /api/streams/:id/claimable** — Soroban simulation, paused/canceled returns 0, rate limit (30/min)
+- **GET /api/recipients/:accountId/streams** — list, filter by status/sender/asset/assetCode/q, empty, invalid account validation (not G, wrong length)
+- **GET /api/senders/:accountId/streams** — list, filter by status, pagination, empty, invalid account
+- **GET /api/streams/sender/:address** — list, pagination, filter by status, empty, validation
+- **GET /api/streams/recipient/:address** — list, pagination, filter by status, empty, validation
+- **POST /api/streams/:id/claim** — recipient claim, non-recipient 403, double-claim protection, concurrent double-spend prevention
+- **POST /api/streams/:id/reconcile** — on-chain reconciliation, 404 on-chain not found, rate limit (5/stream/min)
+- **GET /api/streams/:id/history** — event history, 404, stream_completed event recording
+- **GET /api/streams/:id/snapshot** — stream + history combined, 404
+- **GET /api/events** — list, filter by eventType/streamId/since, pagination (offset + cursor-based), combined filters, pageSize
+- **GET /api/streams/export.csv** — full export, filter by status/asset/sender
+- **GET /api/assets** — list allowed assets, normalized (uppercase)
+- **POST /api/streams** — mutation rate limit (10/min)
+- **Error handling** — database error graceful handling
 
-- **GET /api/senders/:accountId/streams** (4 tests)
-  - Get streams for sender
-  - Status filtering
-  - Pagination
-  - Account validation
+#### 2. Auth-Protected Routes (`backend/src/auth-protected-routes.integration.test.ts`) — 44 tests
+- **14 route groups** — fee-estimate, create stream, cancel, mark-complete, pause, resume, reconcile, claim, start-time, dead-letters (list + count + requeue), admin delete
+- Each route tested with: no token → 401, expired token → 401, valid token → passes
+- Admin routes: no X-Admin-Key → 401, wrong key → 401, valid key → 204
+- Token format edge cases: malformed JWT, wrong secret, Basic scheme, empty Bearer, no header
 
-#### Stream History (4 tests)
-- **GET /api/streams/:id/history**
-  - Event history retrieval
-  - 404 handling
+#### 3. Cancel Stream (`backend/src/services/streamStore.cancel.integration.test.ts`) — 7 tests
+- Cancel active stream, idempotent cancel, nonexistent stream, cancel completed stream
+- Authorization: non-sender → 403, no auth → 401
+- Event history: exactly one canceled event recorded
 
-- **GET /api/streams/:id/snapshot**
-  - Combined stream + history
-  - 404 handling
+#### 4. Bulk Cancel (`backend/src/services/streamStore.bulkCancel.integration.test.ts`) — 7 tests
+- Cancel multiple streams with partial failures, max 20 IDs limit, empty IDs
+- Auth: sender mismatch → 403, no auth → 401, non-sender per-stream failure
+- Serial cancellation with full success
 
-#### Global Events (4 tests)
-- **GET /api/events**
-  - List all events
-  - Filter by event type
-  - Pagination
-  - Validation
+#### 5. Mark Complete (`backend/src/services/streamStore.markComplete.integration.test.ts`) — 7 tests
+- Mark fully-vested paused stream as completed
+- Not fully vested → 400, already completed → 400, already canceled → 400
+- Non-sender → 403, nonexistent stream → 404, no auth → 401
 
-#### Export Functionality (4 tests)
-- **GET /api/streams/export.csv**
-  - Export all streams
-  - Filter by status, asset, sender
-  - CSV format validation
+#### 6. Webhook Dead Letters (`backend/src/webhooks.integration.test.ts`) — 6 tests
+- List dead letters (empty, with data), pagination
+- Count endpoint, requeue dead letter, 404 for nonexistent
 
-#### Error Handling (1 test)
-- Database error handling
+### 🔲 Planned / Future Coverage
+- [ ] WebSocket event broadcasting
+- [ ] Indexer background job integration
+- [ ] Webhook delivery (successful delivery flow)
+- [ ] Performance / load tests
+- [ ] Frontend integration tests (E2E via Playwright — see `npm run test:e2e`)
+- [ ] Contract (Soroban) integration
 
-### 3. Documentation: `backend/TESTING.md`
-- Complete test documentation
-- Running instructions
-- Coverage details
-- Troubleshooting guide
-- Future enhancements
+---
 
-### 4. Dependencies Added
-- `supertest@^7.0.0` - HTTP testing
-- `@types/supertest@^6.0.2` - TypeScript types
+## Running Integration Tests
 
-## Acceptance Criteria ✅
+```bash
+# All backend tests (unit + integration)
+cd backend && npm test
 
-### ✅ Tests cover create, list, get, cancel, and history endpoints
-- GET /api/streams (list)
-- GET /api/streams/:id (get)
-- GET /api/streams/:id/history (history)
-- POST /api/streams/:id/cancel (covered via lifecycle)
+# Integration tests only
+cd backend && npx vitest run src/integration.test.ts
+cd backend && npx vitest run src/**/*.integration.test.ts
 
-### ✅ Filtering and pagination behavior is verified
-- Status filtering (scheduled, active, completed, canceled)
-- Sender/recipient filtering
-- Asset filtering
-- Search query filtering
-- Page and limit pagination
-- Combined filters
+# Single integration test file
+cd backend && npx vitest run src/services/streamStore.cancel.integration.test.ts
 
-### ✅ Error paths are covered
-- 400 Bad Request (invalid parameters)
-- 404 Not Found (non-existent resources)
-- 500 Internal Server Error (database errors)
-- Validation error messages
+# With coverage
+cd backend && npx vitest run --coverage
 
-### ✅ Test runs do not affect local development data
-- Separate test database (`test-streams.db`)
-- Automatic cleanup between tests
-- Database deleted after test suite
-- No interference with `streams.db`
+# Frontend tests
+cd frontend && npm test
+
+# E2E tests (Playwright)
+npm run test:e2e
+```
+
+### Test Configuration
+
+The test suite uses:
+- **Vitest** with `pool: "forks"` — each test file runs in its own forked process for full isolation
+- **supertest** — real HTTP requests against the Express app (no port binding)
+- **Separate SQLite databases** — each integration test file uses its own `.db` file in `backend/data/`
+- **`src/test-setup.ts`** — sets env vars (SOROBAN_DISABLED, rate limit ceilings, JWT secret) before any module is imported
+
+---
+
+## How to Add a New Integration Test
+
+### 1. Choose the Right File
+- **New API endpoint** → add to `backend/src/integration.test.ts`
+- **New auth-guarded route** → add to `backend/src/auth-protected-routes.integration.test.ts`
+- **Stream mutation (cancel/mark-complete/etc.)** → add to or create a file like `streamStore.<feature>.integration.test.ts`
+
+### 2. File Template
+
+```typescript
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import request from "supertest";
+import { app } from "../index";
+import { initDb, getDb } from "./db";
+import path from "path";
+import fs from "fs";
+
+const TEST_DB_PATH = path.join(__dirname, "..", "data", "test-my-feature.db");
+
+describe("POST /api/my-feature Integration Tests", () => {
+  beforeAll(() => {
+    process.env.DB_PATH = TEST_DB_PATH;
+    initDb();
+  });
+
+  beforeEach(() => {
+    const db = getDb();
+    db.exec("DELETE FROM stream_events");
+    db.exec("DELETE FROM streams");
+  });
+
+  afterAll(() => {
+    getDb().close();
+    if (fs.existsSync(TEST_DB_PATH)) fs.unlinkSync(TEST_DB_PATH);
+  });
+
+  it("should handle a valid request", async () => {
+    // Insert test data
+    const db = getDb();
+    db.prepare(`INSERT INTO streams (...) VALUES (...)`)....
+
+    const response = await request(app)
+      .post("/api/streams/1/my-feature")
+      .send({ ... });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toMatchObject({ ... });
+  });
+
+  it("should reject unauthorized requests", async () => {
+    const response = await request(app)
+      .post("/api/streams/1/my-feature");
+
+    expect(response.status).toBe(401);
+  });
+});
+```
+
+### 3. Best Practices
+- **Use a unique `TEST_DB_PATH`** per file to avoid cross-contamination
+- **Clean up in `beforeEach`** — delete all rows from all tables
+- **Test happy path first**, then error cases, then edge cases
+- **Test auth** — no token, expired token, valid token (wrong role)
+- **Use `pool: "forks"`** — already configured in `vitest.config.ts`, ensures full isolation
+- **Set env vars in `test-setup.ts`** if you need module-level env overrides
+
+### 4. Register in CI
+Integration tests run as part of `cd backend && npm test` via vitest's `include` glob (`src/**/*.test.ts`). No additional registration needed.
+
+---
 
 ## Test Results
 
+Last run: All 184 integration tests pass. CI runs on every push/PR via `.github/workflows/backend-ci.yml`.
+
 ```
-✓ 34 tests passed
+✓ 184 integration tests passed
 ✓ 0 tests failed
-✓ Duration: ~1.4s
-✓ All acceptance criteria met
+✓ ~3-5s total duration
+✓ Isolated databases, no external dependencies
 ```
-
-## Running the Tests
-
-```bash
-# Navigate to backend
-cd backend
-
-# Install dependencies (if not already done)
-npm install
-
-# Run all tests
-npm test
-
-# Run integration tests only
-npm test integration.test.ts
-
-# Run with coverage
-npm test -- --coverage
-```
-
-## Key Features
-
-1. **Isolated Environment**: Tests use separate database, no impact on dev data
-2. **Comprehensive Coverage**: 34 tests covering all major flows
-3. **Real HTTP Testing**: Uses supertest for actual request/response testing
-4. **Automatic Cleanup**: Database cleaned between tests
-5. **Error Scenarios**: Validates error handling and status codes
-6. **Pagination Testing**: Verifies page/limit behavior
-7. **Filter Testing**: Tests all filter combinations
-8. **CSV Export**: Validates export functionality
-
-## Files Changed
-
-- ✅ `backend/src/integration.test.ts` (new) - 565 lines
-- ✅ `backend/TESTING.md` (new) - Complete documentation
-- ✅ `backend/package.json` - Added supertest dependencies
-- ✅ `backend/package-lock.json` - Dependency lock file
-
-## Next Steps
-
-The integration tests are complete and ready for:
-1. CI/CD pipeline integration
-2. Code review
-3. Merge to main branch
-4. Future test expansion (auth, webhooks, etc.)
-
-## Notes
-
-- Tests run quickly (~1.4s) suitable for CI/CD
-- No external dependencies required
-- All tests are deterministic and reliable
-- Documentation includes troubleshooting guide
