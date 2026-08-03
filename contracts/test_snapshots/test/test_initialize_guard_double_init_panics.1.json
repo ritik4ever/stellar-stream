@@ -56,6 +56,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "AllowedTokens"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "NativeToken"
                             }
                           ]
@@ -123,6 +135,9 @@
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                },
+                {
+                  "vec": []
                 }
               ]
             }
@@ -177,6 +192,9 @@
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                },
+                {
+                  "vec": []
                 }
               ]
             }
@@ -200,13 +218,16 @@
             "data": {
               "vec": [
                 {
-                  "string": "caught panic 'already initialized' from contract function 'Symbol(obj#23)'"
+                  "string": "caught panic 'already initialized' from contract function 'Symbol(obj#31)'"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                },
+                {
+                  "vec": []
                 }
               ]
             }
@@ -272,6 +293,9 @@
                     },
                     {
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                    },
+                    {
+                      "vec": []
                     }
                   ]
                 }

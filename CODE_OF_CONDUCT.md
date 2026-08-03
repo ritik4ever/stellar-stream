@@ -76,6 +76,10 @@ the consequences for any action they deem in violation of this Code of Conduct:
 **Community Impact**: Use of inappropriate language or other behavior deemed
 unprofessional or unwelcome in the community.
 
+**Examples**: An off-topic sarcastic remark about a contributor's code review
+style in a PR thread; a mildly dismissive comment toward a first-time
+contributor's question in Discussions.
+
 **Consequence**: A private, written warning from community leaders, providing
 clarity around the nature of the violation and an explanation of why the
 behavior was inappropriate. A public apology may be requested.
@@ -84,6 +88,11 @@ behavior was inappropriate. A public apology may be requested.
 
 **Community Impact**: A violation through a single incident or series of
 actions.
+
+**Examples**: Repeated dismissive or condescending comments toward the same
+contributor across multiple issues after a prior Correction; a heated argument
+in an issue thread that includes personal remarks rather than technical
+disagreement.
 
 **Consequence**: A warning with consequences for continued behavior. No
 interaction with the people involved, including unsolicited interaction with
@@ -97,6 +106,11 @@ ban.
 **Community Impact**: A serious violation of community standards, including
 sustained inappropriate behavior.
 
+**Examples**: Sustained harassment of a contributor across multiple issues,
+PRs, or Discussions/Discord channels; publishing another contributor's private
+information (doxxing) without consent; targeted personal attacks that continue
+after a Warning.
+
 **Consequence**: A temporary ban from any sort of interaction or public
 communication with the community for a specified period of time. No public or
 private interaction with the people involved, including unsolicited interaction
@@ -109,8 +123,47 @@ Violating these terms may lead to a permanent ban.
 standards, including sustained inappropriate behavior, harassment of an
 individual, or aggression toward or disparagement of classes of individuals.
 
+**Examples**: Continued harassment after a temporary ban has been lifted;
+coordinated harassment or brigading of a contributor; hate speech or
+discriminatory attacks targeting a protected characteristic.
+
 **Consequence**: A permanent ban from any sort of interaction or public
 communication within the community.
+
+## Escalation Path
+
+If you experience or witness unacceptable behavior, please follow this path:
+
+1. **Report** the incident to the community leaders responsible for
+   enforcement at [maintainers@stellar-stream.com], including links to the
+   relevant issue, PR, comment, or Discord/Discussions message where possible.
+2. **Acknowledgment**: Reports are acknowledged within a reasonable timeframe,
+   and reporter privacy and security are respected throughout.
+3. **Review**: Community leaders review the report against the Enforcement
+   Guidelines above and reach a decision, consulting with other maintainers on
+   ambiguous or high-impact cases.
+4. **Action**: The applicable consequence (Correction, Warning, Temporary Ban,
+   or Permanent Ban) is applied and communicated to the involved parties.
+5. **Appeal**: If a reporter or the subject of a report disagrees with the
+   outcome, they may request a second review by a different maintainer than
+   the one who made the original decision, by replying to the same enforcement
+   contact.
+
+Conflicts of interest (e.g., a report involving a community leader) are
+escalated directly to the repository owner for independent review.
+
+## Community Channels
+
+Beyond GitHub Issues and Pull Requests, the community connects through:
+
+* **GitHub Discussions**: [enable and link once available] — for questions,
+  proposals, and general discussion that don't belong in an issue.
+* **Discord**: [invite link to be added] — for real-time chat, help, and
+  coordination between contributors.
+
+This Code of Conduct applies equally across all of these spaces. If either
+channel above is not yet active, please report conduct concerns via the
+enforcement contact listed above until it is.
 
 ## Attribution
 

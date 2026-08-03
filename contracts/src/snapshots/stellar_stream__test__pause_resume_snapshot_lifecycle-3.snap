@@ -1,0 +1,18 @@
+---
+source: src/test.rs
+expression: post_claim_stream
+---
+Stream {
+    sender: Contract(CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M),
+    recipient: Contract(CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4),
+    token: Contract(CDLDVFKHEZ2RVB3NG4UQA4VPD3TSHV6XMHXMHP2BSGCJ2IIWVTOHGDSG),
+    total_amount: 1000,
+    claimed_amount: 750,
+    start_time: 1100,
+    end_time: 2100,
+    cliff_seconds: 0,
+    canceled: false,
+    paused: false,
+    pause_started_at: None,
+    metadata: None,
+}

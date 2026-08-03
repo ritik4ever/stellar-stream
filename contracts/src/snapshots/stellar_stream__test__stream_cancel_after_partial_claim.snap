@@ -1,0 +1,18 @@
+---
+source: src/test.rs
+expression: stream
+---
+Stream {
+    sender: Contract(CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M),
+    recipient: Contract(CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4),
+    token: Contract(CDLDVFKHEZ2RVB3NG4UQA4VPD3TSHV6XMHXMHP2BSGCJ2IIWVTOHGDSG),
+    total_amount: 700,
+    claimed_amount: 300,
+    start_time: 0,
+    end_time: 700,
+    cliff_seconds: 0,
+    canceled: true,
+    paused: false,
+    pause_started_at: None,
+    metadata: None,
+}

@@ -163,8 +163,10 @@ To scale the application for multi-instance deployments, optional support for Po
 
 ## Related Decisions
 
-- **ADR 0002 (Future):** Redis caching layer for multi-instance deployments
-- **ADR 0003 (Future):** Event sourcing and audit trail patterns
+- **ADR 0002:** Freighter wallet integration for recipient signing
+- **ADR 0003:** Polling as the MVP refresh strategy
+- **ADR 0004:** SQLite event history over an append-only log
+- **ADR 0005:** Multi-asset support as a first-class stream property
 
 ## References
 

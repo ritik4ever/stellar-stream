@@ -20,7 +20,7 @@ import {
   nativeToScVal,
   rpc,
 } from "@stellar/stellar-sdk";
-import { getAuthToken } from "./api";
+import { getAuthToken, reconcileStream, getStreamHistory } from "./api";
 import type { StreamEvent } from "./api";
 import { CONTRACT_ID, RPC_URL, NETWORK_PASSPHRASE } from "./contractClient";
 
@@ -208,13 +208,23 @@ export async function claimWithFreighter(
 
   await waitForFinalTransactionStatus(server, txHash);
 
+  // Persist the on-chain transaction hash to the backend and fetch event history.
+  // These calls are best-effort: the on-chain claim already succeeded.
+  let history: StreamEvent[] = [];
+  try {
+    await reconcileStream(streamId, txHash);
+    history = await getStreamHistory(streamId);
+  } catch {
+    // Non-fatal — the on-chain tx succeeded; the indexer will eventually sync.
+  }
+
   return {
     result: {
       claimedAmount: amount,
       assetCode,
       txHash,
     },
-    history: [],
+    history,
   };
 }
 

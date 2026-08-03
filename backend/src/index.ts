@@ -42,7 +42,9 @@ import { startReconciliationJob } from "./services/reconciliationJob";
 import { startArchiveJob } from "./services/archiveJob";
 import { startStreamProgressBroadcaster } from "./services/streamProgressBroadcaster";
 import { startWebhookWorker } from "./services/webhookWorker";
+import { startDeadLetterPruningJob } from "./services/webhookDeadLetterPruningJob";
 import {
+  clearDeadLetters,
   getDeadLetters,
   countDeadLetters,
   requeueDeadLetter,
@@ -1044,51 +1046,22 @@ app.get(
       progress: calculateProgress(stream, now),
     }));
 
-  const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
-  if (!parsedQuery.success) {
-    sendValidationError(req, res, parsedQuery.error.issues);
-    return;
-  }
-  const query = parsedQuery.data;
-
-  let data = listStreamsByRecipient(accountId)
-    .map((stream) => ({
-      ...stream,
-      progress: calculateProgress(stream),
-    }));
-
-  if (query.status) {
-    data = data.filter((stream) => stream.progress.status === query.status);
-  }
-  if (query.sender) {
-    data = data.filter(
-      (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
-    );
-  }
-  if (query.asset) {
-    data = data.filter(
-      (stream) => stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
-    );
-  }
-  if (query.assetCode && query.assetCode.length > 0) {
-    data = data.filter((stream) =>
-      query.assetCode!.includes(stream.assetCode.toUpperCase()),
-    );
-  }
-  if (query.q && query.q.length > 0) {
-    const searchTerm = query.q.toLowerCase();
-    data = data.filter((stream) => {
-      return (
-        stream.id.toLowerCase().includes(searchTerm) ||
-        stream.sender.toLowerCase().includes(searchTerm) ||
-        stream.recipient.toLowerCase().includes(searchTerm) ||
-        stream.assetCode.toLowerCase().includes(searchTerm)
+    if (query.status) {
+      data = data.filter((stream) => stream.progress.status === query.status);
+    }
+    if (query.sender) {
+      data = data.filter(
+        (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
       );
     }
     if (query.asset) {
       data = data.filter(
-        (stream) =>
-          stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
+        (stream) => stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
+      );
+    }
+    if (query.assetCode && query.assetCode.length > 0) {
+      data = data.filter((stream) =>
+        query.assetCode!.includes(stream.assetCode.toUpperCase()),
       );
     }
     if (query.q && query.q.length > 0) {
@@ -1101,6 +1074,12 @@ app.get(
           stream.assetCode.toLowerCase().includes(searchTerm)
         );
       });
+    }
+    if (query.minAmount !== undefined) {
+      data = data.filter((stream) => stream.totalAmount >= query.minAmount!);
+    }
+    if (query.maxAmount !== undefined) {
+      data = data.filter((stream) => stream.totalAmount <= query.maxAmount!);
     }
 
     const hasPage = req.query.page !== undefined;
@@ -1198,6 +1177,30 @@ app.get(
   },
 );
 
+// GET /api/auth/challenge — returns a SEP-10 challenge transaction for the given accountId.
+// The client must sign the transaction with their Stellar key (e.g. via Freighter)
+// and submit it to POST /api/auth/token to receive a JWT.
+// Challenge nonces expire after 60 seconds.
+app.get("/api/auth/challenge", authChallengeLimiter, (req: Request, res: Response) => {
+  const accountId = req.query.accountId;
+  if (typeof accountId !== "string" || !accountId.trim()) {
+    sendApiError(req, res, 400, "accountId query parameter is required.", {
+      code: "VALIDATION_ERROR",
+    });
+    return;
+  }
+
+  try {
+    const transaction = generateChallenge(accountId.trim());
+    res.json({ transaction, network: process.env.NETWORK_PASSPHRASE || "Test SDF Network ; September 2015" });
+  } catch (error: any) {
+    logger.error({ err: error }, "failed to generate auth challenge");
+    sendApiError(req, res, 500, "Failed to generate challenge.", {
+      code: "INTERNAL_ERROR",
+    });
+  }
+});
+
 app.post("/api/auth/token", async (req: Request, res: Response) => {
   const transaction = req.body?.transaction;
   if (typeof transaction !== "string" || !transaction.trim()) {
@@ -1210,8 +1213,9 @@ app.post("/api/auth/token", async (req: Request, res: Response) => {
   try {
     const token = await verifyChallengeAndIssueToken(transaction);
     res.json({ token });
-  } catch (_error: unknown) {
-    sendApiError(req, res, 401, "Authentication failed.", { code: "AUTH_ERROR" });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Authentication failed.";
+    sendApiError(req, res, 401, message, { code: "AUTH_ERROR" });
   }
 });
 
@@ -1599,6 +1603,40 @@ app.post(
   },
 );
 
+// POST /api/streams/:id/reconcile — sync local state with on-chain state
+app.post(
+  "/api/streams/:id/reconcile",
+  reconcileLimiter,
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    try {
+      const updated = await reconcileStream(parsedId.value);
+      res.json({ data: { ...updated, progress: calculateProgress(updated) } });
+    } catch (error: any) {
+      logger.error({ err: error, streamId: parsedId.value }, "failed to reconcile stream");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to reconcile stream.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        {
+          code: normalizedError.code ?? "INTERNAL_ERROR",
+        },
+      );
+    }
+  },
+);
+
 app.patch(
   "/api/streams/:id/start-time",
   authMiddleware,
@@ -1871,6 +1909,34 @@ app.post(
   },
 );
 
+app.delete(
+  "/api/admin/webhooks/dead-letters",
+  adminAuth,
+  (req: Request, res: Response) => {
+    try {
+      const deleted = clearDeadLetters();
+      res.json({
+        success: true,
+        deleted,
+        message: "Webhook dead-letter queue cleared successfully",
+      });
+    } catch (error: any) {
+      logger.error({ err: error }, "failed to clear webhook dead-letter queue");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to clear webhook dead-letter queue.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        { code: normalizedError.code ?? "INTERNAL_ERROR" },
+      );
+    }
+  },
+);
+
 async function startServer() {
   const config = validateEnv();
 
@@ -1888,6 +1954,7 @@ async function startServer() {
   }
 
   startArchiveJob(config.archiveCronIntervalMs);
+  startDeadLetterPruningJob(config.webhookDeadLetterPruneIntervalMs);
   startStreamProgressBroadcaster(5000);
 
   const server = createServer(app);
