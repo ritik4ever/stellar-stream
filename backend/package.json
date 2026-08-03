@@ -11,23 +11,23 @@
     "lint": "eslint src"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "^14.5.0",
+    "@stellar/stellar-sdk": "^16.2.0",
     "axios": "^1.13.5",
-    "better-sqlite3": "^12.6.2",
+    "better-sqlite3": "^13.0.2",
     "cors": "^2.8.6",
-    "dotenv": "^17.3.1",
-    "express": "^4.21.2",
-    "express-rate-limit": "^7.5.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.6.1",
     "helmet": "^8.2.0",
     "ioredis": "^5.3.2",
     "jsonwebtoken": "^9.0.2",
-    "p-limit": "^4.0.0",
+    "p-limit": "^7.3.1",
     "pg": "^8.22.0",
-    "pino": "^9.5.0",
+    "pino": "^10.3.1",
     "prom-client": "^15.1.3",
     "swagger-ui-express": "^5.0.1",
     "ws": "^8.20.0",
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@apidevtools/swagger-parser": "^12.1.0",
@@ -37,18 +37,18 @@
     "@types/express": "^5.0.3",
     "@types/express-rate-limit": "^6.0.0",
     "@types/jsonwebtoken": "^9.0.10",
-    "@types/node": "^24.5.2",
+    "@types/node": "^26.1.2",
     "@types/pg": "^8.20.0",
-    "@types/supertest": "^6.0.2",
+    "@types/supertest": "^7.2.1",
     "@types/swagger-ui-express": "^4.1.8",
     "@types/ws": "^8.5.10",
-    "@vitest/coverage-v8": "^1.0.0",
+    "@vitest/coverage-v8": "^4.1.10",
     "autocannon": "^8.0.0",
     "supertest": "^7.0.0",
     "ts-node-dev": "^2.0.0",
-    "typescript": "^5.2.2",
+    "typescript": "^7.0.2",
     "typescript-eslint": "^8.60.1",
-    "vitest": "^1.0.0"
+    "vitest": "^4.1.10"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
