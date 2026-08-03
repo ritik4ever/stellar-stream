@@ -14,7 +14,7 @@ It includes:
 * A backlog folder with implementation task drafts
 
 This repository is intentionally lightweight and easy to extend.
-For common questions and troubleshooting, see our `FAQ.md`.
+For common questions and troubleshooting, see our `FAQ.md` and `docs/TROUBLESHOOTING.md`.
 For real-world stream use cases and runnable API examples, see [`docs/USE_CASES.md`](docs/USE_CASES.md).
 For production setup and operations, see `DEPLOYMENT.md` and `RUNBOOK.md`.
 For security policy and reporting vulnerabilities, see `SECURITY.md`.
