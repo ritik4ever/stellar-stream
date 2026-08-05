@@ -1,5 +1,11 @@
 # StellarStream
 
+[![English](https://img.shields.io/badge/lang-en-red.svg)](README.md)
+[![Español](https://img.shields.io/badge/lang-es-green.svg)](docs/README.es.md)
+[![Português](https://img.shields.io/badge/lang-pt--br-blue.svg)](docs/README.pt.md)
+
+> **Translation lag notice:** Translations are community-contributed and may lag behind the English version by up to one release cycle. The English [`README.md`](README.md) is the authoritative source.
+
 StellarStream is a basic payment-streaming MVP for the Stellar ecosystem.
 It includes:
 * A React dashboard to create and monitor streams
@@ -9,9 +15,20 @@ It includes:
 
 This repository is intentionally lightweight and easy to extend.
 For common questions and troubleshooting, see our `FAQ.md`.
+For real-world stream use cases and runnable API examples, see [`docs/USE_CASES.md`](docs/USE_CASES.md).
 For production setup and operations, see `DEPLOYMENT.md` and `RUNBOOK.md`.
 For security policy and reporting vulnerabilities, see `SECURITY.md`.
 We are committed to a welcoming environment; see our `CODE_OF_CONDUCT.md`.
+
+## Architecture Decisions
+
+The repo keeps formal decision records in [`docs/adr/`](docs/adr/):
+
+- [ADR 0001: SQLite vs PostgreSQL for Stream Storage](docs/adr/0001-sqlite-storage.md)
+- [ADR 0002: Why Freighter Over Other Wallets](docs/adr/0002-freighter-wallet-choice.md)
+- [ADR 0003: Why Polling Over WebSocket for MVP](docs/adr/0003-polling-over-websocket.md)
+- [ADR 0004: Why SQLite Event History vs Append-Only Log](docs/adr/0004-sqlite-event-history-vs-append-only-log.md)
+- [ADR 0005: Multi-Asset Support Design Decision](docs/adr/0005-multi-asset-support-design.md)
 
 1) What The Project Does
 
@@ -393,30 +410,118 @@ Regenerate contract bindings: CONTRACT_ID=$(cat contracts/contract_id.txt) npm r
 Commit the updated bindings to the repository and restart your backend service.
 
 8) Environment And Config
-Copy backend/.env.example to backend/.env and fill in the values before starting the server. The backend validates all environment variables at startup. If a required variable is missing or malformed, the process exits immediately with an error.
 
-Database
-StellarStream uses SQLite for persistent storage. See ADR 0001: SQLite vs PostgreSQL for design rationale and migration paths.
+Copy `backend/.env.example` to `backend/.env` and `frontend/.env.example` to `frontend/.env` before starting the application. The backend validates all environment variables at startup using Zod schemas (`backend/src/config/validateEnv.ts`). If a required variable is missing or malformed, the process exits immediately with an explicit validation error log.
 
-Soroban / On-chain mode vs. local-only mode
+### Backend Environment Variables Reference Table
 
-ModeWhen to useHow to enableSoroban enabled (default)Full on-chain integration — contract deployed, indexer runningSet CONTRACT_ID and SERVER_PRIVATE_KEYSoroban disabledLocal UI/API development without a deployed contractSet SOROBAN_DISABLED=true
+| Variable | Required / Default | Format / Validation Rules | Example | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `PORT` | Optional (Default: `3001`) | Integer between `1` and `65535` | `3001` | Express REST API server port |
+| `CONTRACT_ID` | Required (unless `SOROBAN_DISABLED=true`) | Exactly 56 characters starting with `C` (`stellarAccountIdSchema`) | `CA3D5KRYM6CB7OVEQ6DUROQUCHESB5W77CCDG001...` | Soroban smart contract address on Stellar network |
+| `SERVER_PRIVATE_KEY` | Required (unless `SOROBAN_DISABLED=true`) | Secret key, exactly 56 characters starting with `S` (`stellarSecretKeySchema`) | `SD3F2K5L...` | Stellar account private key used to sign contract transactions |
+| `RPC_URL` | Optional (Default: `https://soroban-testnet.stellar.org:443`) | Valid HTTP/HTTPS URL schema (`z.string().url()`) | `https://soroban-testnet.stellar.org:443` | Stellar/Soroban RPC node endpoint URL |
+| `NETWORK_PASSPHRASE` | Optional (Default: `Test SDF Network ; September 2015`) | Non-empty string passphrase matching Stellar network | `Test SDF Network ; September 2015` | Network identifier passphrase |
+| `ALLOWED_ASSETS` | Optional (Default: `USDC,XLM`) | Comma-separated list of 1–12 alphanumeric asset codes | `USDC,XLM,EURC` | Supported token assets for payment streams |
+| `DB_PATH` | Optional (Default: `backend/data/streams.db`) | Valid filesystem file path string | `backend/data/streams.db` | SQLite database file location |
+| `WEBHOOK_DESTINATION_URL` | Optional | Valid HTTP/HTTPS URL (`z.string().url()`) | `https://example.com/webhooks/stellar` | Destination URL for outbound stream event webhooks |
+| `WEBHOOK_SIGNING_SECRET` | Optional (Recommended if URL set) | Secret string ($\ge 32$ random characters recommended) | `whsec_9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d` | Secret used to sign webhook payloads via HMAC-SHA256 |
+| `JWT_SECRET` | Optional (Required in Production) | Secret string ($\ge 32$ random characters recommended) | `jwt_sec_8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c` | Secret used for signing JWT authentication tokens |
+| `SERVER_SIGNING_KEY` | Optional | Secret string | `srv_key_9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c` | Alternate key used for server signature verification |
+| `ADMIN_API_KEY` | Optional (Required in Prod: $\ge 32$ chars) | Minimum 32 characters in production (`z.string().min(32)`) | `adm_key_8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b` | Key required to authenticate admin API endpoints (`/api/admin/*`) |
+| `SOROBAN_DISABLED` | Optional (Default: `false`) | Case-insensitive boolean string (`"true"` / `"false"`) | `true` | Bypasses on-chain contract execution for offline/mock local development |
+| `INDEXER_POLL_INTERVAL_MS` | Optional (Default: `10000`) | Integer $\ge 5000$ (minimum 5 seconds) | `10000` | Polling frequency in ms for Soroban event indexer worker |
+| `RECONCILIATION_INTERVAL_MS` | Optional (Default: `60000`) | Integer $\ge 10000$ (minimum 10 seconds) | `60000` | Stream reconciliation background job interval in ms |
+| `ARCHIVE_CRON_INTERVAL_MS` | Optional (Default: `86400000`) | Integer $\ge 60000$ (minimum 1 minute) | `86400000` | Stream archiver background job interval in ms |
+| `DOMAIN` | Optional (Default: `localhost`) | Valid domain or hostname string | `localhost` | Host domain used for authentication challenges and cookies |
+| `ALLOWED_ORIGINS` | Optional | Comma-separated list of origin URLs | `http://localhost:3000,https://stream.stellar.org` | CORS allowed origins list |
 
-⚠️ SOROBAN_DISABLED=true is for local development only. Never set it in production or staging.
+---
 
-Webhook Signing & Verification
-Header: X-StellarStream-Signature
+### Frontend Environment Variables Reference Table
 
-Format: sha256=<hex-digest>
+| Variable | Required / Default | Format / Validation Rules | Example | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `VITE_API_URL` | Optional (Default: `/api`) | Relative path string or HTTP/HTTPS URL | `/api` | Backend REST API proxy base URL |
+| `VITE_CONTRACT_ID` | Optional | Exactly 56 characters starting with `C` | `CA3D5KRYM6CB7OVEQ6DUROQUCHESB5W77CCDG001...` | Soroban contract ID for direct browser web wallet calls |
+| `VITE_RPC_URL` | Optional (Default: `https://soroban-testnet.stellar.org:443`) | Valid HTTP/HTTPS URL | `https://soroban-testnet.stellar.org:443` | Stellar RPC node URL for frontend contract simulation |
+| `VITE_NETWORK_PASSPHRASE` | Optional (Default: `Test SDF Network ; September 2015`) | Non-empty network passphrase string | `Test SDF Network ; September 2015` | Network passphrase for web wallet transaction signing |
+| `VITE_WS_URL` | Optional | Valid WebSocket URL (`ws://` or `wss://`) | `ws://localhost:3001` | WebSocket URL for live stream progress updates |
+
+---
+
+### Variable Interactions & Precedence
+
+1. **`SOROBAN_DISABLED` vs. `CONTRACT_ID` & `SERVER_PRIVATE_KEY`**:
+   - When `SOROBAN_DISABLED=true`, the backend operates in **local mock mode**. `CONTRACT_ID` and `SERVER_PRIVATE_KEY` are not required, and on-chain Soroban event indexing is disabled.
+   - When `SOROBAN_DISABLED` is not set or set to `false` (default), **both `CONTRACT_ID` and `SERVER_PRIVATE_KEY` MUST be provided** and pass format validation (`C...` contract ID and `S...` secret key). If either is missing or invalid, process startup fails immediately.
+   - ⚠️ `SOROBAN_DISABLED=true` is strictly for local development without a running Stellar network node. Never enable `SOROBAN_DISABLED` in staging or production environments.
+
+2. **Backwards-Compatibility Aliases**:
+   - `STELLAR_CONTRACT_ID` falls back to `CONTRACT_ID` if unset.
+   - `SOROBAN_RPC_URL` falls back to `RPC_URL` if unset.
+   - `STELLAR_NETWORK` falls back to `NETWORK_PASSPHRASE` if unset.
+
+3. **`WEBHOOK_DESTINATION_URL` vs. `WEBHOOK_SIGNING_SECRET`**:
+   - If `WEBHOOK_DESTINATION_URL` is set without `WEBHOOK_SIGNING_SECRET`, webhooks will be dispatched unsigned and a security warning will be logged at startup.
+   - Configuring `WEBHOOK_SIGNING_SECRET` enables HMAC-SHA256 payload signing (`X-StellarStream-Signature` header).
+
+4. **`ADMIN_API_KEY` & Production Environment**:
+   - In production (`NODE_ENV=production`), `ADMIN_API_KEY` is enforced to be at least 32 characters (`z.string().min(32)`).
+   - If `ADMIN_API_KEY` is omitted in production, admin management endpoints (`/api/admin/*`) are disabled and return `401 Unauthorized`. In development, shorter keys emit a warning log.
+
+---
+
+### Secrets Rotation Guide
+
+When rotating sensitive operational credentials in production, follow these procedures to ensure zero downtime and maintain security posture:
+
+1. **Rotating `SERVER_PRIVATE_KEY` (Stellar Transaction Signing Key)**
+   - Generate a new Stellar keypair (`stellar keys generate server-key-new` or via Stellar SDK).
+   - Fund the new account address on-chain with native XLM for transaction fees.
+   - Update `SERVER_PRIVATE_KEY` in environment config / cloud secret manager.
+   - Perform a rolling restart of backend service instances.
+   - Confirm event indexer logs verify successful connection with the new signing account.
+   - Securely archive or revoke the deprecated secret key.
+
+2. **Rotating `JWT_SECRET` / `SERVER_SIGNING_KEY`**
+   - Generate a new high-entropy random key string ($\ge 32$ characters): `openssl rand -hex 32`.
+   - Update `JWT_SECRET` in environment variables.
+   - Perform a rolling restart of backend instances.
+   - *Client Impact*: Existing active JWT tokens signed with the old secret will invalidate automatically, prompting clients to re-authenticate seamlessly via wallet signature challenge (`POST /api/auth/token`).
+
+3. **Rotating `WEBHOOK_SIGNING_SECRET`**
+   - Generate a new secret key string ($\ge 32$ characters).
+   - Update receiving server verification logic to temporarily support dual-secret verification (accepting HMAC signatures generated by either old or new secret).
+   - Update `WEBHOOK_SIGNING_SECRET` in backend `.env` and restart backend instances.
+   - Once all webhook receivers verify receipt under the new secret, remove the deprecated secret from receiver verification logic.
+
+4. **Rotating `ADMIN_API_KEY`**
+   - Generate a new random string of at least 32 characters.
+   - Update `ADMIN_API_KEY` in backend environment config and restart backend services.
+   - Update API key headers in administrative scripts, deployment pipelines, and internal tools calling `/api/admin/*`.
+
+---
+
+### Database
+StellarStream uses SQLite for persistent storage. See `ADR 0001: SQLite vs PostgreSQL` for design rationale and migration paths.
+
+---
+
+### Webhook Signing & Verification
+Header: `X-StellarStream-Signature`
+
+Format: `sha256=<hex-digest>`
 
 Digest input: Raw JSON request body string
 
-Algorithm: HMAC-SHA256 using WEBHOOK_SIGNING_SECRET
+Algorithm: HMAC-SHA256 using `WEBHOOK_SIGNING_SECRET`
 
-To verify a payload delivery, compute sha256= + the HMAC-SHA256 hash of the raw request body string using your configured WEBHOOK_SIGNING_SECRET. Perform a constant-time comparison against the value provided in the X-StellarStream-Signature header to protect against timing attacks.
+To verify a payload delivery, compute `sha256=` + the HMAC-SHA256 hash of the raw request body string using your configured `WEBHOOK_SIGNING_SECRET`. Perform a constant-time comparison against the value provided in the `X-StellarStream-Signature` header to protect against timing attacks.
 
-Node.js Verification Example
+#### Node.js Verification Example
 
+```javascript
 const crypto = require("crypto");
 
 function verifyWebhook(secret, rawBody, signatureHeader) {
@@ -438,9 +543,11 @@ function verifyWebhook(secret, rawBody, signatureHeader) {
   
   return crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
 }
+```
 
-Python Verification Example
+#### Python Verification Example
 
+```python
 import hmac
 import hashlib
 
@@ -458,8 +565,9 @@ def verify_webhook(secret: str, raw_body: bytes, signature_header: str) -> bool:
     expected_digest = expected_hmac.hexdigest()
     
     return hmac.compare_digest(expected_digest, received_digest)
+```
 
-⚠️ If WEBHOOK_DESTINATION_URL is set without a WEBHOOK_SIGNING_SECRET, webhooks will be delivered unsigned and a security warning will be logged at server initialization.
+⚠️ If `WEBHOOK_DESTINATION_URL` is set without a `WEBHOOK_SIGNING_SECRET`, webhooks will be delivered unsigned and a security warning will be logged at server initialization.
 
 9) Project File Map
 
@@ -474,7 +582,7 @@ def verify_webhook(secret: str, raw_body: bytes, signature_header: str) -> bool:
 ├── contracts/
 │   ├── src/lib.rs                # Soroban contract implementation
 │   └── Cargo.toml
-├── docs/                         # Extended project architectural documentation
+├── docs/                         # Architectural docs & use cases (USE_CASES.md)
 ├── frontend/
 │   ├── src/
 │   │   ├── components/           # UI Elements (Tables, Forms, Timelines)

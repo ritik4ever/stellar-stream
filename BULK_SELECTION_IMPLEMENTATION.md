@@ -7,18 +7,26 @@ Implemented bulk selection and sequential cancellation functionality for the Str
 
 ### 1. Selection Logic & UI
 - **Checkbox Column**: Added as the first column in the table
-  - Only renders for streams with status `active` or `scheduled`
+  - Eligibility determined by `isStreamSelectable()` — only streams with `progress.status === "active"` or `"scheduled"` are selectable
   - Completed and canceled streams are not selectable
-  
-- **Header Selection**: "Select All" checkbox in table header
-  - Toggles only eligible streams (active/scheduled) on current page
-  - Automatically checks when all eligible streams are manually selected
-  - Automatically unchecks when any stream is deselected
+  - Individual toggling handled by `handleCheckboxToggle(streamId)`, which mutates a `Set<string>` of `selectedStreamIds`
 
-- **State Management**: 
-  - Uses `Set<string>` for O(1) lookup performance
-  - Automatically cleans up invalid selections when streams change
-  - Maintains selection state across table interactions
+- **Header Selection**: "Select All" checkbox in table header
+  - Controlled by `handleSelectAllToggle()`, driven by the derived `allSelectableSelected` boolean (memoized from `selectableStreams`)
+  - Toggling adds/removes all `selectableIds` from `selectedStreamIds` in one update
+  - Automatically reflects checked/unchecked state based on whether every selectable stream is currently selected
+
+- **State Management**:
+  - `selectedStreamIds: Set<string>` for O(1) lookup performance
+  - A `useEffect` (keyed on `streams`) prunes `selectedStreamIds` down to only IDs still present in the current `streams` list, preventing stale selections after refresh/filtering
+
+### Keyboard Shortcuts
+Implemented via a `keydown` listener attached to the table's container (`tableWrapperRef`):
+- **Ctrl/Cmd + A**: Selects/deselects all eligible streams by calling `handleSelectAllToggle()`. Ignored when focus is inside a text input (checkboxes are exempted).
+- **Escape**: Clears the current selection (`setSelectedStreamIds(new Set())`).
+- **Delete / Backspace**: When one or more streams are selected, moves focus to the bulk-cancel button (`cancelButtonRef`) rather than triggering cancellation directly — this avoids accidental destructive action from a single keypress.
+
+The listener is scoped to the table wrapper element, not the whole document, so shortcuts only fire when the table has focus context.
 
 ### 2. Floating Action Bar
 - **Appearance**: Shows when `selectedStreamIds.size >= 1`
@@ -73,6 +81,10 @@ Implemented bulk selection and sequential cancellation functionality for the Str
 ### `frontend/src/App.tsx`
 - Added `handleRefresh` callback
 - Passed `onRefresh` prop to StreamsTable
+
+- Added `tableWrapperRef` and `cancelButtonRef` refs
+- Added keyboard-shortcut `useEffect` for bulk-selection accessibility (Ctrl/Cmd+A, Escape, Delete/Backspace)
+- `BulkActionBar` now accepts a `buttonRef` prop so keyboard focus can be moved to the cancel button programmatically
 
 ## Test Coverage
 

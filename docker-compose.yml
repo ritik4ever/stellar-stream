@@ -17,6 +17,10 @@ services:
   backend:
     build:
       context: ./backend
+      # Multi-stage production build (builder → prod-deps → runtime)
+      # Image target: <150 MB, non-root user "node"
+      dockerfile: Dockerfile
+      target: runtime
     container_name: stellar-backend
     ports:
       - "3001:3001"
@@ -24,21 +28,28 @@ services:
       - ./backend/.env
     environment:
       - REDIS_URL=redis://redis:6379
+    volumes:
+      # Persist SQLite database across container restarts
+      - backend-data:/app/data
     depends_on:
       redis:
         condition: service_healthy
     restart: on-failure
-    # Health check: polls /api/health every 10s, fails after 3 missed checks (timeout 5s each)
+    # Health check: polls /api/health every 30s, 3 retries, 10s start grace period
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 10s
 
   frontend:
     build:
       context: ./frontend
+      # Multi-stage production build (builder → nginx:alpine)
+      # Image target: <50 MB, non-root user "nginx", serves static assets
+      dockerfile: Dockerfile
+      target: runtime
     container_name: stellar-frontend
     ports:
       - "3000:3000"
@@ -49,10 +60,14 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
-    # Health check: polls the served app root every 10s, fails after 3 missed checks (timeout 5s each)
+    # Health check: polls served app root every 30s
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
       retries: 3
       start_period: 10s
+
+volumes:
+  # Named volume for SQLite persistence
+  backend-data:

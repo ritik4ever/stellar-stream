@@ -73,6 +73,20 @@ export function countDeadLetters(): number {
   return row.count;
 }
 
+export function pruneDeadLettersOlderThan(cutoffTimestamp: number): number {
+  const db = getDb();
+  const result = db
+    .prepare(`DELETE FROM webhook_dead_letters WHERE failed_at < ?`)
+    .run(cutoffTimestamp);
+  return result.changes;
+}
+
+export function clearDeadLetters(): number {
+  const db = getDb();
+  const result = db.prepare(`DELETE FROM webhook_dead_letters`).run();
+  return result.changes;
+}
+
 export function requeueDeadLetter(id: number): boolean {
   const db = getDb();
   

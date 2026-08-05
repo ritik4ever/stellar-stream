@@ -1,10 +1,9 @@
 ---
 source: src/test.rs
-assertion_line: 1163
 expression: event_data
 ---
 ClawbackExecuted {
     stream_id: 1,
     amount: 250,
-    recipient: Contract(CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM),
+    recipient: Contract(CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M),
 }

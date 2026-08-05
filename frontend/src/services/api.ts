@@ -399,6 +399,23 @@ export async function getSenderEvents(senderAddress: string, limit: number = 10)
   }
 }
 
+export async function reconcileStream(streamId: string, txHash?: string): Promise<Stream> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (authToken) {
+    headers["Authorization"] = `Bearer ${authToken}`;
+  }
+
+  const response = await fetch(`${API_BASE}/streams/${streamId}/reconcile`, {
+    method: "POST",
+    headers,
+    body: txHash ? JSON.stringify({ txHash }) : undefined,
+  });
+  const body = await parseResponse<{ data: Stream }>(response);
+  return body.data;
+}
+
 export function clearCache() {
   cache.clear();
 }

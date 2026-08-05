@@ -4,7 +4,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { logger } from "../logger";
 import { initDb, getDb } from "./db";
 import {
+    clearDeadLetters,
     countDeadLetters,
+    pruneDeadLettersOlderThan,
     getDeadLetters,
     getRetryDelaySeconds,
     requeueDeadLetter,
@@ -178,5 +180,32 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
         expect(deadLetters[0].url).toBe("http://u2"); // 3000
         expect(deadLetters[1].url).toBe("http://u3"); // 2000
         expect(deadLetters[2].url).toBe("http://u1"); // 1000
+    });
+
+    it("prunes only dead letters older than the cutoff", () => {
+        const db = getDb();
+        const stmt = db.prepare(`
+            INSERT INTO webhook_dead_letters (stream_id, event, url, payload, failed_at)
+            VALUES (?, ?, ?, ?, ?)
+        `);
+        stmt.run("old", "failed", "https://old.example", "{}", 999);
+        stmt.run("boundary", "failed", "https://boundary.example", "{}", 1000);
+        stmt.run("new", "failed", "https://new.example", "{}", 1001);
+
+        expect(pruneDeadLettersOlderThan(1000)).toBe(1);
+        expect(countDeadLetters()).toBe(2);
+    });
+
+    it("clears the entire dead-letter queue and reports the deleted count", () => {
+        const db = getDb();
+        const stmt = db.prepare(`
+            INSERT INTO webhook_dead_letters (stream_id, event, url, payload, failed_at)
+            VALUES (?, ?, ?, ?, ?)
+        `);
+        stmt.run("one", "failed", "https://one.example", "{}", 1000);
+        stmt.run("two", "failed", "https://two.example", "{}", 2000);
+
+        expect(clearDeadLetters()).toBe(2);
+        expect(countDeadLetters()).toBe(0);
     });
 });
