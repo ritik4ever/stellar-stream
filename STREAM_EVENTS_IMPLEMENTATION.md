@@ -92,15 +92,19 @@ This document is the authoritative reference for:
 | `start_time_updated` | ✅ | `updateStreamStartAt()` | — (off-chain only) | ✅ Timeline, drawer, sender feed |
 | `paused` | ✅ | `pauseStream()` | `Paused` → `paused` | ✅ Timeline, drawer, sender feed |
 | `resumed` | ✅ | `resumeStream()` | `Resumed` → `resumed` | ✅ Timeline, drawer, sender feed |
-| `completed` | ✅ | `refreshStreamStatuses()`, `markStreamComplete()` | — (off-chain only) | ⚠️ Default styling only |
+| `completed` | ✅ | `refreshStreamStatuses()`, `markStreamComplete()` | `Completed` → `completed` | ⚠️ Default styling only |
 | `transferred` | ✅ | — | `Transfer` → `transferred` | ⚠️ Default styling only |
+| `clawback` | ✅ | — | `Clawback` → `clawback` | ⚠️ Default styling only |
 | `cliff_reached` | 🚧 | not emitted | not indexed | Type declared in `api.ts` only |
-| `clawback` | 🚧 | not emitted | `Clawback` emitted on-chain but **not indexed** | — |
 
 > The backend `StreamEventType` union in
-> `backend/src/services/eventHistory.ts:3` defines the current canonical set:
+> `backend/src/services/eventHistory.ts:3` defines the canonical off-chain set:
 > `created | claimed | canceled | start_time_updated | paused | resumed |
-> completed | transferred`.
+> completed | transferred`. The indexer also records `clawback`
+> (`backend/src/services/indexer.ts`) — a known gap where the union and the
+> `VALID_EVENT_TYPES` filter allowlist in
+> `backend/src/validation/schemas.ts:131` have not yet been extended. See
+> "Known gaps" below.
 
 ---
 
@@ -128,8 +132,8 @@ This document is the authoritative reference for:
   event tracking, guarded by `streamHasEvent(stream.id, "created")`.
 - **Indexer processing** — `processEvent()` in `backend/src/services/indexer.ts`
   maps the contract topic `("Stream", "Created")` to `created` and records
-  `actor = value.sender`, `amount = value.total_amount`, and metadata
-  `{ recipient, token, startTime, endTime }`.
+  `actor = value.actor ?? value.sender`, `amount = value.total_amount`, and
+  metadata `{ recipient, token, startTime, endTime }`.
 - **Frontend rendering** — StreamTimeline shows the 🚀 icon, title *"Stream
   created"*, and description *"Initiated by {actor} for {amount} tokens"*.
   StreamDetailDrawer shows the ✦ icon and label *"Stream created"*.
@@ -151,7 +155,7 @@ This document is the authoritative reference for:
   | `timestamp` | `number` | Unix time (seconds) |
   | `actor` | `string` | Recipient who claimed |
   | `amount` | `number` | Claimed amount |
-  | `metadata` | `object` | `{ assetCode }` (off-chain route) |
+  | `metadata` | `object` | `{ assetCode }` (off-chain route) or `{ claimed_amount }` (indexer) |
   | `ledgerSequence` | `number?` | Soroban ledger when indexed on-chain |
 
 - **Off-chain emission** — `POST /api/streams/:id/claim` in
@@ -159,7 +163,8 @@ This document is the authoritative reference for:
   `metadata = { assetCode }` inside an atomic transaction that also guards
   against double claims (409 if already claimed).
 - **Indexer processing** — `processEvent()` maps `("Stream", "Claimed")` to
-  `claimed` and records `actor = value.recipient`, `amount = value.amount`.
+  `claimed` and records `actor = value.actor ?? value.recipient`,
+  `amount = value.amount`, `metadata = { claimed_amount: value.claimed_amount }`.
 - **Frontend rendering** — StreamTimeline shows the 💸 icon, title *"Stream
   claimed"*, description *"Claim of {amount} tokens processed by {actor}"*.
   StreamDetailDrawer shows the ↓ icon and label *"Tokens claimed"*.
@@ -180,12 +185,14 @@ This document is the authoritative reference for:
   | `eventType` | `"canceled"` | Event discriminator |
   | `timestamp` | `number` | Unix time (seconds) |
   | `actor` | `string` | Sender who canceled |
+  | `amount` | `number?` | `refunded_amount` returned to the sender (on-chain only) |
   | `ledgerSequence` | `number?` | Soroban ledger when indexed on-chain |
 
 - **Off-chain emission** — `cancelStream()` in `streamStore.ts` writes the
   canceled stream row and the `canceled` event atomically.
 - **Indexer processing** — `processEvent()` maps `("Stream", "Canceled")` to
-  `canceled` and records `actor = value.sender`.
+  `canceled` and records `actor = value.actor ?? value.sender`,
+  `amount = value.refunded_amount`.
 - **Frontend rendering** — StreamTimeline shows the ❌ icon, title *"Stream
   canceled"*, description *"Closed by {actor}"*. StreamDetailDrawer shows the
   ✕ icon and label *"Stream canceled"*. SenderDashboard shows *"Stream
@@ -232,12 +239,14 @@ This document is the authoritative reference for:
   | `eventType` | `"paused"` | Event discriminator |
   | `timestamp` | `number` | Unix time (seconds) |
   | `actor` | `string` | Sender who paused |
+  | `metadata` | `object` | `{ paused_at }` (indexer only) |
   | `ledgerSequence` | `number?` | Soroban ledger when indexed on-chain |
 
 - **Off-chain emission** — `pauseStream()` in `streamStore.ts` records
   `paused` atomically with the stream row update.
 - **Indexer processing** — `processEvent()` maps `("Stream", "Paused")` to
-  `paused` and records `actor = value.sender`.
+  `paused` and records `actor = value.actor ?? value.sender`, metadata
+  `{ paused_at: value.paused_at }`.
 - **Frontend rendering** — StreamTimeline shows the ⏸️ icon, title *"Stream
   paused"*, description *"Stream paused by {actor}"*. StreamDetailDrawer shows
   the ⏸ icon and label *"Stream paused"*. SenderDashboard shows *"Stream
@@ -258,13 +267,14 @@ This document is the authoritative reference for:
   | `eventType` | `"resumed"` | Event discriminator |
   | `timestamp` | `number` | Unix time (seconds) |
   | `actor` | `string` | Sender who resumed |
-  | `metadata` | `object` | `{ pausedDuration }` (off-chain) |
+  | `metadata` | `object` | `{ pausedDuration }` (off-chain) or `{ resumed_at }` (indexer) |
   | `ledgerSequence` | `number?` | Soroban ledger when indexed on-chain |
 
 - **Off-chain emission** — `resumeStream()` in `streamStore.ts` records
   `resumed` with `metadata = { pausedDuration }`.
 - **Indexer processing** — `processEvent()` maps `("Stream", "Resumed")` to
-  `resumed` and records `actor = value.sender`.
+  `resumed` and records `actor = value.actor ?? value.sender`, metadata
+  `{ resumed_at: value.resumed_at }`.
 - **Frontend rendering** — StreamTimeline shows the ▶️ icon, title *"Stream
   resumed"*, description *"Stream resumed by {actor}"*. StreamDetailDrawer
   shows the ▶ icon and label *"Stream resumed"*. SenderDashboard shows *"Stream
@@ -275,9 +285,11 @@ This document is the authoritative reference for:
 ### `completed`
 
 - **Status:** ✅ Current
-- **Triggered when:** A stream finishes vesting. `refreshStreamStatuses()`
-  auto-completes streams whose `start_at + duration_seconds` has elapsed, and
-  `markStreamComplete()` manually completes a fully-vested stream.
+- **Triggered when:** A stream finishes vesting — either locally when
+  `refreshStreamStatuses()` auto-completes a stream whose
+  `start_at + duration_seconds` has elapsed (or `markStreamComplete()` manually
+  completes a fully-vested stream), or on-chain when a claim fully drains the
+  stream (the contract emits `StreamCompleted` immediately after `StreamClaimed`).
 - **Payload fields**
 
   | Field | Type | Description |
@@ -285,13 +297,15 @@ This document is the authoritative reference for:
   | `streamId` | `string` | Stream ID |
   | `eventType` | `"completed"` | Event discriminator |
   | `timestamp` | `number` | Unix time (seconds) |
-  | `actor` | `string` | Sender of the stream |
+  | `actor` | `string` | Sender of the stream (off-chain) or recipient of the completing claim (on-chain) |
+  | `amount` | `number?` | `total_amount` that was streamed (on-chain only) |
+  | `ledgerSequence` | `number?` | Soroban ledger when indexed on-chain |
 
-- **Off-chain emission** — both paths call `recordEventWithDb(db, id,
+- **Off-chain emission** — both local paths call `recordEventWithDb(db, id,
   "completed", at, sender)`. Guarded with `streamHasEvent(id, "completed")` so
   it is only recorded once per stream.
-- **Indexer processing** — None. The contract does not emit a completion
-  event; completion is derived locally from timestamps.
+- **Indexer processing** — `processEvent()` maps `("Stream", "Completed")` to
+  `completed` and records `actor = value.actor`, `amount = value.total_amount`.
 - **Frontend rendering** — Falls back to the default 📋 icon / *"Stream event"*
   title in `StreamTimeline` and the default • icon in `StreamDetailDrawer`
   (no dedicated styling yet). Not included in the filter buttons.
@@ -314,12 +328,39 @@ This document is the authoritative reference for:
   | `metadata` | `object` | `{ new_recipient }` |
 
 - **Indexer processing** — `processEvent()` maps `("Stream", "Transfer")` to
-  `transferred` and records `actor = value.old_recipient`, metadata
-  `{ new_recipient: value.new_recipient }`.
+  `transferred` and records `actor = value.actor ?? value.old_recipient`,
+  metadata `{ new_recipient: value.new_recipient }`.
 - **Off-chain emission** — None; this event is indexer-only.
 - **Frontend rendering** — Falls back to the default 📋 icon / *"Stream event"*
   title in `StreamTimeline` (no dedicated styling yet). Not included in the
   filter buttons.
+
+---
+
+### `clawback`
+
+- **Status:** ✅ Current
+- **Triggered when:** An admin executes `clawback()` on-chain and the smart
+  contract emits the `Clawback` event (`ClawbackExecuted`).
+- **Payload fields**
+
+  | Field | Type | Description |
+  |-------|------|-------------|
+  | `streamId` | `string` | Stream ID |
+  | `eventType` | `"clawback"` | Event discriminator |
+  | `timestamp` | `number` | Unix time (seconds) |
+  | `actor` | `string` | Admin address that executed the clawback |
+  | `amount` | `number` | Tokens clawed back |
+  | `metadata` | `object` | `{ recipient }` — the admin account that received the clawed-back tokens |
+  | `ledgerSequence` | `number?` | Soroban ledger when indexed on-chain |
+
+- **Indexer processing** — `processEvent()` maps `("Stream", "Clawback")` to
+  `clawback` and records `actor = value.actor`, `amount = value.amount`,
+  metadata `{ recipient: value.recipient }`.
+- **Off-chain emission** — None; this event is indexer-only.
+- **Frontend rendering** — Falls back to the default 📋 icon / *"Stream event"*
+  title in `StreamTimeline` and the default • icon in `StreamDetailDrawer`
+  (no dedicated styling yet). Not included in the filter buttons.
 
 ---
 
@@ -334,52 +375,74 @@ This document is the authoritative reference for:
   `StreamEvent` union (`frontend/src/services/api.ts:286`) but is never
   emitted by the backend, indexed, or rendered. Do not rely on it yet.
 
-### `clawback` (planned)
+---
 
-- **Status:** 🚧 Planned
-- **Description:** The smart contract's `clawback()` publishes a `Clawback`
-  event (`ClawbackExecuted { stream_id, amount, recipient }`), but the indexer
-  currently has **no** case for it, so it is never persisted.
-- **Current wiring:** `contracts/src/lib.rs:638` emits it; nothing else
-  consumes it.
+### Known gaps
+
+The following are recorded in the database but not yet fully wired into the
+filtering/typing layers (see "How to Add a New Event Type" for the fix):
+
+- `clawback` is recorded by the indexer but is missing from the backend
+  `StreamEventType` union (`backend/src/services/eventHistory.ts:3`) and from
+  `VALID_EVENT_TYPES` (`backend/src/validation/schemas.ts:131`).
+- `transferred` is recorded but is missing from `VALID_EVENT_TYPES`, so it
+  cannot be used as an `eventType` filter on `GET /api/events` (unlike
+  `completed`, which is in the allowlist).
+- None of `completed`, `transferred`, or `clawback` have dedicated
+  `StreamTimeline` / `StreamDetailDrawer` / `SenderDashboard` rendering — they
+  fall back to the generic "Stream event" styling.
 
 ---
 
 ## Indexer Processing
 
-The indexer (`backend/src/services/indexer.ts`) polls Soroban RPC every
-**10 seconds** (configurable via `startIndexer(intervalMs)`), starting from the
-last processed ledger. It fetches all contract events for the configured
-`CONTRACT_ID`, then applies the following mapping:
+The indexer (`backend/src/services/indexer.ts`) polls Soroban RPC, starting from
+the last processed ledger, then fetches all contract events for the configured
+`CONTRACT_ID`. Polling defaults to a **10 second** interval
+(`startIndexer(intervalMs)`) unless `INDEXER_FALLBACK_POLLING_ENABLED=true`
+(which switches to `INDEXER_FALLBACK_POLL_INTERVAL_MS`, default 10 s).
+An `isIndexing` guard prevents overlapping runs, and the last processed ledger
+is checkpointed to the `indexer_cursor` table so the worker resumes cleanly
+after restarts.
+
+The event-name → `event_type` mapping (`processEvent()`):
 
 | Soroban topic | `eventName` (topic[1]) | Recorded `event_type` | Actor | Amount | Metadata |
 |---------------|------------------------|-----------------------|-------|--------|----------|
-| `("Stream", "Created")` | `Created` | `created` | `value.sender` | `value.total_amount` | `{ recipient, token, startTime, endTime }` |
-| `("Stream", "Claimed")` | `Claimed` | `claimed` | `value.recipient` | `value.amount` | — |
-| `("Stream", "Canceled")` | `Canceled` | `canceled` | `value.sender` | — | — |
-| `("Stream", "Paused")` | `Paused` | `paused` | `value.sender` | — | — |
-| `("Stream", "Resumed")` | `Resumed` | `resumed` | `value.sender` | — | — |
-| `("Stream", "Transfer")` | `Transfer` | `transferred` | `value.old_recipient` | — | `{ new_recipient }` |
-| `("Stream", "Clawback")` | `Clawback` | ⚠️ **not processed** | — | — | — |
+| `("Stream", "Created")` | `Created` | `created` | `value.actor ?? value.sender` | `value.total_amount` | `{ recipient, token, startTime, endTime }` |
+| `("Stream", "Claimed")` | `Claimed` | `claimed` | `value.actor ?? value.recipient` | `value.amount` | `{ claimed_amount }` |
+| `("Stream", "Completed")` | `Completed` | `completed` | `value.actor` | `value.total_amount` | — |
+| `("Stream", "Canceled")` | `Canceled` | `canceled` | `value.actor ?? value.sender` | `value.refunded_amount` | — |
+| `("Stream", "Paused")` | `Paused` | `paused` | `value.actor ?? value.sender` | — | `{ paused_at }` |
+| `("Stream", "Resumed")` | `Resumed` | `resumed` | `value.actor ?? value.sender` | — | `{ resumed_at }` |
+| `("Stream", "Transfer")` | `Transfer` | `transferred` | `value.actor ?? value.old_recipient` | — | `{ new_recipient }` |
+| `("Stream", "Clawback")` | `Clawback` | `clawback` | `value.actor` | `value.amount` | `{ recipient }` |
 
 Key implementation notes:
 
 - Event topics are `[contract_symbol, event_name]`; events with fewer than two
-  topics are skipped.
+  topics are skipped, and unknown event names are logged as warnings and
+  skipped (`default` branch in `processEvent()`).
 - `timestamp` is derived from `event.ledgerClosedAt` (Unix seconds).
 - `ledger_sequence` is stored so the unique index
   `idx_stream_events_dedup (stream_id, event_type, ledger_sequence)` prevents
   duplicates across indexer restarts.
-- The batch (events + cursor advance) runs in a single database transaction
-  (`db.transaction(...)`) so a crash mid-batch cannot produce partial state.
+- Events and the cursor advance run inside a database transaction
+  (`db.transaction(...)`); the checkpoint is persisted to `indexer_cursor`
+  via `saveCheckpoint()`, so a crash mid-batch cannot produce partial state.
+- Fetching uses cursor pagination (repeated `getEvents` calls following the
+  returned cursor) until no more events remain.
 - A circuit breaker (`CircuitBreaker`, threshold of 5 failures) pauses polling
   after repeated RPC failures; the state is exposed as an indexer metric.
 - Each processed event increments the `eventsIndexedTotal` Prometheus counter;
   failed runs increment `indexerErrorsTotal`.
-- `INDEXER_START_LEDGER` can override the starting ledger; `indexer_cursor`
-  tracks the last processed ledger across restarts.
-- Off-chain event types (`start_time_updated`, `completed`) are **not** part of
+- `INDEXER_START_LEDGER` can override the starting ledger.
+- Off-chain-only event types (`start_time_updated`) are **not** part of
   indexer processing — they are recorded by `streamStore.ts` / `index.ts`.
+  (Local `completed` events are also recorded by `streamStore.ts`, in addition
+  to the on-chain `StreamCompleted`.)
+- The complete contract event schema is documented separately in
+  [`docs/CONTRACT_EVENTS.md`](docs/CONTRACT_EVENTS.md).
 
 ## Frontend Rendering
 
@@ -495,12 +558,16 @@ Add/extend tests:
 
 ### 6. Frontend — add the type to the union
 
-Extend `StreamEvent["eventType"]` in `frontend/src/services/api.ts`:
+Extend `StreamEvent["eventType"]` in `frontend/src/services/api.ts` (the
+current union is `created | claimed | canceled | start_time_updated | paused |
+resumed | cliff_reached`, so also add any already-recorded types you need):
 
 ```typescript
 eventType:
   | "created" | "claimed" | "canceled" | "start_time_updated"
-  | "paused" | "resumed" | "cliff_reached" | "your_new_event";
+  | "paused" | "resumed" | "cliff_reached"
+  | "completed" | "transferred" | "clawback"
+  | "your_new_event";
 ```
 
 ### 7. Frontend — render it
@@ -631,10 +698,11 @@ Automated tests:
 ## Acceptance Criteria ✅
 
 - ✅ All event types documented (`created`, `claimed`, `canceled`,
-  `start_time_updated`, `paused`, `resumed`, `completed`, `transferred`)
+  `start_time_updated`, `paused`, `resumed`, `completed`, `transferred`,
+  `clawback`)
 - ✅ How-to for new events is clear (see "How to Add a New Event Type")
-- ✅ Current vs planned clearly marked (✅ / 🚧 in the catalog, plus
-  `cliff_reached` and `clawback` as planned)
+- ✅ Current vs planned clearly marked (✅ / 🚧 in the catalog; `cliff_reached`
+  is the only planned type, and "Known gaps" tracks partial wiring)
 - ✅ Indexer processing documented for every on-chain event type
 - ✅ Frontend rendering documented for every event type
 - ✅ History endpoints return ordered lifecycle events
