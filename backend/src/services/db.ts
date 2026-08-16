@@ -142,18 +142,113 @@ export function translateSqlAndParams(sql: string, paramsObj: any): { sql: strin
   return { sql: pgSql, params };
 }
 
-export function translateDdl(sql: string): string {
-  if (!isPostgres()) return sql;
+function migrate(): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS streams (
+      id              TEXT PRIMARY KEY,
+      sender          TEXT NOT NULL,
+      recipient       TEXT NOT NULL,
+      asset_code      TEXT NOT NULL,
+      total_amount    REAL NOT NULL,
+      duration_seconds INTEGER NOT NULL,
+      start_at        INTEGER NOT NULL,
+      created_at      INTEGER NOT NULL,
+      canceled_at     INTEGER,
+      completed_at    INTEGER,
+      refunded_amount REAL,
+      archived_at     INTEGER,
+      paused_at       INTEGER,
+      paused_duration INTEGER NOT NULL DEFAULT 0
+    );
 
-  const statements = sql.split(";");
-  const pgStatements = [];
+    CREATE TABLE IF NOT EXISTS stream_archive (
+      id              TEXT PRIMARY KEY,
+      sender          TEXT NOT NULL,
+      recipient       TEXT NOT NULL,
+      asset_code      TEXT NOT NULL,
+      total_amount    REAL NOT NULL,
+      duration_seconds INTEGER NOT NULL,
+      start_at        INTEGER NOT NULL,
+      created_at      INTEGER NOT NULL,
+      canceled_at     INTEGER,
+      completed_at    INTEGER,
+      refunded_amount REAL,
+      archived_at     INTEGER NOT NULL,
+      paused_at       INTEGER,
+      paused_duration INTEGER NOT NULL DEFAULT 0
+    );
 
-  for (let stmt of statements) {
-    stmt = stmt.trim();
-    if (!stmt) continue;
+    CREATE TABLE IF NOT EXISTS stream_events (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      stream_id       TEXT NOT NULL,
+      event_type      TEXT NOT NULL,
+      ledger_sequence INTEGER,
+      timestamp       INTEGER NOT NULL,
+      actor           TEXT,
+      amount          REAL,
+      metadata        TEXT,
+      FOREIGN KEY (stream_id) REFERENCES streams(id)
+    );
 
-    if (stmt.toUpperCase().includes("CREATE VIRTUAL TABLE") || stmt.toUpperCase().includes("STREAMS_FTS")) {
-      continue;
+    CREATE INDEX IF NOT EXISTS idx_stream_events_stream_id ON stream_events(stream_id);
+    CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp ON stream_events(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_stream_events_event_type ON stream_events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_stream_events_actor ON stream_events(actor);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_stream_events_dedup
+      ON stream_events(stream_id, event_type, ledger_sequence)
+      WHERE ledger_sequence IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS webhook_deliveries (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      stream_id       TEXT NOT NULL,
+      event           TEXT NOT NULL,
+      payload         TEXT NOT NULL,
+      attempt         INTEGER NOT NULL DEFAULT 0,
+      max_attempts    INTEGER NOT NULL DEFAULT 3,
+      status          TEXT NOT NULL DEFAULT 'pending',
+      next_retry_at   INTEGER,
+      created_at      INTEGER NOT NULL,
+      last_attempt_at INTEGER,
+      error_message   TEXT,
+      FOREIGN KEY (stream_id) REFERENCES streams(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status ON webhook_deliveries(status);
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_next_retry ON webhook_deliveries(next_retry_at);
+
+    CREATE TABLE IF NOT EXISTS webhook_dead_letters (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      stream_id       TEXT NOT NULL,
+      event           TEXT NOT NULL,
+      url             TEXT NOT NULL,
+      payload         TEXT NOT NULL,
+      last_error      TEXT,
+      failed_at       INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_webhook_dead_letters_failed_at ON webhook_dead_letters(failed_at);
+
+    CREATE TABLE IF NOT EXISTS indexer_cursor (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      last_ledger_sequence INTEGER NOT NULL
+    );
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS streams_fts USING fts5(
+      stream_id UNINDEXED,
+      sender,
+      recipient,
+      asset_code,
+      content=streams,
+      content_rowid=rowid
+    );
+  `);
+
+  // Incremental migrations — safe to run on existing databases.
+  const addColumnIfMissing = (table: string, column: string, definition: string) => {
+    const cols = db.pragma(`table_info(${table})`) as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === column)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
 
     let pgStmt = stmt;
