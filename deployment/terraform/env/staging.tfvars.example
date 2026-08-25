@@ -1,0 +1,10 @@
+project_name        = "stellar-stream"
+environment         = "staging"
+aws_region          = "us-east-1"
+frontend_bucket_name = "stellar-stream-staging-frontend-0001"
+backend_image       = "123456789012.dkr.ecr.us-east-1.amazonaws.com/stellar-stream-backend:staging"
+backend_desired_count = 1
+jwt_secret_arn      = "arn:aws:secretsmanager:us-east-1:123456789012:secret:stellar-stream/staging/jwt-secret"
+admin_api_key_arn   = "arn:aws:secretsmanager:us-east-1:123456789012:secret:stellar-stream/staging/admin-api-key"
+webhook_signing_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:stellar-stream/staging/webhook-signing-secret"
+allowed_origins     = ["https://staging.example.com"]
