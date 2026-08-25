@@ -102,3 +102,23 @@ jobs:
           make bench
           cd ..
           ./scripts/check_benchmarks.sh
+
+  # -----------------------------------------------------------------------
+  # Slack notification — fires when the nightly smoke test job fails.
+  # On-chain deployment failures are critical; notify immediately.
+  # -----------------------------------------------------------------------
+  notify-failure:
+    name: Notify Slack on Failure
+    runs-on: ubuntu-latest
+    needs: [smoke-test]
+    if: failure()
+    steps:
+      - name: Checkout (required to resolve local composite action)
+        uses: actions/checkout@v4
+
+      - name: Send Slack failure notification
+        uses: ./.github/actions/notify-slack-failure
+        with:
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          failing-step: "Nightly contract smoke test failed — check deploy/smoke-test steps"
+          workflow-name: "Contract Smoke Test"

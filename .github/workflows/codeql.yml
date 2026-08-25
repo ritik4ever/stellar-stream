@@ -31,3 +31,23 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:javascript-typescript"
+
+  # -----------------------------------------------------------------------
+  # Notify on CodeQL finding — like Gitleaks, security analysis failures are
+  # always high-signal regardless of whether it's a PR or a push to main.
+  # -----------------------------------------------------------------------
+  notify-failure:
+    name: Notify Slack on Failure
+    runs-on: ubuntu-latest
+    needs: [analyze]
+    if: failure()
+    steps:
+      - name: Checkout (required to resolve local composite action)
+        uses: actions/checkout@v4
+
+      - name: Send Slack failure notification
+        uses: ./.github/actions/notify-slack-failure
+        with:
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          failing-step: "CodeQL found security issues — check Security tab for details"
+          workflow-name: "CodeQL Security Analysis"
