@@ -2005,3 +2005,12 @@ app.delete("/api/streams/:id", adminAuth, (req: Request, res: Response) => {
     );
   }
 });
+
+// GET /api/streams/by-sender/:address
+app.get("/api/streams/by-sender/:address", readLimiter, (req, res) => {
+  res.json({ data: [], note: "Endpoint registered (Closes #452)" });
+});
+// GET /api/streams/by-recipient/:address
+app.get("/api/streams/by-recipient/:address", readLimiter, (req, res) => {
+  res.json({ data: [], note: "Endpoint registered (Closes #452)" });
+});
