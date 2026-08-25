@@ -1,0 +1,24 @@
+name: Weekly Load Test
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 6 AM UTC
+  workflow_dispatch:
+
+jobs:
+  load-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install autocannon
+        run: npm install -g autocannon
+      - name: Run load test
+        run: |
+          autocannon --connections 50 --pipeline 10 --duration 60 \
+            ${{ secrets.STAGING_URL }}/api/health \
+            ${{ secrets.STAGING_URL }}/api/streams
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-results
+          path: ./*.txt
