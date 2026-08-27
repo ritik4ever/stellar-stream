@@ -13,10 +13,7 @@ fn main() {
     }
 
     // Check if wasm-opt is available
-    let wasm_opt_available = Command::new("wasm-opt")
-        .arg("--version")
-        .output()
-        .is_ok();
+    let wasm_opt_available = Command::new("wasm-opt").arg("--version").output().is_ok();
 
     if !wasm_opt_available {
         println!("cargo:warning=wasm-opt not found in PATH. Install via: npm install -g wasm-opt or brew install binaryen");
@@ -32,9 +29,7 @@ fn main() {
         return;
     }
 
-    let original_size = std::fs::metadata(&wasm_file)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let original_size = std::fs::metadata(&wasm_file).map(|m| m.len()).unwrap_or(0);
 
     // Run wasm-opt with -O4 optimization level
     println!("cargo:warning=Running wasm-opt -O4 on WASM binary...");
@@ -53,9 +48,7 @@ fn main() {
                 return;
             }
 
-            let optimized_size = std::fs::metadata(&wasm_file)
-                .map(|m| m.len())
-                .unwrap_or(0);
+            let optimized_size = std::fs::metadata(&wasm_file).map(|m| m.len()).unwrap_or(0);
 
             let reduction_percent = if original_size > 0 {
                 ((original_size - optimized_size) as f64 / original_size as f64) * 100.0
