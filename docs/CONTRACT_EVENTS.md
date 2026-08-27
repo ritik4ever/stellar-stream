@@ -100,6 +100,25 @@ Additional fields are event-specific and documented in each section below.
 
 ---
 
+### ClaimThrottled *(new — emitted by `claim`, #681)*
+
+**Topic:** `("Stream", "Throttled")`  
+**Triggered by:** `claim()` — emitted when a claim is rejected because the
+stream's `min_claim_interval_seconds` has not elapsed since the last claim.
+The claim reverts with `ClaimTooFrequent`.  
+**Actor:** The recipient whose claim attempt was rejected.
+
+| Field                     | Type      | Description                                                  |
+|---------------------------|-----------|--------------------------------------------------------------|
+| `stream_id`               | `u64`     | Stream identifier.                                           |
+| `actor`                   | `Address` | Recipient whose claim was rejected.                          |
+| `timestamp`               | `u64`     | Ledger close time of the rejected attempt.                   |
+| `next_allowed_claim_time` | `u64`     | Earliest timestamp at which the next claim will be accepted. |
+
+**Indexer mapping:** no DB row (failed transactions are not indexed).
+
+---
+
 ### StreamCanceled
 
 **Topic:** `("Stream", "Canceled")`  
