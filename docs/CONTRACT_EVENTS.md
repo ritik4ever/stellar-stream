@@ -103,7 +103,7 @@ Additional fields are event-specific and documented in each section below.
 ### StreamCanceled
 
 **Topic:** `("Stream", "Canceled")`  
-**Triggered by:** `cancel()`  
+**Triggered by:** `cancel()`, `cancel_batch()`  
 **Actor:** The sender who canceled the stream.
 
 | Field             | Type      | Description                                                        |
