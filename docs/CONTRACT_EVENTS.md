@@ -54,8 +54,9 @@ Additional fields are event-specific and documented in each section below.
 | `total_amount`  | `i128`                       | Total tokens locked in the stream (in stroops).           |
 | `start_time`    | `u64`                        | Unix timestamp when vesting begins.                       |
 | `end_time`      | `u64`                        | Unix timestamp when vesting ends.                         |
-| `cliff_seconds` | `u64`                        | Seconds after `start_time` before any tokens vest.        |
-| `metadata`      | `Option<Map<String,String>>` | Optional key-value metadata attached to the stream.       |
+| `cliff_seconds`              | `u64`                        | Seconds after `start_time` before any tokens vest.        |
+| `min_claim_interval_seconds` | `u64`                        | Minimum seconds between claims (0 = no rate limit).       |
+| `metadata`                   | `Option<Map<String,String>>` | Optional key-value metadata attached to the stream.       |
 
 **Indexer mapping:** event type `"created"`, amount = `total_amount`, metadata includes `recipient`, `token`, `startTime`, `endTime`.
 
@@ -100,10 +101,47 @@ Additional fields are event-specific and documented in each section below.
 
 ---
 
+### CliffReached *(new — emitted by `claim`, #676)*
+
+**Topic:** `("Stream", "Cliff")`  
+**Triggered by:** `claim()` — emitted at most once per stream, the first time the
+ledger time crosses `start_time + cliff_seconds`.  
+**Actor:** The recipient whose claim observed the cliff passing.
+
+| Field       | Type      | Description                                                     |
+|-------------|-----------|-----------------------------------------------------------------|
+| `stream_id` | `u64`     | Stream identifier.                                              |
+| `actor`     | `Address` | Recipient who triggered the observation.                        |
+| `timestamp` | `u64`     | Ledger close time when the cliff was observed.                  |
+| `cliff_time`| `u64`     | The cliff timestamp (`start_time + cliff_seconds`) that was crossed. |
+
+**Indexer mapping:** no DB row (informational; indexers may ignore or log).
+
+---
+
+### ClaimThrottled *(new — emitted by `claim`, #681)*
+
+**Topic:** `("Stream", "Throttled")`  
+**Triggered by:** `claim()` — emitted when a claim is rejected because the
+stream's `min_claim_interval_seconds` has not elapsed since the last claim.
+The claim reverts with `ClaimTooFrequent`.  
+**Actor:** The recipient whose claim attempt was rejected.
+
+| Field                   | Type      | Description                                                    |
+|-------------------------|-----------|----------------------------------------------------------------|
+| `stream_id`             | `u64`     | Stream identifier.                                             |
+| `actor`                 | `Address` | Recipient whose claim was rejected.                            |
+| `timestamp`             | `u64`     | Ledger close time of the rejected attempt.                     |
+| `next_allowed_claim_time` | `u64`   | Earliest timestamp at which the next claim will be accepted.   |
+
+**Indexer mapping:** no DB row (failed transactions are not indexed).
+
+---
+
 ### StreamCanceled
 
 **Topic:** `("Stream", "Canceled")`  
-**Triggered by:** `cancel()`  
+**Triggered by:** `cancel()`, `cancel_batch()`  
 **Actor:** The sender who canceled the stream.
 
 | Field             | Type      | Description                                                        |
@@ -190,14 +228,62 @@ Additional fields are event-specific and documented in each section below.
 
 ---
 
+## DAO Governance Events *(new — `contracts/src/dao.rs`, #695)*
+
+The DAO contract publishes events with a two-symbol topic tuple:
+
+```
+(Symbol("Proposal"), Symbol("<EventName>"))
+```
+
+### ProposalCreated
+
+**Topic:** `("Proposal", "Created")`  
+**Triggered by:** `create_proposal()`
+
+| Field        | Type                        | Description                                        |
+|--------------|-----------------------------|----------------------------------------------------|
+| `proposal_id`| `u64`                       | Unique proposal identifier.                        |
+| `proposer`   | `Address`                   | Account that created the proposal.                 |
+| `target`     | `ProposalTarget`            | What the proposal changes when executed.           |
+| `voting_end` | `u64`                       | Ledger timestamp when voting closes (created + 7d).|
+| `timestamp`  | `u64`                       | Ledger close time when the proposal was created.   |
+
+### VoteCast
+
+**Topic:** `("Proposal", "Vote")`  
+**Triggered by:** `vote()`
+
+| Field         | Type      | Description                                         |
+|---------------|-----------|-----------------------------------------------------|
+| `proposal_id` | `u64`     | Proposal being voted on.                            |
+| `voter`       | `Address` | Account that voted.                                 |
+| `support`     | `bool`    | `true` = for, `false` = against.                    |
+| `weight`      | `i128`    | Voter's governance token balance at vote time.      |
+| `timestamp`   | `u64`     | Ledger close time of the vote.                      |
+
+### ProposalExecuted
+
+**Topic:** `("Proposal", "Executed")`  
+**Triggered by:** `execute()` (only when the proposal passes)
+
+| Field         | Type             | Description                                    |
+|---------------|------------------|------------------------------------------------|
+| `proposal_id` | `u64`            | Executed proposal.                             |
+| `target`      | `ProposalTarget` | The change that was applied.                   |
+| `timestamp`   | `u64`            | Ledger close time of the execution.            |
+
+---
+
 ## Event Ordering Guarantees
 
 Within a single transaction:
 
 - `create_stream` → exactly one `StreamCreated`
 - `create_split_stream` → exactly one `StreamCreated` per child stream, in allocation order
-- `claim` → exactly one `StreamClaimed`, followed by at most one `StreamCompleted` (only when the stream is fully drained)
+- `claim` → exactly one `StreamClaimed`, followed by at most one `StreamCompleted` (only when the stream is fully drained); optionally preceded by one `CliffReached` (first time the cliff is crossed)
 - `cancel` → exactly one `StreamCanceled`
+- `cancel_batch` → exactly one `StreamCanceled` per successfully canceled stream, in input order
 - `pause_stream` → exactly one `StreamPaused`
 - `resume_stream` → exactly one `StreamResumed`
 - `transfer_stream` → exactly one `StreamTransferred`

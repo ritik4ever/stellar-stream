@@ -11,6 +11,8 @@ Stream {
     start_time: 1100,
     end_time: 2100,
     cliff_seconds: 0,
+    min_claim_interval_seconds: 0,
+    last_claim_time: 0,
     canceled: false,
     paused: false,
     pause_started_at: None,

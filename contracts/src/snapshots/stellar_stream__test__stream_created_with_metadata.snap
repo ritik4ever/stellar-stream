@@ -4,6 +4,8 @@ expression: event_data
 ---
 StreamCreated {
     stream_id: 1,
+    actor: Contract(CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M),
+    timestamp: 0,
     sender: Contract(CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M),
     recipient: Contract(CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4),
     token: Contract(CDLDVFKHEZ2RVB3NG4UQA4VPD3TSHV6XMHXMHP2BSGCJ2IIWVTOHGDSG),
@@ -12,6 +14,7 @@ StreamCreated {
     start_time: 0,
     end_time: 1000,
     cliff_seconds: 0,
+    min_claim_interval_seconds: 0,
     metadata: Some(
         Map(Ok((String(department), String(engineering)))),
     ),

@@ -4,6 +4,8 @@ expression: event
 ---
 StreamCreated {
     stream_id: 1,
+    actor: Contract(CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM),
+    timestamp: 100,
     sender: Contract(CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM),
     recipient: Contract(CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4),
     token: Contract(CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M),
@@ -12,5 +14,6 @@ StreamCreated {
     start_time: 100,
     end_time: 200,
     cliff_seconds: 0,
+    min_claim_interval_seconds: 0,
     metadata: None,
 }

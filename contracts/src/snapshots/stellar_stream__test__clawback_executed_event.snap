@@ -4,6 +4,8 @@ expression: event_data
 ---
 ClawbackExecuted {
     stream_id: 1,
+    actor: Contract(CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M),
+    timestamp: 500,
     amount: 250,
     recipient: Contract(CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M),
 }
