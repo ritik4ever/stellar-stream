@@ -1376,6 +1376,166 @@ export const swaggerDocument = {
           },
         },
       },
+      StreamNote: {
+        type: "object",
+        properties: {
+          id: {
+            type: "number",
+            description: "Unique note identifier.",
+            example: 1,
+          },
+          streamId: {
+            type: "string",
+            description: "ID of the stream this note belongs to.",
+            example: "1",
+          },
+          author: {
+            type: "string",
+            description: "Account that wrote the note (always the stream's sender).",
+            example: "GC7Y4M77LNYKYF4K4V5A737W3G3L3T7XQWZJZL4R64Z43W3T7XZQK2L4",
+          },
+          content: {
+            type: "string",
+            description: "Note content (max 500 characters).",
+            example: "Waiting on milestone review before releasing next batch.",
+          },
+          createdAt: {
+            type: "number",
+            description: "UNIX timestamp when the note was created.",
+            example: 1716378400,
+          },
+        },
+      },
+    },
+    "/api/streams/{id}/notes": {
+      post: {
+        summary: "Add a Stream Note",
+        description: "Adds a private note to a stream. Only the stream's sender may add notes.",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "The unique ID of the stream.",
+            schema: { type: "string" },
+          },
+        ],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["content"],
+                properties: {
+                  content: {
+                    type: "string",
+                    description: "Note content (1-500 characters).",
+                    example: "Waiting on milestone review before releasing next batch.",
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "Note created successfully.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: { $ref: "#/components/schemas/StreamNote" },
+                  },
+                },
+              },
+            },
+          },
+          "403": {
+            description: "Caller is not the stream's sender.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+          "404": {
+            description: "Stream not found.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+        },
+      },
+      get: {
+        summary: "List Stream Notes",
+        description: "Returns paginated notes for a stream. Only the stream's sender may read notes.",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "The unique ID of the stream.",
+            schema: { type: "string" },
+          },
+          {
+            name: "page",
+            in: "query",
+            required: false,
+            description: "Page number (default: 1).",
+            schema: { type: "integer", minimum: 1 },
+          },
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            description: "Notes per page (default: 20, max: 100).",
+            schema: { type: "integer", minimum: 1, maximum: 100 },
+          },
+        ],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "200": {
+            description: "Paginated list of notes.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/StreamNote" },
+                    },
+                    total: { type: "integer" },
+                    page: { type: "integer" },
+                    limit: { type: "integer" },
+                  },
+                },
+              },
+            },
+          },
+          "403": {
+            description: "Caller is not the stream's sender.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+          "404": {
+            description: "Stream not found.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+        },
+      },
     },
     "/api/streams/{id}/cancel": {
       post: {

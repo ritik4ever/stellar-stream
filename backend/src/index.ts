@@ -27,6 +27,7 @@ import {
   StreamEventType,
 } from "./services/eventHistory";
 import { fetchOpenIssues } from "./services/openIssues";
+import { addNote, countNotes, getNotes } from "./services/streamNotes";
 import {
   initIndexer,
   startIndexer,
@@ -85,9 +86,11 @@ import {
 } from "./services/auth";
 import jwt from "jsonwebtoken";
 import {
+  addStreamNoteSchema,
   bulkCancelStreamsSchema,
   createStreamPayloadWithAllowedAssetsSchema,
   listEventsQuerySchema,
+  listStreamNotesQuerySchema,
   recipientAccountIdSchema,
   senderAccountIdSchema,
   streamIdSchema,
@@ -1017,6 +1020,91 @@ app.get("/api/streams/:id", readLimiter, (req: Request, res: Response) => {
     },
   });
 });
+
+app.post(
+  "/api/streams/:id/notes",
+  mutationLimiter,
+  authMiddleware,
+  (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    const user = (req as any).user;
+    if (stream.sender !== user.accountId) {
+      sendApiError(req, res, 403, "Only the sender can add notes to this stream.", {
+        code: "FORBIDDEN",
+      });
+      return;
+    }
+
+    const parsedBody = addStreamNoteSchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      sendValidationError(req, res, parsedBody.error.issues);
+      return;
+    }
+
+    const note = addNote(
+      parsedId.value,
+      user.accountId,
+      parsedBody.data.content,
+      nowInSeconds(),
+    );
+
+    res.status(201).json({ data: note });
+  },
+);
+
+app.get(
+  "/api/streams/:id/notes",
+  readLimiter,
+  authMiddleware,
+  (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    const user = (req as any).user;
+    if (stream.sender !== user.accountId) {
+      sendApiError(req, res, 403, "Only the sender can view notes for this stream.", {
+        code: "FORBIDDEN",
+      });
+      return;
+    }
+
+    const parsedQuery = listStreamNotesQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      sendValidationError(req, res, parsedQuery.error.issues);
+      return;
+    }
+
+    const query = parsedQuery.data;
+    const page = query.page ?? PAGINATION_DEFAULT_PAGE;
+    const limit = query.limit ?? PAGINATION_DEFAULT_LIMIT;
+    const offset = (page - 1) * limit;
+
+    const total = countNotes(parsedId.value);
+    const data = getNotes(parsedId.value, limit, offset);
+
+    res.json({ data, total, page, limit });
+  },
+);
 
 app.get(
   "/api/recipients/:accountId/streams",
