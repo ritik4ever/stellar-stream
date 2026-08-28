@@ -1,12 +1,12 @@
-﻿import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import { DarkModeToggle } from "./components/DarkModeToggle";
+import { InstallPrompt } from "./components/InstallPrompt";
 import { OfflineBanner } from "./components/OfflineBanner";
 import { WalletButton } from "./components/WalletButton";
 import { useFreighter } from "./hooks/useFreighter";
 import { useTheme } from "./hooks/useTheme";
 import { DashboardPage } from "./pages/DashboardPage";
-
 const SenderDashboard = lazy(() =>
   import("./components/SenderDashboard").then((m) => ({ default: m.SenderDashboard })),
 );
@@ -19,7 +19,6 @@ function AppContent() {
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
-
   useEffect(() => {
     const path = location.pathname;
     if (path !== "/" && path !== "/sender" && path !== "/recipient") {
@@ -33,7 +32,6 @@ function AppContent() {
       : location.pathname === "/recipient"
         ? "recipient"
         : "dashboard";
-
   return (
     <div className="app-shell">
       <header className="hero">
@@ -44,7 +42,6 @@ function AppContent() {
           </div>
 
           <DarkModeToggle theme={theme} onToggle={toggleTheme} />
-
           <WalletButton wallet={wallet} />
         </div>
         <p className="hero-copy">
@@ -52,7 +49,6 @@ function AppContent() {
           freelancer payouts on Stellar.
         </p>
       </header>
-
       <nav className="app-nav" aria-label="Main">
         <button
           type="button"
@@ -76,9 +72,8 @@ function AppContent() {
           Recipient dashboard
         </button>
       </nav>
-
       <OfflineBanner />
-
+      <InstallPrompt />
       <Suspense fallback={<div className="app-shell">Loading…</div>}>
         <Routes>
           <Route path="/" element={<DashboardPage wallet={wallet} />} />
@@ -95,7 +90,6 @@ function AppContent() {
     </div>
   );
 }
-
 function App() {
   const [mounted, setMounted] = useState(false);
 

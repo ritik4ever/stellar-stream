@@ -6,6 +6,7 @@ import "dotenv/config";
 import express, { NextFunction, Request, Response } from "express";
 import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
+import PDFDocument from "pdfkit";
 import { z } from "zod";
 import { createServer } from "http";
 import { searchStreamsFts, getAllowedAssets, addAllowedAsset, removeAllowedAsset } from "./services/db";
@@ -994,6 +995,85 @@ app.get(
     const paginatedData = data.slice(offset, offset + limit);
 
     res.json({ data: paginatedData, total, page, limit });
+  },
+);
+
+app.get(
+  "/api/streams/:id/receipt",
+  readLimiter,
+  (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    const progress = calculateProgress(stream);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="stream-${stream.id}-receipt.pdf"`,
+    );
+
+    const pdf = new PDFDocument({
+      size: "A4",
+      margin: 50,
+      info: {
+        Title: `StellarStream Receipt ${stream.id}`,
+        Subject: `Receipt for stream ${stream.id}`,
+      },
+    });
+
+    pdf.on("error", (error) => {
+      logger.error(
+        { err: error, streamId: stream.id },
+        "failed to generate stream receipt PDF",
+      );
+
+      if (!res.headersSent) {
+        sendApiError(req, res, 500, "Failed to generate stream receipt.", {
+          code: "INTERNAL_ERROR",
+        });
+        return;
+      }
+
+      res.end();
+    });
+
+    pdf.pipe(res);
+
+    pdf
+      .fontSize(22)
+      .text("StellarStream Receipt", { align: "center" })
+      .moveDown(1.5);
+
+    pdf.fontSize(12);
+
+    const receiptRows = [
+      ["Stream ID", stream.id],
+      ["Sender", stream.sender],
+      ["Recipient", stream.recipient],
+      ["Asset", stream.assetCode],
+      ["Total Amount", String(stream.totalAmount)],
+      ["Start At", String(stream.startAt)],
+      ["Duration", String(stream.durationSeconds)],
+      ["Status", progress.status],
+    ];
+
+    for (const [label, value] of receiptRows) {
+      pdf.font("Helvetica-Bold").text(`${label}:`, { continued: true });
+      pdf.font("Helvetica").text(` ${value}`);
+      pdf.moveDown(0.5);
+    }
+
+    pdf.end();
   },
 );
 

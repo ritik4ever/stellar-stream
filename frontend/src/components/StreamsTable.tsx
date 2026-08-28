@@ -10,7 +10,7 @@ import {
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Stream } from "../types/stream";
-import { getExportCsvUrl, ListStreamsFilters, cancelStream } from "../services/api";
+import { ListStreamsFilters, cancelStream } from "../services/api";
 import { CopyableAddress } from "./CopyableAddress";
 import { StreamTimeline } from "./StreamTimeline";
 import { getHealthBadges } from "../utils/streamHealthBadges";
@@ -91,6 +91,63 @@ function formatDuration(seconds: number): string {
   return `${(seconds / 86400).toFixed(1)}d`;
 }
 
+function escapeCsvValue(value: string | number): string {
+  const text = String(value);
+  if (/[",\r\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+function getStreamsCsvFilename(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `streams_${year}-${month}-${day}.csv`;
+}
+
+function downloadStreamsCsv(streams: Stream[]): void {
+  const header = [
+    "id",
+    "sender",
+    "recipient",
+    "asset",
+    "amount",
+    "vested",
+    "status",
+    "start",
+    "duration",
+  ];
+
+  const rows = streams.map((stream) =>
+    [
+      stream.id,
+      stream.sender,
+      stream.recipient,
+      stream.assetCode,
+      stream.totalAmount,
+      stream.progress.vestedAmount,
+      stream.progress.status,
+      stream.startAt,
+      stream.durationSeconds,
+    ]
+      .map(escapeCsvValue)
+      .join(","),
+  );
+
+  const csv = [header.join(","), ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+
+  anchor.href = url;
+  anchor.download = getStreamsCsvFilename(new Date());
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function StreamsTable({
   streams,
   loading = false,
@@ -166,8 +223,6 @@ export function StreamsTable({
   const [isBulkCanceling, setIsBulkCanceling] = useState(false);
   const [bulkCancelProgress, setBulkCancelProgress] = useState({ current: 0, total: 0 });
 
-  const exportUrl = useMemo(() => getExportCsvUrl(filters as Record<string, string>), [filters]);
-
   const sortedStreams = useMemo(
     () => [...streams].sort((a, b) => a.id.localeCompare(b.id)),
     [streams],
@@ -184,6 +239,10 @@ export function StreamsTable({
       }),
     [sortedStreams, streamProgressUpdates],
   );
+
+  const handleExportCsv = useCallback(() => {
+    downloadStreamsCsv(streamsWithProgress);
+  }, [streamsWithProgress]);
 
   const visibleOptionalColumns = useMemo(
     () => OPTIONAL_STREAM_COLUMNS.filter((col) => isVisible(col)),
@@ -495,9 +554,9 @@ export function StreamsTable({
                 </div>
               )}
             </div>
-            <a href={exportUrl} className="btn-ghost" download>
+            <button type="button" className="btn-ghost" onClick={handleExportCsv}>
               Export CSV
-            </a>
+            </button>
           </div>
         </div>
 
