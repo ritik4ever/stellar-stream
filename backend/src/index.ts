@@ -35,7 +35,6 @@ import {
 import { adminAuth } from "./middleware/adminAuth";
 import { deleteStreamById, reconcileStream } from "./services/streamStore";
 import { getCache } from "./services/cache";
-import { getStreamStats } from "./services/stats";
 import { getStreamMetrics } from "./services/streamMetrics";
 
 import { startReconciliationJob } from "./services/reconciliationJob";
@@ -72,7 +71,6 @@ import {
   StreamStatus,
   syncStreams,
   updateStreamStartAt,
-  getOnChainStreamCount,
 } from "./services/streamStore";
 
 import {
@@ -97,7 +95,6 @@ import { validateEnv } from "./config/validateEnv";
 import { getMetricsHistory } from "./services/metricsHistory";
 import { register } from "./services/metrics";
 import { initCache } from "./services/cache";
-import { getGlobalStats } from "./services/stats";
 import { logger } from "./logger";
 
 const STREAM_STATUSES: StreamStatus[] = [
@@ -121,6 +118,156 @@ const ALLOWED_ASSETS = (process.env.ALLOWED_ASSETS || "USDC,XLM")
 
 const SORT_FIELDS = ["totalAmount", "startAt", "createdAt", "durationSeconds"] as const;
 const SORT_ORDERS = ["asc", "desc"] as const;
+
+const PLATFORM_STATS_CACHE_KEY = "analytics:platform-stats";
+const PLATFORM_STATS_CACHE_TTL_SECONDS = 60;
+const LEADERBOARD_CACHE_TTL_SECONDS = 5 * 60;
+
+type LeaderboardType =
+  | "top_senders"
+  | "top_recipients"
+  | "largest_streams";
+
+interface PlatformStats {
+  total_streams: number;
+  active_streams: number;
+  completed_streams: number;
+  canceled_streams: number;
+  total_vested_by_asset: {
+    USDC: number;
+    XLM: number;
+  };
+  unique_senders: number;
+  unique_recipients: number;
+}
+
+const leaderboardQuerySchema = z.object({
+  type: z.enum(["top_senders", "top_recipients", "largest_streams"]),
+  limit: z.coerce
+    .number()
+    .int("limit must be an integer")
+    .min(1, "limit must be greater than or equal to 1")
+    .max(50, "limit must be less than or equal to 50")
+    .default(10),
+});
+
+function roundAnalyticsAmount(value: number): number {
+  return Number(value.toFixed(6));
+}
+
+function buildPlatformStats(): PlatformStats {
+  const now = nowInSeconds();
+  const streams = listStreams(true);
+  const uniqueSenders = new Set<string>();
+  const uniqueRecipients = new Set<string>();
+
+  const stats: PlatformStats = {
+    total_streams: streams.length,
+    active_streams: 0,
+    completed_streams: 0,
+    canceled_streams: 0,
+    total_vested_by_asset: {
+      USDC: 0,
+      XLM: 0,
+    },
+    unique_senders: 0,
+    unique_recipients: 0,
+  };
+
+  for (const stream of streams) {
+    uniqueSenders.add(stream.sender);
+    uniqueRecipients.add(stream.recipient);
+
+    const progress = calculateProgress(stream, now);
+    if (progress.status === "active") {
+      stats.active_streams += 1;
+    } else if (progress.status === "completed") {
+      stats.completed_streams += 1;
+    } else if (progress.status === "canceled") {
+      stats.canceled_streams += 1;
+    }
+
+    const assetCode = stream.assetCode.toUpperCase();
+    if (assetCode === "USDC" || assetCode === "XLM") {
+      const vestedAt = stream.canceledAt ?? now;
+      const vestedAmount = calculateProgress(stream, vestedAt).vestedAmount;
+      stats.total_vested_by_asset[assetCode] += vestedAmount;
+    }
+  }
+
+  stats.total_vested_by_asset.USDC = roundAnalyticsAmount(
+    stats.total_vested_by_asset.USDC,
+  );
+  stats.total_vested_by_asset.XLM = roundAnalyticsAmount(
+    stats.total_vested_by_asset.XLM,
+  );
+  stats.unique_senders = uniqueSenders.size;
+  stats.unique_recipients = uniqueRecipients.size;
+
+  return stats;
+}
+
+function buildLeaderboard(type: LeaderboardType, limit: number) {
+  const streams = listStreams(true);
+
+  if (type === "top_senders") {
+    const totals = new Map<string, number>();
+    for (const stream of streams) {
+      totals.set(
+        stream.sender,
+        (totals.get(stream.sender) ?? 0) + stream.totalAmount,
+      );
+    }
+
+    return Array.from(totals.entries())
+      .map(([sender, totalAmount]) => ({
+        sender,
+        totalAmount: roundAnalyticsAmount(totalAmount),
+      }))
+      .sort(
+        (a, b) =>
+          b.totalAmount - a.totalAmount || a.sender.localeCompare(b.sender),
+      )
+      .slice(0, limit);
+  }
+
+  if (type === "top_recipients") {
+    const totals = new Map<string, number>();
+    for (const stream of streams) {
+      totals.set(
+        stream.recipient,
+        (totals.get(stream.recipient) ?? 0) + stream.totalAmount,
+      );
+    }
+
+    return Array.from(totals.entries())
+      .map(([recipient, totalAmount]) => ({
+        recipient,
+        totalAmount: roundAnalyticsAmount(totalAmount),
+      }))
+      .sort(
+        (a, b) =>
+          b.totalAmount - a.totalAmount ||
+          a.recipient.localeCompare(b.recipient),
+      )
+      .slice(0, limit);
+  }
+
+  return [...streams]
+    .sort(
+      (a, b) =>
+        b.totalAmount - a.totalAmount ||
+        a.id.localeCompare(b.id, undefined, { numeric: true }),
+    )
+    .slice(0, limit)
+    .map((stream) => ({
+      id: stream.id,
+      sender: stream.sender,
+      recipient: stream.recipient,
+      assetCode: stream.assetCode,
+      totalAmount: stream.totalAmount,
+    }));
+}
 
 const listStreamsQuerySchema = z.object({
   status: z
@@ -386,17 +533,95 @@ app.get("/api/health", (_req: Request, res: Response) => {
   });
 });
 
-app.get("/api/stats", async (_req: Request, res: Response) => {
+app.get("/api/stats", async (req: Request, res: Response) => {
+  res.set("Cache-Control", `public, max-age=${PLATFORM_STATS_CACHE_TTL_SECONDS}`);
+
   try {
-    const stats = getGlobalStats();
-    const onChainStreamCount = await getOnChainStreamCount();
-    res.set("Cache-Control", "max-age=30");
-    res.json({ data: { ...stats, onChainStreamCount, localStreamCount: stats.total } });
+    try {
+      const cache = getCache();
+      const cached = await cache.get<PlatformStats>(PLATFORM_STATS_CACHE_KEY);
+      if (cached) {
+        res.json({ data: cached });
+        return;
+      }
+    } catch {
+      // Cache availability must never make this public endpoint fail.
+    }
+
+    const stats = buildPlatformStats();
+
+    try {
+      const cache = getCache();
+      await cache.set(
+        PLATFORM_STATS_CACHE_KEY,
+        stats,
+        PLATFORM_STATS_CACHE_TTL_SECONDS,
+      );
+    } catch {
+      // Cache availability must never make this public endpoint fail.
+    }
+
+    res.json({ data: stats });
   } catch (error) {
-    logger.error({ err: error }, "Failed to get stats");
-    sendApiError(_req, res, 500, "Failed to compute stats.", { code: "INTERNAL_ERROR" });
+    logger.error({ err: error }, "Failed to get platform stats");
+    sendApiError(req, res, 500, "Failed to compute stats.", {
+      code: "INTERNAL_ERROR",
+    });
   }
 });
+
+app.get(
+  "/api/leaderboard",
+  readLimiter,
+  async (req: Request, res: Response) => {
+    const parsedQuery = leaderboardQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      sendValidationError(req, res, parsedQuery.error.issues);
+      return;
+    }
+
+    const { type, limit } = parsedQuery.data;
+    const cacheKey = `analytics:leaderboard:${type}:${limit}`;
+
+    res.set(
+      "Cache-Control",
+      `public, max-age=${LEADERBOARD_CACHE_TTL_SECONDS}`,
+    );
+
+    try {
+      try {
+        const cache = getCache();
+        const cached = await cache.get<ReturnType<typeof buildLeaderboard>>(
+          cacheKey,
+        );
+        if (cached) {
+          res.set("X-Cache", "HIT");
+          res.json({ data: cached, type, limit });
+          return;
+        }
+      } catch {
+        // Fall through to the database-backed calculation.
+      }
+
+      const data = buildLeaderboard(type, limit);
+
+      try {
+        const cache = getCache();
+        await cache.set(cacheKey, data, LEADERBOARD_CACHE_TTL_SECONDS);
+      } catch {
+        // Cache availability must never make the endpoint fail.
+      }
+
+      res.set("X-Cache", "MISS");
+      res.json({ data, type, limit });
+    } catch (error) {
+      logger.error({ err: error, type, limit }, "Failed to get leaderboard");
+      sendApiError(req, res, 500, "Failed to compute leaderboard.", {
+        code: "INTERNAL_ERROR",
+      });
+    }
+  },
+);
 
 const METRICS_AUTH = process.env.METRICS_AUTH?.trim() || null; // format: "user:password"
 
@@ -1972,36 +2197,72 @@ if (require.main === module) {
   });
 }
 
-app.delete("/api/streams/:id", adminAuth, (req: Request, res: Response) => {
-  const parsedId = parseStreamId(req.params.id);
-  if (!parsedId.ok) {
-    sendValidationError(req, res, parsedId.issues);
-    return;
-  }
-
-  try {
-    const deleted = deleteStreamById(parsedId.value);
-
-    if (!deleted) {
-      sendApiError(req, res, 404, "Stream not found or already archived.", { code: "NOT_FOUND" });
+app.delete(
+  "/api/streams/:id",
+  mutationLimiter,
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
       return;
     }
 
-    res.status(204).send();
-  } catch (error: any) {
-    logger.error({ err: error, streamId: parsedId.value }, "failed to delete stream");
-    const normalizedError = normalizeUnknownApiError(
-      error,
-      "Failed to delete stream.",
-    );
-    sendApiError(
-      req,
-      res,
-      normalizedError.statusCode,
-      normalizedError.message,
-      {
-        code: normalizedError.code ?? "INTERNAL_ERROR",
-      },
-    );
-  }
-});
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    const user = (req as any).user;
+    if (stream.sender !== user.accountId) {
+      sendApiError(req, res, 403, "Only the sender can archive this stream.", {
+        code: "FORBIDDEN",
+      });
+      return;
+    }
+
+    const status = calculateProgress(stream).status;
+    if (status !== "completed" && status !== "canceled") {
+      sendApiError(
+        req,
+        res,
+        400,
+        "Only completed or canceled streams can be archived.",
+        { code: "INVALID_STREAM_STATUS" },
+      );
+      return;
+    }
+
+    try {
+      const archived = await deleteStreamById(parsedId.value);
+
+      if (!archived) {
+        sendApiError(req, res, 404, "Stream not found or already archived.", {
+          code: "NOT_FOUND",
+        });
+        return;
+      }
+
+      res.status(204).send();
+    } catch (error: any) {
+      logger.error(
+        { err: error, streamId: parsedId.value },
+        "failed to archive stream",
+      );
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to archive stream.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        {
+          code: normalizedError.code ?? "INTERNAL_ERROR",
+        },
+      );
+    }
+  },
+);
