@@ -13,6 +13,9 @@ const SenderDashboard = lazy(() =>
 const RecipientDashboard = lazy(() =>
   import("./components/RecipientDashboard").then((m) => ({ default: m.RecipientDashboard })),
 );
+const SenderAnalytics = lazy(() =>
+  import("./pages/SenderAnalytics").then((m) => ({ default: m.SenderAnalytics })),
+);
 
 function AppContent() {
   const wallet = useFreighter();
@@ -22,7 +25,12 @@ function AppContent() {
 
   useEffect(() => {
     const path = location.pathname;
-    if (path !== "/" && path !== "/sender" && path !== "/recipient") {
+    if (
+      path !== "/" &&
+      path !== "/sender" &&
+      path !== "/recipient" &&
+      path !== "/sender/analytics"
+    ) {
       navigate("/");
     }
   }, [location.pathname, navigate]);
@@ -32,7 +40,9 @@ function AppContent() {
       ? "sender"
       : location.pathname === "/recipient"
         ? "recipient"
-        : "dashboard";
+        : location.pathname === "/sender/analytics"
+          ? "analytics"
+          : "dashboard";
 
   return (
     <div className="app-shell">
@@ -75,6 +85,13 @@ function AppContent() {
         >
           Recipient dashboard
         </button>
+        <button
+          type="button"
+          className={`app-nav-link ${currentTab === "analytics" ? "app-nav-link--active" : ""}`}
+          onClick={() => navigate("/sender/analytics")}
+        >
+          Sender analytics
+        </button>
       </nav>
 
       <OfflineBanner />
@@ -89,6 +106,10 @@ function AppContent() {
           <Route
             path="/recipient"
             element={<RecipientDashboard recipientAddress={wallet.address} />}
+          />
+          <Route
+            path="/sender/analytics"
+            element={<SenderAnalytics senderAddress={wallet.address} />}
           />
         </Routes>
       </Suspense>
