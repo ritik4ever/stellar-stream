@@ -9,13 +9,78 @@ import { CopyableAddress } from "./CopyableAddress";
 
 export type EventType = StreamEvent["eventType"];
 
+// ---------------------------------------------------------------------------
+// Filter state types
+// ---------------------------------------------------------------------------
+
+export interface DateRangeFilter {
+  /** ISO date string "YYYY-MM-DD" or empty string */
+  from: string;
+  /** ISO date string "YYYY-MM-DD" or empty string */
+  to: string;
+}
+
+export interface TimelineFilters {
+  activeEventTypes: Set<EventType>;
+  dateRange: DateRangeFilter;
+  /** Case-insensitive substring match against event.actor */
+  actorSearch: string;
+}
+
+export function makeEmptyFilters(): TimelineFilters {
+  return {
+    activeEventTypes: new Set(),
+    dateRange: { from: "", to: "" },
+    actorSearch: "",
+  };
+}
+
+export function hasActiveFilters(filters: TimelineFilters): boolean {
+  return (
+    filters.activeEventTypes.size > 0 ||
+    filters.dateRange.from !== "" ||
+    filters.dateRange.to !== "" ||
+    filters.actorSearch.trim() !== ""
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Pure filter functions
+// ---------------------------------------------------------------------------
+
 export function computeFilteredEvents(
   events: StreamEvent[],
   activeFilters: Set<EventType>,
+  dateRange?: DateRangeFilter,
+  actorSearch?: string,
 ): StreamEvent[] {
-  const filtered = activeFilters.size === 0
-    ? events
-    : events.filter((e) => activeFilters.has(e.eventType));
+  let filtered = events;
+
+  // Event type filter
+  if (activeFilters.size > 0) {
+    filtered = filtered.filter((e) => activeFilters.has(e.eventType));
+  }
+
+  // Date range filter — timestamps are unix seconds; compare against midnight UTC boundaries
+  if (dateRange?.from) {
+    const fromMs = new Date(dateRange.from + "T00:00:00Z").getTime();
+    filtered = filtered.filter((e) => e.timestamp * 1000 >= fromMs);
+  }
+  if (dateRange?.to) {
+    // inclusive: include everything up to the end of that day (23:59:59.999 UTC)
+    const toMs = new Date(dateRange.to + "T00:00:00Z").getTime() + 86_400_000 - 1;
+    filtered = filtered.filter((e) => e.timestamp * 1000 <= toMs);
+  }
+
+  // Actor address search — case-insensitive substring
+  const trimmedActor = actorSearch?.trim() ?? "";
+  if (trimmedActor !== "") {
+    const lower = trimmedActor.toLowerCase();
+    filtered = filtered.filter(
+      (e) => e.actor !== undefined && e.actor.toLowerCase().includes(lower),
+    );
+  }
+
   return [...filtered].sort((a, b) => a.timestamp - b.timestamp);
 }
 
@@ -29,14 +94,23 @@ export function toggleFilter(prev: Set<EventType>, type: EventType): Set<EventTy
   return next;
 }
 
+/** @deprecated Use makeEmptyFilters() for the full filter state reset. Kept for backward compatibility. */
 export function clearFilters(): Set<EventType> {
   return new Set();
 }
+
+// ---------------------------------------------------------------------------
+// FilterBar
+// ---------------------------------------------------------------------------
 
 export interface FilterBarProps {
   activeFilters: Set<EventType>;
   onToggle: (type: EventType) => void;
   onClear: () => void;
+  dateRange: DateRangeFilter;
+  onDateRangeChange: (range: DateRangeFilter) => void;
+  actorSearch: string;
+  onActorSearchChange: (value: string) => void;
 }
 
 export const FILTER_BUTTONS: Array<{ type: EventType; label: string }> = [
@@ -48,38 +122,125 @@ export const FILTER_BUTTONS: Array<{ type: EventType; label: string }> = [
   { type: "resumed", label: "Resumed" },
 ];
 
-export function FilterBar({ activeFilters, onToggle, onClear }: FilterBarProps) {
+export function FilterBar({
+  activeFilters,
+  onToggle,
+  onClear,
+  dateRange,
+  onDateRangeChange,
+  actorSearch,
+  onActorSearchChange,
+}: FilterBarProps) {
+  const anyFilterActive =
+    activeFilters.size > 0 ||
+    dateRange.from !== "" ||
+    dateRange.to !== "" ||
+    actorSearch.trim() !== "";
+
   return (
-    <div className="flex flex-wrap gap-2 items-center p-3 bg-white border border-gray-200 rounded-lg">
-      <span className="text-sm font-medium text-gray-700">Filter by:</span>
-      {FILTER_BUTTONS.map(({ type, label }) => {
-        const isActive = activeFilters.has(type);
-        return (
-          <button
-            key={type}
-            onClick={() => onToggle(type)}
-            aria-pressed={isActive}
-            className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
-              isActive
-                ? "bg-blue-600 text-white hover:bg-blue-700"
-                : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-            }`}
+    <div className="flex flex-col gap-3 p-3 bg-white border border-gray-200 rounded-lg">
+      {/* Row 1: Event type toggle buttons */}
+      <div className="flex flex-wrap gap-2 items-center">
+        <span className="text-sm font-medium text-gray-700">Event type:</span>
+        {FILTER_BUTTONS.map(({ type, label }) => {
+          const isActive = activeFilters.has(type);
+          return (
+            <button
+              key={type}
+              onClick={() => onToggle(type)}
+              aria-pressed={isActive}
+              className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                isActive
+                  ? "bg-blue-600 text-white hover:bg-blue-700"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Row 2: Date range + actor search */}
+      <div className="flex flex-wrap gap-3 items-end">
+        {/* Date range — from */}
+        <div className="flex flex-col gap-1">
+          <label
+            htmlFor="timeline-date-from"
+            className="text-xs font-medium text-gray-600"
           >
-            {label}
+            From date
+          </label>
+          <input
+            id="timeline-date-from"
+            type="date"
+            value={dateRange.from}
+            max={dateRange.to || undefined}
+            onChange={(e) =>
+              onDateRangeChange({ ...dateRange, from: e.target.value })
+            }
+            className="px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            aria-label="Filter from date"
+          />
+        </div>
+
+        {/* Date range — to */}
+        <div className="flex flex-col gap-1">
+          <label
+            htmlFor="timeline-date-to"
+            className="text-xs font-medium text-gray-600"
+          >
+            To date
+          </label>
+          <input
+            id="timeline-date-to"
+            type="date"
+            value={dateRange.to}
+            min={dateRange.from || undefined}
+            onChange={(e) =>
+              onDateRangeChange({ ...dateRange, to: e.target.value })
+            }
+            className="px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            aria-label="Filter to date"
+          />
+        </div>
+
+        {/* Actor address search */}
+        <div className="flex flex-col gap-1 flex-1" style={{ minWidth: "200px" }}>
+          <label
+            htmlFor="timeline-actor-search"
+            className="text-xs font-medium text-gray-600"
+          >
+            Actor address
+          </label>
+          <input
+            id="timeline-actor-search"
+            type="text"
+            value={actorSearch}
+            onChange={(e) => onActorSearchChange(e.target.value)}
+            placeholder="Search by actor address…"
+            className="px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            aria-label="Filter by actor address"
+          />
+        </div>
+
+        {/* Clear all filters button */}
+        {anyFilterActive && (
+          <button
+            onClick={onClear}
+            className="px-3 py-1.5 text-sm font-medium text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors"
+          >
+            Clear filters
           </button>
-        );
-      })}
-      {activeFilters.size > 0 && (
-        <button
-          onClick={onClear}
-          className="ml-2 px-3 py-1.5 text-sm font-medium text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors"
-        >
-          Clear filters
-        </button>
-      )}
+        )}
+      </div>
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function timeAgo(timestamp: number): string {
   const seconds = Math.floor(Date.now() / 1000 - timestamp);
@@ -145,18 +306,39 @@ function getEventDescription(event: StreamEvent): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// StreamTimeline component
+// ---------------------------------------------------------------------------
+
 export function StreamTimeline({ streamId }: StreamTimelineProps) {
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+
+  // Filter state
   const [activeFilters, setActiveFilters] = useState<Set<EventType>>(new Set());
+  const [dateRange, setDateRange] = useState<DateRangeFilter>({ from: "", to: "" });
+  const [actorSearch, setActorSearch] = useState<string>("");
 
   const isGlobalFeed = useMemo(() => !streamId, [streamId]);
+
   const filteredEvents = useMemo(
-    () => computeFilteredEvents(events, activeFilters),
-    [events, activeFilters],
+    () => computeFilteredEvents(events, activeFilters, dateRange, actorSearch),
+    [events, activeFilters, dateRange, actorSearch],
   );
+
+  const anyFilterActive =
+    activeFilters.size > 0 ||
+    dateRange.from !== "" ||
+    dateRange.to !== "" ||
+    actorSearch.trim() !== "";
+
+  const handleClearFilters = useCallback(() => {
+    setActiveFilters(new Set());
+    setDateRange({ from: "", to: "" });
+    setActorSearch("");
+  }, []);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -211,14 +393,14 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
     );
   }
 
-  if (filteredEvents.length === 0 && activeFilters.size > 0) {
+  if (filteredEvents.length === 0 && anyFilterActive) {
     return (
       <div className="activity-empty">
         <span className="activity-empty-icon" aria-hidden>
           --
         </span>
         <p>No events match the selected filters. Clear filters to see all events.</p>
-        <button type="button" className="btn-ghost" onClick={() => setActiveFilters(clearFilters())}>
+        <button type="button" className="btn-ghost" onClick={handleClearFilters}>
           Clear filters
         </button>
       </div>
@@ -241,7 +423,11 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
       <FilterBar
         activeFilters={activeFilters}
         onToggle={(type) => setActiveFilters((prev) => toggleFilter(prev, type))}
-        onClear={() => setActiveFilters(clearFilters())}
+        onClear={handleClearFilters}
+        dateRange={dateRange}
+        onDateRangeChange={setDateRange}
+        actorSearch={actorSearch}
+        onActorSearchChange={setActorSearch}
       />
       {filteredEvents.map((event) => (
         <div key={event.id} className="activity-item">
