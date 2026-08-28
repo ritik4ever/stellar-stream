@@ -5,6 +5,8 @@ dist/
 .env
 .env.local
 coverage/
+frontend/test-results/
+frontend/blob-report/
 frontend/.vite/
 contracts/target/
 contracts/.stellar/

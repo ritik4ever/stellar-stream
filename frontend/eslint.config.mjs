@@ -3,7 +3,15 @@ import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
 
 export default tseslint.config(
-  { ignores: ['src/node-verify.js'] },
+  {
+    ignores: [
+      'src/node-verify.js',
+      'tests/visual/__screenshots__/**',
+      'playwright-report/**',
+      'test-results/**',
+      'blob-report/**',
+    ],
+  },
   js.configs.recommended,
   tseslint.configs.recommended,
   {
@@ -42,13 +50,14 @@ export default tseslint.config(
     },
   },
   {
-    files: ['**/*.test.ts', '**/*.test.tsx'],
+    files: ['**/*.test.ts', '**/*.test.tsx', 'tests/**/*.ts', 'playwright*.ts'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-unused-vars': 'off',
       'no-empty': 'off',
       'no-console': 'off',
       'prefer-const': 'off',
+      'react-hooks/rules-of-hooks': 'off',
     },
   },
 );

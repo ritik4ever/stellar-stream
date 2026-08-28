@@ -35,7 +35,7 @@ function AppContent() {
         : "dashboard";
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-testid="visual-dashboard">
       <header className="hero">
         <div className="hero-top">
           <div>

@@ -259,6 +259,7 @@ export function StreamDetailDrawer({
       <aside
         id="stream-detail-panel"
         className="drawer-panel"
+        data-testid="visual-stream-detail"
         aria-labelledby="drawer-title"
       >
         {/* Header */}

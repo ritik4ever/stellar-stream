@@ -1,0 +1,125 @@
+name: Playwright Visual Regression
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/playwright-visual.yml"
+      - ".github/scripts/post-visual-diff-comment.cjs"
+  workflow_dispatch:
+    inputs:
+      update_snapshots:
+        description: "Regenerate visual baselines (explicit approval)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  VISUAL_APPROVE_LABEL: approve-visual-baselines
+  FORCE_COLOR: "1"
+
+jobs:
+  visual:
+    name: Visual regression
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Build frontend
+        run: npm run build
+        env:
+          CI: "true"
+
+      - name: Resolve snapshot mode
+        id: mode
+        run: |
+          UPDATE=false
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.update_snapshots }}" = "true" ]; then
+            UPDATE=true
+          fi
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ contains(github.event.pull_request.labels.*.name, 'approve-visual-baselines') }}" = "true" ]; then
+            UPDATE=true
+          fi
+          echo "update=$UPDATE" >> "$GITHUB_OUTPUT"
+
+      - name: Run visual tests
+        id: visual-tests
+        run: |
+          if [ "${{ steps.mode.outputs.update }}" = "true" ]; then
+            npm run test:visual:update
+          else
+            npm run test:visual
+          fi
+        env:
+          CI: "true"
+        continue-on-error: true
+
+      - name: Upload Playwright HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-regression-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results/visual-results.json
+          if-no-files-found: ignore
+
+      - name: Upload snapshot diffs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-snapshot-diffs
+          path: |
+            frontend/test-results/**/*.png
+            frontend/tests/visual/__screenshots__/*.png
+          if-no-files-found: ignore
+
+      - name: Comment visual diff on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          VISUAL_JOB_CONCLUSION: ${{ steps.visual-tests.outcome }}
+          VISUAL_UPDATE_SNAPSHOTS: ${{ steps.mode.outputs.update }}
+        with:
+          script: |
+            const path = require('path');
+            const scriptPath = path.join(process.env.GITHUB_WORKSPACE, '.github/scripts/post-visual-diff-comment.cjs');
+            const postVisualDiffComment = require(scriptPath);
+            await postVisualDiffComment({ github, context, core });
+
+      - name: Commit approved visual baselines
+        if: always() && steps.mode.outputs.update == 'true' && steps.visual-tests.outcome == 'success' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "test: approve visual regression baselines"
+          file_pattern: frontend/tests/visual/__screenshots__/*.png
+          disable_globbing: true
+
+      - name: Fail workflow if visual tests failed
+        if: always() && steps.visual-tests.outcome != 'success'
+        run: |
+          echo "Visual regression tests failed. Review the PR comment and artifacts, then either fix the UI or explicitly approve by adding the approve-visual-baselines label."
+          exit 1
