@@ -13,6 +13,12 @@ const SenderDashboard = lazy(() =>
 const RecipientDashboard = lazy(() =>
   import("./components/RecipientDashboard").then((m) => ({ default: m.RecipientDashboard })),
 );
+const PublicStreamView = lazy(() =>
+  import("./pages/PublicStreamView").then((m) => ({ default: m.PublicStreamView })),
+);
+const StreamEmbed = lazy(() =>
+  import("./components/StreamEmbed").then((m) => ({ default: m.StreamEmbed })),
+);
 
 function AppContent() {
   const wallet = useFreighter();
@@ -20,12 +26,32 @@ function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
 
+  const isEmbedRoute = location.pathname.startsWith("/embed/");
+
   useEffect(() => {
     const path = location.pathname;
-    if (path !== "/" && path !== "/sender" && path !== "/recipient") {
+    const allowed =
+      path === "/" ||
+      path === "/sender" ||
+      path === "/recipient" ||
+      path.startsWith("/stream/") ||
+      path.startsWith("/embed/");
+    if (!allowed) {
       navigate("/");
     }
   }, [location.pathname, navigate]);
+
+  // The embed widget renders standalone (no app chrome) so it can be shown
+  // inside third-party iframes at /embed/:streamId.
+  if (isEmbedRoute) {
+    return (
+      <Suspense fallback={<div className="stream-embed-root">Loading…</div>}>
+        <Routes>
+          <Route path="/embed/:streamId" element={<StreamEmbed />} />
+        </Routes>
+      </Suspense>
+    );
+  }
 
   const currentTab =
     location.pathname === "/sender"
@@ -90,6 +116,8 @@ function AppContent() {
             path="/recipient"
             element={<RecipientDashboard recipientAddress={wallet.address} />}
           />
+          <Route path="/stream/:streamId" element={<PublicStreamView />} />
+          <Route path="/embed/:streamId" element={<StreamEmbed />} />
         </Routes>
       </Suspense>
     </div>
