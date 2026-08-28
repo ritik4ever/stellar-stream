@@ -100,6 +100,15 @@ import { register } from "./services/metrics";
 import { initCache } from "./services/cache";
 import { getGlobalStats } from "./services/stats";
 import { logger } from "./logger";
+import {
+  createApiKey,
+  listActiveApiKeys,
+  revokeApiKey,
+  rotateApiKey,
+  ApiKeyScope,
+} from "./services/apiKeyService";
+import { apiKeyAuth, optionalApiKeyAuth } from "./middleware/apiKeyAuth";
+
 
 const STREAM_STATUSES: StreamStatus[] = [
   "scheduled",
@@ -350,7 +359,111 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   next(err);
 });
 
+app.use(optionalApiKeyAuth);
+
+// API Key Management Routes
+app.post("/api/api-keys", mutationLimiter, (req: Request, res: Response) => {
+  try {
+    const { scope, name, expiresInDays } = req.body || {};
+
+    if (scope !== undefined && scope !== "read-only" && scope !== "read-write") {
+      sendApiError(req, res, 400, "Scope must be either 'read-only' or 'read-write'.", {
+        code: "VALIDATION_ERROR",
+      });
+      return;
+    }
+
+    if (expiresInDays !== undefined && (typeof expiresInDays !== "number" || expiresInDays <= 0)) {
+      sendApiError(req, res, 400, "expiresInDays must be a positive number.", {
+        code: "VALIDATION_ERROR",
+      });
+      return;
+    }
+
+    const createdKey = createApiKey({
+      scope: scope as ApiKeyScope,
+      name: typeof name === "string" ? name : undefined,
+      expiresInDays: typeof expiresInDays === "number" ? expiresInDays : undefined,
+    });
+
+    res.status(201).json({
+      message: "API key created successfully",
+      data: createdKey,
+    });
+  } catch (error: any) {
+    logger.error({ err: error }, "Failed to create API key");
+    sendApiError(req, res, 500, "Failed to create API key.", { code: "INTERNAL_ERROR" });
+  }
+});
+
+app.get("/api/api-keys", readLimiter, (req: Request, res: Response) => {
+  try {
+    const includeRevoked = req.query.include_revoked === "true";
+    const keys = listActiveApiKeys(includeRevoked);
+    res.json({ data: keys });
+  } catch (error: any) {
+    logger.error({ err: error }, "Failed to list API keys");
+    sendApiError(req, res, 500, "Failed to list API keys.", { code: "INTERNAL_ERROR" });
+  }
+});
+
+app.delete("/api/api-keys/:id", mutationLimiter, (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!id || typeof id !== "string") {
+      sendApiError(req, res, 400, "API key ID is required.", { code: "VALIDATION_ERROR" });
+      return;
+    }
+
+    const revoked = revokeApiKey(id);
+    if (!revoked) {
+      sendApiError(req, res, 404, "API key not found or already revoked.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    res.json({ message: "API key revoked successfully", id });
+  } catch (error: any) {
+    logger.error({ err: error }, "Failed to revoke API key");
+    sendApiError(req, res, 500, "Failed to revoke API key.", { code: "INTERNAL_ERROR" });
+  }
+});
+
+app.post("/api/api-keys/:id/rotate", mutationLimiter, (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { gracePeriodSeconds } = req.body || {};
+
+    if (!id || typeof id !== "string") {
+      sendApiError(req, res, 400, "API key ID is required.", { code: "VALIDATION_ERROR" });
+      return;
+    }
+
+    if (gracePeriodSeconds !== undefined && (typeof gracePeriodSeconds !== "number" || gracePeriodSeconds < 0)) {
+      sendApiError(req, res, 400, "gracePeriodSeconds must be a non-negative number.", { code: "VALIDATION_ERROR" });
+      return;
+    }
+
+    const result = rotateApiKey(id, {
+      gracePeriodSeconds: typeof gracePeriodSeconds === "number" ? gracePeriodSeconds : undefined,
+    });
+
+    if (!result) {
+      sendApiError(req, res, 404, "API key not found or already revoked.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    res.json({
+      message: "API key rotated successfully",
+      data: result,
+    });
+  } catch (error: any) {
+    logger.error({ err: error }, "Failed to rotate API key");
+    sendApiError(req, res, 500, "Failed to rotate API key.", { code: "INTERNAL_ERROR" });
+  }
+});
+
 app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+
 
 app.get("/api/docs/openapi.json", (_req: Request, res: Response) => {
   res.json(swaggerDocument);
