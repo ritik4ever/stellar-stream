@@ -929,6 +929,68 @@ export const swaggerDocument = {
         },
       },
     },
+    "/api/streams/{id}/vesting-schedule": {
+      get: {
+        summary: "Get projected vesting schedule",
+        description: "Retrieves projected vesting schedule time series: [{timestamp, vested_amount, cumulative_pct}]. Interval is hourly for streams < 7 days, daily for longer.",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "The unique ID of the stream.",
+            schema: {
+              type: "string",
+            },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Projected vesting schedule time series.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          timestamp: { type: "number", example: 1716382000 },
+                          vested_amount: { type: "number", example: 100 },
+                          cumulative_pct: { type: "number", example: 10 },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": {
+            description: "Invalid stream ID format.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
+          "404": {
+            description: "Stream not found.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     "/api/recipients/{accountId}/streams": {
       get: {
         summary: "Get recipient streams",
