@@ -1,63 +1,83 @@
 #![no_std]
 
+use crate::errors::ContractError;
+use crate::templates::{StreamTemplate, TemplateCreated};
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
-    Map, String, Vec,
+    Map, String, Symbol, Vec,
 };
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, IntoVal, Symbol};
-use crate::errors::ContractError;
 
-#[contract]
-pub struct EscrowVestingContract;
+pub mod errors;
+pub mod templates;
 
-#[contractimpl]
-impl EscrowVestingContract {
-    /// Claims available vested tokens for the recipient and transfers real tokens.
-    ///
-    /// # Parameters
-    /// * `env` - The execution environment.
-    /// * `recipient` - The account receiving the vested tokens (must authenticate).
-    /// * `token` - The SEP-41 token contract address.
-    ///
-    /// # Returns
-    /// * `Result<i128, ContractError>` - The actual amount of tokens transferred.
-    pub fn claim(env: Env, recipient: Address, token: Address) -> Result<i128, ContractError> {
-        // 1. Authenticate recipient
-        recipient.require_auth();
+pub mod escrow_vesting {
+    use super::*;
 
-        // 2. Calculate vested and already-claimed amounts from storage
-        let total_vested: i128 = env.storage().instance().get(&Symbol::new(&env, "total_vested")).unwrap_or(0);
-        let already_claimed: i128 = env.storage().instance().get(&Symbol::new(&env, "claimed_amount")).unwrap_or(0);
+    #[contract]
+    pub struct EscrowVestingContract;
 
-        let claimable_amount = total_vested.checked_sub(already_claimed).unwrap_or(0);
+    #[contractimpl]
+    impl EscrowVestingContract {
+        /// Claims available vested tokens for the recipient and transfers real tokens.
+        ///
+        /// # Parameters
+        /// * `env` - The execution environment.
+        /// * `recipient` - The account receiving the vested tokens (must authenticate).
+        /// * `token` - The SEP-41 token contract address.
+        ///
+        /// # Returns
+        /// * `Result<i128, ContractError>` - The actual amount of tokens transferred.
+        pub fn claim(env: Env, recipient: Address, token: Address) -> Result<i128, ContractError> {
+            // 1. Authenticate recipient
+            recipient.require_auth();
 
-        // 3. Validate claimable amount - revert with InsufficientVested if 0 or negative
-        if claimable_amount <= 0 {
-            return Err(ContractError::InsufficientVested);
+            // 2. Calculate vested and already-claimed amounts from storage
+            let total_vested: i128 = env
+                .storage()
+                .instance()
+                .get(&Symbol::new(&env, "total_vested"))
+                .unwrap_or(0);
+            let already_claimed: i128 = env
+                .storage()
+                .instance()
+                .get(&Symbol::new(&env, "claimed_amount"))
+                .unwrap_or(0);
+
+            let claimable_amount = total_vested.checked_sub(already_claimed).unwrap_or(0);
+
+            // 3. Validate claimable amount - revert with InsufficientVested if 0 or negative
+            if claimable_amount <= 0 {
+                return Err(ContractError::InsufficientVested);
+            }
+
+            // 4. Update contract storage accounting
+            let new_claimed_total = already_claimed.checked_add(claimable_amount).unwrap();
+            env.storage()
+                .instance()
+                .set(&Symbol::new(&env, "claimed_amount"), &new_claimed_total);
+
+            // 5. Transfer tokens via Soroban SEP-41 token client
+            let token_client = soroban_sdk::token::Client::new(&env, &token);
+            let contract_address = env.current_contract_address();
+
+            token_client.transfer(&contract_address, &recipient, &claimable_amount);
+
+            // 6. Emit Claimed event
+            env.events().publish(
+                (symbol_short!("Claimed"), recipient.clone()),
+                claimable_amount,
+            );
+
+            // 7. Return actual transferred amount
+            Ok(claimable_amount)
         }
-
-        // 4. Update contract storage accounting
-        let new_claimed_total = already_claimed.checked_add(claimable_amount).unwrap();
-        env.storage().instance().set(&Symbol::new(&env, "claimed_amount"), &new_claimed_total);
-
-        // 5. Transfer tokens via Soroban SEP-41 token client
-        let token_client = soroban_sdk::token::Client::new(&env, &token);
-        let contract_address = env.current_contract_address();
-
-        token_client.transfer(&contract_address, &recipient, &claimable_amount);
-
-        // 6. Emit Claimed event
-        env.events().publish(
-            (symbol_short!("Claimed"), recipient.clone()),
-            claimable_amount,
-        );
-
-        // 7. Return actual transferred amount
-        Ok(claimable_amount)
     }
 }
 
+pub use escrow_vesting::*;
+
 const NATIVE_SENTINEL: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+const MAX_TEMPLATES_PER_SENDER: u32 = 10;
 
 // ---------------------------------------------------------------------------
 // Stream struct
@@ -74,6 +94,7 @@ pub struct Stream {
     pub start_time: u64,
     pub end_time: u64,
     pub cliff_seconds: u64,
+    pub vesting_type: String,
     pub canceled: bool,
     pub paused: bool,
     pub pause_started_at: Option<u64>,
@@ -90,6 +111,9 @@ pub enum DataKey {
     Admin,
     NextStreamId,
     Stream(u64),
+    NextTemplateId,
+    Template(u64),
+    SenderTemplates(Address),
     SplitChildren(u64),
     ChildToParent(u64),
     NativeToken,
@@ -126,6 +150,7 @@ pub struct StreamCreated {
     pub start_time: u64,
     pub end_time: u64,
     pub cliff_seconds: u64,
+    pub vesting_type: String,
     pub metadata: Option<Map<String, String>>,
 }
 
@@ -241,18 +266,139 @@ impl StellarStreamContract {
 
     /// One-time setup: stores the admin address used for clawback authorization.
     /// Panics if called a second time to prevent privilege escalation.
-    pub fn initialize(env: Env, admin: Address, native_token: Address, allowed_tokens: Vec<Address>) {
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        native_token: Address,
+        allowed_tokens: Vec<Address>,
+    ) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::NativeToken, &native_token);
-        env.storage().instance().set(&DataKey::AllowedTokens, &allowed_tokens);
+        env.storage()
+            .instance()
+            .set(&DataKey::NativeToken, &native_token);
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedTokens, &allowed_tokens);
     }
 
     // -----------------------------------------------------------------------
     // Stream creation
     // -----------------------------------------------------------------------
+
+    pub fn create_template(
+        env: Env,
+        sender: Address,
+        name: String,
+        token: Address,
+        duration_seconds: u64,
+        cliff_seconds: u64,
+        vesting_type: String,
+    ) -> u64 {
+        sender.require_auth();
+
+        if duration_seconds == 0 {
+            panic!("duration must be positive");
+        }
+        if cliff_seconds > duration_seconds {
+            panic!("cliff exceeds duration");
+        }
+
+        let mut sender_templates: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SenderTemplates(sender.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        if sender_templates.len() >= MAX_TEMPLATES_PER_SENDER {
+            panic!("template limit exceeded");
+        }
+
+        let mut template_id: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::NextTemplateId)
+            .unwrap_or(0);
+        template_id += 1;
+
+        let template = StreamTemplate {
+            id: template_id,
+            sender: sender.clone(),
+            name,
+            token: token.clone(),
+            duration_seconds,
+            cliff_seconds,
+            vesting_type: vesting_type.clone(),
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Template(template_id), &template);
+        sender_templates.push_back(template_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::SenderTemplates(sender.clone()), &sender_templates);
+        env.storage()
+            .persistent()
+            .set(&DataKey::NextTemplateId, &template_id);
+
+        env.events().publish(
+            (symbol_short!("Template"), symbol_short!("Created")),
+            TemplateCreated {
+                template_id,
+                sender,
+                token,
+                duration_seconds,
+                cliff_seconds,
+                vesting_type,
+            },
+        );
+
+        template_id
+    }
+
+    pub fn get_template(env: Env, template_id: u64) -> StreamTemplate {
+        read_template(&env, template_id)
+    }
+
+    pub fn get_templates_by_sender(env: Env, sender: Address) -> Vec<StreamTemplate> {
+        let template_ids: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SenderTemplates(sender))
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut templates = Vec::new(&env);
+        for template_id in template_ids.iter() {
+            templates.push_back(read_template(&env, template_id));
+        }
+        templates
+    }
+
+    pub fn create_stream_from_template(
+        env: Env,
+        template_id: u64,
+        recipient: Address,
+        amount: i128,
+    ) -> u64 {
+        let template = read_template(&env, template_id);
+
+        let start_time = env.ledger().timestamp();
+        let end_time = start_time.saturating_add(template.duration_seconds);
+
+        create_stream_with_config(
+            &env,
+            template.sender,
+            recipient,
+            template.token,
+            amount,
+            start_time,
+            end_time,
+            template.cliff_seconds,
+            template.vesting_type,
+            None,
+        )
+    }
 
     pub fn create_stream(
         env: Env,
@@ -265,92 +411,18 @@ impl StellarStreamContract {
         cliff_seconds: u64,
         metadata: Option<Map<String, String>>,
     ) -> u64 {
-        sender.require_auth();
-
-        if total_amount <= 0 {
-            panic!("total_amount must be positive");
-        }
-        if end_time <= start_time {
-            panic!("end_time must be greater than start_time");
-        }
-
-        let is_native = token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
-        if !is_native {
-            let allowed_tokens: Vec<Address> = env.storage().instance().get(&DataKey::AllowedTokens).unwrap_or_else(|| Vec::new(&env));
-            #[cfg(not(any(test, feature = "testutils")))]
-            if !allowed_tokens.contains(&token) {
-                panic!("ContractError::TokenNotAllowed");
-            }
-            #[cfg(any(test, feature = "testutils"))]
-            if !allowed_tokens.is_empty() && !allowed_tokens.contains(&token) {
-                panic!("ContractError::TokenNotAllowed");
-            }
-        }
-        
-        let actual_token = if is_native {
-            env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
-        } else {
-            token.clone()
-        };
-        let token_client = TokenClient::new(&env, &actual_token);
-        let sender_balance = token_client.balance(&sender);
-        if sender_balance < total_amount {
-            panic!("insufficient sender balance");
-        }
-        // Escrow: transfer total_amount from sender into this contract.
-        let contract_address = env.current_contract_address();
-        token_client.transfer(&sender, &contract_address, &total_amount);
-
-        let mut next_id: u64 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::NextStreamId)
-            .unwrap_or(0);
-        next_id += 1;
-
-        let stream = Stream {
-            sender: sender.clone(),
-            recipient: recipient.clone(),
-            token: token.clone(),
+        create_stream_with_config(
+            &env,
+            sender,
+            recipient,
+            token,
             total_amount,
-            claimed_amount: 0,
             start_time,
             end_time,
             cliff_seconds,
-            canceled: false,
-            paused: false,
-            pause_started_at: None,
-
-            metadata: metadata.clone(),
-        };
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::NextStreamId, &next_id);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Stream(next_id), &stream);
-
-        let now = env.ledger().timestamp();
-        env.events().publish(
-            (symbol_short!("Stream"), symbol_short!("Created")),
-            StreamCreated {
-                stream_id: next_id,
-                actor: sender.clone(),
-                timestamp: now,
-                sender,
-                recipient,
-                token: token.clone(),
-                token_symbol: token_client.symbol(),
-                total_amount,
-                start_time,
-                end_time,
-                cliff_seconds,
-                metadata,
-            },
-        );
-
-        next_id
+            String::from_str(&env, "linear"),
+            metadata,
+        )
     }
 
     pub fn create_split_stream(
@@ -375,7 +447,10 @@ impl StellarStreamContract {
 
         let is_native = token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
         let actual_token = if is_native {
-            env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+            env.storage()
+                .instance()
+                .get(&DataKey::NativeToken)
+                .unwrap_or_else(|| panic!("not initialized"))
         } else {
             token.clone()
         };
@@ -397,11 +472,11 @@ impl StellarStreamContract {
 
         let mut allocated_total = 0_i128;
         let mut child_ids = Vec::<u64>::new(&env);
-        
+
         for recipient_allocation in recipients.iter() {
             let recipient = recipient_allocation.0.clone();
             let allocation = recipient_allocation.1;
-            
+
             if allocation <= 0 {
                 panic!("allocation must be positive");
             }
@@ -418,12 +493,13 @@ impl StellarStreamContract {
                 start_time,
                 end_time,
                 cliff_seconds: 0,
+                vesting_type: String::from_str(&env, "linear"),
                 canceled: false,
                 paused: false,
                 pause_started_at: None,
                 metadata: None,
             };
-            
+
             env.storage()
                 .persistent()
                 .set(&DataKey::Stream(child_stream_id), &child_stream);
@@ -446,6 +522,7 @@ impl StellarStreamContract {
                     start_time,
                     end_time,
                     cliff_seconds: 0,
+                    vesting_type: String::from_str(&env, "linear"),
                     metadata: None,
                 },
             );
@@ -461,7 +538,7 @@ impl StellarStreamContract {
         env.storage()
             .persistent()
             .set(&DataKey::NextStreamId, &next_id);
-            
+
         parent_stream_id
     }
 
@@ -495,7 +572,11 @@ impl StellarStreamContract {
         let stream = read_stream(&env, stream_id);
         let vested = vested_amount(&stream, at_time);
         let claimable = vested - stream.claimed_amount;
-        if claimable < 0 { 0 } else { claimable }
+        if claimable < 0 {
+            0
+        } else {
+            claimable
+        }
     }
 
     pub fn get_claimable_batch(env: Env, stream_ids: Vec<u64>, at_time: u64) -> Map<u64, i128> {
@@ -504,7 +585,8 @@ impl StellarStreamContract {
         }
         let mut result = Map::new(&env);
         for stream_id in stream_ids.iter() {
-            let stream_opt: Option<Stream> = env.storage().persistent().get(&DataKey::Stream(stream_id));
+            let stream_opt: Option<Stream> =
+                env.storage().persistent().get(&DataKey::Stream(stream_id));
             let amount = match stream_opt {
                 Some(stream) => {
                     let vested = vested_amount(&stream, at_time);
@@ -546,13 +628,16 @@ impl StellarStreamContract {
 
         let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
         let actual_token = if is_native {
-            env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+            env.storage()
+                .instance()
+                .get(&DataKey::NativeToken)
+                .unwrap_or_else(|| panic!("not initialized"))
         } else {
             stream.token.clone()
         };
         let token_client = TokenClient::new(&env, &actual_token);
         let contract_address = env.current_contract_address();
-        
+
         token_client.transfer(&contract_address, &recipient, &amount);
 
         stream.claimed_amount += amount;
@@ -608,7 +693,11 @@ impl StellarStreamContract {
         let vested = vested_amount(&stream, now);
         let sender_refund = stream.total_amount - vested;
 
-        let min_end = if now > stream.start_time { now } else { stream.start_time };
+        let min_end = if now > stream.start_time {
+            now
+        } else {
+            stream.start_time
+        };
         if min_end < stream.end_time {
             stream.end_time = min_end;
             stream.total_amount = vested;
@@ -617,13 +706,16 @@ impl StellarStreamContract {
         if sender_refund > 0 {
             let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
             let actual_token = if is_native {
-                env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+                env.storage()
+                    .instance()
+                    .get(&DataKey::NativeToken)
+                    .unwrap_or_else(|| panic!("not initialized"))
             } else {
                 stream.token.clone()
             };
             let token_client = TokenClient::new(&env, &actual_token);
             let contract_address = env.current_contract_address();
-            
+
             token_client.transfer(&contract_address, &sender, &sender_refund);
         }
 
@@ -683,7 +775,7 @@ impl StellarStreamContract {
         let now = env.ledger().timestamp();
         stream.paused = true;
         stream.pause_started_at = Some(now);
-        
+
         env.storage()
             .persistent()
             .set(&DataKey::Stream(stream_id), &stream);
@@ -715,7 +807,7 @@ impl StellarStreamContract {
             .unwrap_or_else(|| panic!("pause timestamp missing"));
         let now = env.ledger().timestamp();
         let paused_duration = now.saturating_sub(pause_started_at);
-        
+
         stream.start_time = stream.start_time.saturating_add(paused_duration);
         stream.end_time = stream.end_time.saturating_add(paused_duration);
         stream.paused = false;
@@ -770,7 +862,10 @@ impl StellarStreamContract {
         if actual_clawback > 0 {
             let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
             let actual_token = if is_native {
-                env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+                env.storage()
+                    .instance()
+                    .get(&DataKey::NativeToken)
+                    .unwrap_or_else(|| panic!("not initialized"))
             } else {
                 stream.token.clone()
             };
@@ -799,24 +894,48 @@ impl StellarStreamContract {
     }
 
     pub fn add_allowed_token(env: Env, admin: Address, token: Address) {
-        let admin_stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap_or_else(|| panic!("contract not initialized"));
-        if admin_stored != admin { panic!("unauthorized"); }
+        let admin_stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("contract not initialized"));
+        if admin_stored != admin {
+            panic!("unauthorized");
+        }
         admin.require_auth();
-        let mut allowed: Vec<Address> = env.storage().instance().get(&DataKey::AllowedTokens).unwrap_or_else(|| Vec::new(&env));
+        let mut allowed: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or_else(|| Vec::new(&env));
         if !allowed.contains(&token) {
             allowed.push_back(token);
-            env.storage().instance().set(&DataKey::AllowedTokens, &allowed);
+            env.storage()
+                .instance()
+                .set(&DataKey::AllowedTokens, &allowed);
         }
     }
 
     pub fn remove_allowed_token(env: Env, admin: Address, token: Address) {
-        let admin_stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap_or_else(|| panic!("contract not initialized"));
-        if admin_stored != admin { panic!("unauthorized"); }
+        let admin_stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("contract not initialized"));
+        if admin_stored != admin {
+            panic!("unauthorized");
+        }
         admin.require_auth();
-        let mut allowed: Vec<Address> = env.storage().instance().get(&DataKey::AllowedTokens).unwrap_or_else(|| Vec::new(&env));
+        let mut allowed: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or_else(|| Vec::new(&env));
         if let Some(i) = allowed.first_index_of(&token) {
             allowed.remove(i);
-            env.storage().instance().set(&DataKey::AllowedTokens, &allowed);
+            env.storage()
+                .instance()
+                .set(&DataKey::AllowedTokens, &allowed);
         }
     }
 
@@ -848,6 +967,121 @@ impl StellarStreamContract {
 // Helpers
 // ---------------------------------------------------------------------------
 
+fn create_stream_with_config(
+    env: &Env,
+    sender: Address,
+    recipient: Address,
+    token: Address,
+    total_amount: i128,
+    start_time: u64,
+    end_time: u64,
+    cliff_seconds: u64,
+    vesting_type: String,
+    metadata: Option<Map<String, String>>,
+) -> u64 {
+    sender.require_auth();
+
+    if total_amount <= 0 {
+        panic!("total_amount must be positive");
+    }
+    if end_time <= start_time {
+        panic!("end_time must be greater than start_time");
+    }
+
+    let is_native = token.to_string() == String::from_str(env, NATIVE_SENTINEL);
+    if !is_native {
+        let allowed_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or_else(|| Vec::new(env));
+        #[cfg(not(any(test, feature = "testutils")))]
+        if !allowed_tokens.contains(&token) {
+            panic!("ContractError::TokenNotAllowed");
+        }
+        #[cfg(any(test, feature = "testutils"))]
+        if !allowed_tokens.is_empty() && !allowed_tokens.contains(&token) {
+            panic!("ContractError::TokenNotAllowed");
+        }
+    }
+
+    let actual_token = if is_native {
+        env.storage()
+            .instance()
+            .get(&DataKey::NativeToken)
+            .unwrap_or_else(|| panic!("not initialized"))
+    } else {
+        token.clone()
+    };
+    let token_client = TokenClient::new(env, &actual_token);
+    let sender_balance = token_client.balance(&sender);
+    if sender_balance < total_amount {
+        panic!("insufficient sender balance");
+    }
+
+    let contract_address = env.current_contract_address();
+    token_client.transfer(&sender, &contract_address, &total_amount);
+
+    let mut next_id: u64 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::NextStreamId)
+        .unwrap_or(0);
+    next_id += 1;
+
+    let stream = Stream {
+        sender: sender.clone(),
+        recipient: recipient.clone(),
+        token: token.clone(),
+        total_amount,
+        claimed_amount: 0,
+        start_time,
+        end_time,
+        cliff_seconds,
+        vesting_type: vesting_type.clone(),
+        canceled: false,
+        paused: false,
+        pause_started_at: None,
+        metadata: metadata.clone(),
+    };
+
+    env.storage()
+        .persistent()
+        .set(&DataKey::NextStreamId, &next_id);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Stream(next_id), &stream);
+
+    let now = env.ledger().timestamp();
+    env.events().publish(
+        (symbol_short!("Stream"), symbol_short!("Created")),
+        StreamCreated {
+            stream_id: next_id,
+            actor: sender.clone(),
+            timestamp: now,
+            sender,
+            recipient,
+            token: token.clone(),
+            token_symbol: token_client.symbol(),
+            total_amount,
+            start_time,
+            end_time,
+            cliff_seconds,
+            vesting_type,
+            metadata,
+        },
+    );
+
+    next_id
+}
+
+fn read_template(env: &Env, template_id: u64) -> StreamTemplate {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Template(template_id))
+        .unwrap_or_else(|| panic!("template not found"))
+}
+
 fn read_stream(env: &Env, stream_id: u64) -> Stream {
     env.storage()
         .persistent()
@@ -865,7 +1099,6 @@ fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
     if effective_now < stream.start_time.saturating_add(stream.cliff_seconds) {
         return 0;
     }
-
 
     let effective_time = if effective_now >= stream.end_time {
         stream.end_time
