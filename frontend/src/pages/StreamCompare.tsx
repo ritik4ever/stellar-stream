@@ -1,0 +1,1 @@
+export default () => {const u=new URLSearchParams(location.search).get('streams')||'a,b';const ids=u.split(',').filter(x=>x);return <div style={{display:'flex',flexWrap:'wrap'}}>{ids.map(id=><div key={id} style={{border:'1px solid',margin:4,padding:4}}>{id}</div>)}{ids.map(id=><div key={id} style={{width:'20%',height:20,background:'blue',margin:4}}/>)}</div>
