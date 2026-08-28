@@ -54,6 +54,7 @@ import {
   calculateProgress,
   cancelStream,
   createStream,
+  bulkCreateStreams,
   getStream,
   getOnChainClaimableAmount,
   getOnChainClaimableBatch,
@@ -86,6 +87,7 @@ import {
 import jwt from "jsonwebtoken";
 import {
   bulkCancelStreamsSchema,
+  bulkCreateStreamsSchema,
   createStreamPayloadWithAllowedAssetsSchema,
   listEventsQuerySchema,
   recipientAccountIdSchema,
@@ -1404,6 +1406,67 @@ app.post(
     }
 
     res.json({ canceled, failed });
+  },
+);
+
+// POST /api/streams/batch — bulk create streams atomically
+app.post(
+  "/api/streams/batch",
+  mutationLimiter,
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    const currentAllowedAssets = getAllowedAssets();
+    const parsedBody = bulkCreateStreamsSchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      sendValidationError(req, res, parsedBody.error.issues);
+      return;
+    }
+
+    const { streams, sender } = parsedBody.data;
+    const user = (req as any).user;
+
+    // Verify the authenticated user matches the sender in the request body
+    if (sender !== user.accountId) {
+      sendApiError(req, res, 403, "Sender in request body does not match authenticated user.", {
+        code: "FORBIDDEN",
+      });
+      return;
+    }
+
+    // Validate each stream against allowed assets
+    const allowed = currentAllowedAssets.map((asset) => asset.trim().toUpperCase());
+    for (const stream of streams) {
+      if (!allowed.includes(stream.assetCode)) {
+        sendApiError(req, res, 400, `Asset "${stream.assetCode}" is not supported. Allowed assets: ${allowed.join(", ")}.`, {
+          code: "ASSET_NOT_ALLOWED",
+        });
+        return;
+      }
+    }
+
+    try {
+      const streamIds = await bulkCreateStreams(streams);
+      res.status(201).json({
+        data: {
+          streamIds,
+        },
+      });
+    } catch (error: any) {
+      logger.error({ err: error }, "Failed to create streams in batch");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to create streams in batch.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        {
+          code: normalizedError.code ?? "INTERNAL_ERROR",
+        },
+      );
+    }
   },
 );
 
