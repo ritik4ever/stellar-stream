@@ -1,0 +1,65 @@
+name: OWASP ZAP Security Scan
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  zap-scan:
+    name: ZAP passive scan (staging deploy)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create backend env file for CI
+        run: |
+          cat > backend/.env <<'EOF'
+          PORT=3001
+          SOROBAN_DISABLED=true
+          ALLOWED_ASSETS=USDC,XLM
+          EOF
+
+      - name: Start staging stack via Docker Compose
+        run: |
+          docker compose -f docker-compose.yml down --volumes --remove-orphans || true
+          docker compose -f docker-compose.yml up -d --build
+
+      - name: Wait for staging stack to be healthy
+        run: |
+          for i in $(seq 1 30); do
+            if curl --silent --fail http://localhost:3001/api/health >/dev/null && curl --silent --fail http://localhost:3000 >/dev/null; then
+              echo "Staging stack is ready"; exit 0;
+            fi
+            echo "Waiting for staging stack... ($i/30)"; sleep 5;
+          done
+          echo "Staging stack did not become ready in time."
+          docker compose -f docker-compose.yml logs --no-color --tail=200
+          exit 1
+
+      - name: Run ZAP baseline (passive) scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: 'http://localhost:3000'
+          cmd_options: '-J zap-report.json -r zap-report.html'
+          fail_action: false
+          allow_issue_writing: false
+
+      - name: Fail build on high-severity findings
+        run: node scripts/check-zap-high-severity.js zap-report.json
+
+      - name: Upload ZAP report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: |
+            zap-report.html
+            zap-report.json
+
+      - name: Tear down staging stack
+        if: always()
+        run: docker compose -f docker-compose.yml down --volumes --remove-orphans
