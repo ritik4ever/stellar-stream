@@ -314,7 +314,7 @@ Redis replaces the in-memory cache, providing a shared cache across backend inst
 
 ### SQLite Performance
 
-SQLite performance is influenced by pragmas set in `db.ts`:
+SQLite performance is influenced by pragmas applied in `backend/src/services/sqlite/` (see [ADR 0006](adr/0006-sqlite-wal-and-pool-tuning.md)):
 
 | Pragma | Current Value | Description |
 |--------|---------------|-------------|
@@ -325,7 +325,7 @@ SQLite performance is influenced by pragmas set in `db.ts`:
 
 **For write-heavy workloads:**
 
-1. Ensure WAL mode is active (confirmed in `db.ts`)
+1. Ensure WAL mode is active (confirmed in `backend/src/services/sqlite/`)
 2. Reduce `RECONCILIATION_INTERVAL_MS` (default 60000ms) to update streams more frequently
 3. Consider batching mutations (the bulk-cancel endpoint already does this)
 4. Monitor `cache_size` — increase to -128000 (128MB) if the database grows large
@@ -362,7 +362,7 @@ export NODE_OPTIONS="--max-old-space-size=512"
 - Long-running indexer or reconciliation jobs contending with API writes
 
 **Fixes:**
-1. Verify WAL mode: `PRAGMA journal_mode=WAL;` (already enabled in `db.ts`)
+1. Verify WAL mode: `PRAGMA journal_mode=WAL;` (already enabled in `backend/src/services/sqlite/`)
 2. Ensure `busy_timeout` is set: `PRAGMA busy_timeout=5000;`
 3. Reduce write concurrency in load tests (`-c 3` for mutation tests)
 4. Consider Redis for multi-instance deployments to reduce direct DB contention

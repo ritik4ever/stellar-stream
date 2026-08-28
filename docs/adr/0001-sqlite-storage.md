@@ -144,9 +144,9 @@ When the application outgrows SQLite:
 
 ### Performance Optimizations
 
-- WAL mode for concurrent reads during writes
+- WAL mode for concurrent reads during writes (pragma values and the writer/readonly pool are in [ADR 0006](./0006-sqlite-wal-and-pool-tuning.md))
 - Indexes on frequently queried columns (sender, recipient, status)
-- Connection pooling via better-sqlite3
+- One writer connection plus optional readonly readers (`getReadDb()`)
 - Redis caching layer for hot data (stream lists, stats)
 
 ## PostgreSQL Support Implementation (June 2026)

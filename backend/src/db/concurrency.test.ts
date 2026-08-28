@@ -5,6 +5,7 @@ import path from "path";
 import { Worker } from "worker_threads";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runMigrations } from "../services/migrations";
+import { applySqlitePragmas } from "../services/sqlite/apply-pragmas";
 
 function createTempDbPath(): string {
   return path.join(
@@ -36,22 +37,19 @@ describe("SQLite WAL mode and concurrent read/write safety", () => {
 
   it("verifies PRAGMA journal_mode = wal on connection", () => {
     const db = new Database(dbPath);
-    db.pragma("journal_mode = WAL");
-    const result = db.pragma("journal_mode");
+    const applied = applySqlitePragmas(db);
     db.close();
-    expect(result).toEqual([{ journal_mode: "wal" }]);
+    expect(applied.journalMode).toBe("wal");
+    expect(applied.busyTimeoutMs).toBe(5000);
   });
 
   it("does not throw SQLITE_BUSY during concurrent read and write", () => {
     const writerDb = new Database(dbPath);
-    writerDb.pragma("journal_mode = WAL");
-    writerDb.pragma("busy_timeout = 5000");
-    writerDb.pragma("synchronous = NORMAL");
+    applySqlitePragmas(writerDb);
     runMigrations(writerDb);
 
     const readerDb = new Database(dbPath);
-    readerDb.pragma("journal_mode = WAL");
-    readerDb.pragma("busy_timeout = 5000");
+    applySqlitePragmas(readerDb);
 
     try {
       writerDb
@@ -106,13 +104,11 @@ describe("SQLite WAL mode and concurrent read/write safety", () => {
 
   it("returns consistent data when reader reads during active write transaction", () => {
     const writerDb = new Database(dbPath);
-    writerDb.pragma("journal_mode = WAL");
-    writerDb.pragma("busy_timeout = 5000");
+    applySqlitePragmas(writerDb);
     runMigrations(writerDb);
 
     const readerDb = new Database(dbPath);
-    readerDb.pragma("journal_mode = WAL");
-    readerDb.pragma("busy_timeout = 5000");
+    applySqlitePragmas(readerDb);
 
     try {
       writerDb
@@ -154,8 +150,7 @@ describe("SQLite WAL mode and concurrent read/write safety", () => {
 
   it("handles true concurrent read/write via worker threads without SQLITE_BUSY", async () => {
     const setupDb = new Database(dbPath);
-    setupDb.pragma("journal_mode = WAL");
-    setupDb.pragma("busy_timeout = 5000");
+    applySqlitePragmas(setupDb);
     runMigrations(setupDb);
 
     setupDb

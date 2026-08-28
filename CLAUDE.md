@@ -173,7 +173,8 @@ db.prepare("SELECT * FROM streams WHERE sender = @sender").run({ sender: "G..." 
 
 ## Pragmas and Performance
 
-SQLite WAL mode is already enabled in `db.ts` (line 24). If issues #360 mentions additional pragmas, they should be added to the DB init:
+SQLite WAL mode and related pragmas are applied in `backend/src/services/sqlite/` (see `docs/adr/0006-sqlite-wal-and-pool-tuning.md`):
+- `PRAGMA journal_mode=WAL`: Concurrent reads during writes
 - `PRAGMA synchronous=NORMAL`: Balance durability and speed
 - `PRAGMA busy_timeout=5000`: Prevent SQLITE_BUSY on concurrent writes
 - `PRAGMA cache_size=-64000`: 64MB page cache for read perf

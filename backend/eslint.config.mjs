@@ -18,6 +18,7 @@ export default tseslint.config(
       'src/services/auth.ts',
       'src/services/cache.ts',
       'src/services/db.ts',
+      'src/services/sqlite/connection-pool.ts',
       'src/services/eventHistory.ts',
       'src/services/indexer.ts',
       'src/services/metricsHistory.ts',

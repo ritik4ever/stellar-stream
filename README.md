@@ -424,6 +424,7 @@ Copy `backend/.env.example` to `backend/.env` and `frontend/.env.example` to `fr
 | `NETWORK_PASSPHRASE` | Optional (Default: `Test SDF Network ; September 2015`) | Non-empty string passphrase matching Stellar network | `Test SDF Network ; September 2015` | Network identifier passphrase |
 | `ALLOWED_ASSETS` | Optional (Default: `USDC,XLM`) | Comma-separated list of 1–12 alphanumeric asset codes | `USDC,XLM,EURC` | Supported token assets for payment streams |
 | `DB_PATH` | Optional (Default: `backend/data/streams.db`) | Valid filesystem file path string | `backend/data/streams.db` | SQLite database file location |
+| `SQLITE_READ_POOL_SIZE` | Optional (Default: `1`, max `4`) | Integer | `1` | Extra readonly SQLite connections for WAL reads (`0` uses the writer only) |
 | `WEBHOOK_DESTINATION_URL` | Optional | Valid HTTP/HTTPS URL (`z.string().url()`) | `https://example.com/webhooks/stellar` | Destination URL for outbound stream event webhooks |
 | `WEBHOOK_SIGNING_SECRET` | Optional (Recommended if URL set) | Secret string ($\ge 32$ random characters recommended) | `whsec_9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d` | Secret used to sign webhook payloads via HMAC-SHA256 |
 | `JWT_SECRET` | Optional (Required in Production) | Secret string ($\ge 32$ random characters recommended) | `jwt_sec_8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c` | Secret used for signing JWT authentication tokens |
