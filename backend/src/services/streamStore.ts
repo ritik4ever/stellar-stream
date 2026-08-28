@@ -34,6 +34,8 @@ export interface StreamInput {
   durationSeconds: number;
   startAt?: number;
   cliffSeconds?: number;
+  stepDurationSeconds?: number | null;
+  stepCount?: number | null;
 }
 
 export interface StreamFeeEstimate {
@@ -56,6 +58,8 @@ export interface StreamRecord {
   pausedAt?: number;
   pausedDuration: number;
   cliffSeconds: number;
+  stepDurationSeconds?: number | null;
+  stepCount?: number | null;
   metadata?: Record<string, string> | null;
 }
 
@@ -96,6 +100,8 @@ interface StreamRow {
   paused_at: number | null;
   paused_duration: number;
   cliff_seconds: number;
+  step_duration_seconds: number | null;
+  step_count: number | null;
   metadata: string | null;
 }
 
@@ -123,6 +129,8 @@ function rowToRecord(row: StreamRow): StreamRecord {
     pausedAt: row.paused_at ?? undefined,
     pausedDuration: row.paused_duration ?? 0,
     cliffSeconds: row.cliff_seconds ?? 0,
+    stepDurationSeconds: row.step_duration_seconds ?? null,
+    stepCount: row.step_count ?? null,
     metadata,
   };
 }
@@ -131,8 +139,8 @@ function upsertStream(record: StreamRecord): void {
   const db = getDb();
   db.prepare(
     `
-    INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at, canceled_at, completed_at, refunded_amount, archived_at, paused_at, paused_duration, cliff_seconds, metadata)
-    VALUES (@id, @sender, @recipient, @assetCode, @totalAmount, @durationSeconds, @startAt, @createdAt, @canceledAt, @completedAt, @refundedAmount, @archivedAt, @pausedAt, @pausedDuration, @cliffSeconds, @metadata)
+    INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at, canceled_at, completed_at, refunded_amount, archived_at, paused_at, paused_duration, cliff_seconds, step_duration_seconds, step_count, metadata)
+    VALUES (@id, @sender, @recipient, @assetCode, @totalAmount, @durationSeconds, @startAt, @createdAt, @canceledAt, @completedAt, @refundedAmount, @archivedAt, @pausedAt, @pausedDuration, @cliffSeconds, @stepDurationSeconds, @stepCount, @metadata)
     ON CONFLICT(id) DO UPDATE SET
       sender = excluded.sender,
       recipient = excluded.recipient,
@@ -148,6 +156,8 @@ function upsertStream(record: StreamRecord): void {
       paused_at = excluded.paused_at,
       paused_duration = excluded.paused_duration,
       cliff_seconds = excluded.cliff_seconds,
+      step_duration_seconds = excluded.step_duration_seconds,
+      step_count = excluded.step_count,
       metadata = excluded.metadata
   `,
   ).run({
@@ -166,6 +176,8 @@ function upsertStream(record: StreamRecord): void {
     pausedAt: record.pausedAt ?? null,
     pausedDuration: record.pausedDuration ?? 0,
     cliffSeconds: record.cliffSeconds ?? 0,
+    stepDurationSeconds: record.stepDurationSeconds ?? null,
+    stepCount: record.stepCount ?? null,
     metadata: record.metadata ? JSON.stringify(record.metadata) : null,
   });
   syncFtsIndex(record.id, record.sender, record.recipient, record.assetCode);
@@ -388,6 +400,8 @@ async function fetchOnChainStreamRecord(
     pausedAt: streamData.paused_at ? Number(streamData.paused_at) : undefined,
     pausedDuration: Number(streamData.paused_duration ?? 0),
     cliffSeconds: Number(streamData.cliff_seconds ?? 0),
+    stepDurationSeconds: null,
+    stepCount: null,
     metadata,
   };
 
@@ -465,6 +479,87 @@ export function calculateProgress(
     remainingAmount: round(Math.max(0, stream.totalAmount - vestedAmount)),
     percentComplete: round(ratio * 100),
   };
+}
+
+export interface StreamMilestone {
+  timestamp: number;
+  amount_unlocked: number;
+  cumulative_unlocked: number;
+  reached: boolean;
+}
+
+/**
+ * Calculates vesting milestones for a stream.
+ * - Linear streams (no cliff, no steps) return an empty array.
+ * - Cliff streams return a single milestone at the cliff time.
+ * - Step streams return one milestone per step.
+ * @param {StreamRecord} stream - The stream to calculate milestones for
+ * @param {number} [at=nowInSeconds()] - Unix timestamp to check if milestones are reached
+ * @returns {StreamMilestone[]} Array of milestones in chronological order
+ */
+export function calculateMilestones(
+  stream: StreamRecord,
+  at = nowInSeconds(),
+): StreamMilestone[] {
+  const milestones: StreamMilestone[] = [];
+  
+  // Linear streams (no cliff, no steps) return empty array
+  const hasCliff = stream.cliffSeconds > 0;
+  const hasSteps = stream.stepDurationSeconds !== null && 
+                   stream.stepDurationSeconds !== undefined &&
+                   stream.stepCount !== null && 
+                   stream.stepCount !== undefined &&
+                   stream.stepDurationSeconds > 0 &&
+                   stream.stepCount > 0;
+  
+  if (!hasCliff && !hasSteps) {
+    return [];
+  }
+  
+  // Calculate cliff milestone if present
+  if (hasCliff) {
+    const cliffTimestamp = stream.startAt + stream.cliffSeconds;
+    // Cliff unlocks a portion of the total amount
+    // For cliff-only streams, the cliff amount is calculated based on cliff duration vs total duration
+    const cliffRatio = stream.durationSeconds > 0 
+      ? Math.min(1, stream.cliffSeconds / stream.durationSeconds)
+      : 1;
+    const cliffAmount = round(stream.totalAmount * cliffRatio);
+    
+    milestones.push({
+      timestamp: cliffTimestamp,
+      amount_unlocked: cliffAmount,
+      cumulative_unlocked: cliffAmount,
+      reached: at >= cliffTimestamp,
+    });
+  }
+  
+  // Calculate step milestones if present
+  if (hasSteps) {
+    const stepDuration = stream.stepDurationSeconds!;
+    const totalSteps = stream.stepCount!;
+    const amountPerStep = round(stream.totalAmount / totalSteps);
+    let cumulative = 0;
+    
+    for (let i = 1; i <= totalSteps; i++) {
+      const stepTimestamp = stream.startAt + (stepDuration * i);
+      cumulative += amountPerStep;
+      // Round cumulative to avoid floating point drift
+      cumulative = round(cumulative);
+      
+      milestones.push({
+        timestamp: stepTimestamp,
+        amount_unlocked: amountPerStep,
+        cumulative_unlocked: cumulative,
+        reached: at >= stepTimestamp,
+      });
+    }
+  }
+  
+  // Sort milestones by timestamp (should already be sorted, but ensure)
+  milestones.sort((a, b) => a.timestamp - b.timestamp);
+  
+  return milestones;
 }
 
 export async function getOnChainClaimableAmount(
@@ -809,8 +904,6 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
     const op = createStreamOperation(contractId, input, startAt);
 
     const txToSimulate = new TransactionBuilder(sourceAccount, {
-  const built = await rpcServer.prepareTransaction(
-    new TransactionBuilder(sourceAccount, {
       fee: "1000",
       networkPassphrase: netPass,
     })
@@ -859,6 +952,8 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
     createdAt: nowInSeconds(),
     pausedDuration: 0,
     cliffSeconds: input.cliffSeconds ?? 0,
+    stepDurationSeconds: input.stepDurationSeconds ?? null,
+    stepCount: input.stepCount ?? null,
   };
 
   const db = getDb();

@@ -62,6 +62,8 @@ export const createStreamPayloadSchema = z
     durationSeconds: durationSecondsSchema,
     startAt: unixTimestampSchema.optional(),
     cliffSeconds: z.coerce.number().int().nonnegative().optional(),
+    stepDurationSeconds: z.coerce.number().int().positive().optional().nullable(),
+    stepCount: z.coerce.number().int().positive().optional().nullable(),
   })
   .superRefine((payload, ctx) => {
     if (payload.sender === payload.recipient) {
@@ -88,6 +90,31 @@ export const createStreamPayloadSchema = z
           message: "startAt cannot be more than 1 year in the future.",
         });
       }
+    }
+    // Validate step vesting fields are used together
+    if (payload.stepDurationSeconds !== null && payload.stepDurationSeconds !== undefined &&
+        (payload.stepCount === null || payload.stepCount === undefined)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["stepCount"],
+        message: "stepCount is required when stepDurationSeconds is provided.",
+      });
+    }
+    if (payload.stepCount !== null && payload.stepCount !== undefined &&
+        (payload.stepDurationSeconds === null || payload.stepDurationSeconds === undefined)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["stepDurationSeconds"],
+        message: "stepDurationSeconds is required when stepCount is provided.",
+      });
+    }
+    // Validate step duration doesn't exceed stream duration
+    if (payload.stepDurationSeconds && payload.stepDurationSeconds > payload.durationSeconds) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["stepDurationSeconds"],
+        message: "stepDurationSeconds cannot exceed durationSeconds.",
+      });
     }
   });
 
