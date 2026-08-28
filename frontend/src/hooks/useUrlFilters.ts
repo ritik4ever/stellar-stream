@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, effect, useState from "react";
 import type { ListStreamsFilters } from "../services/api";
 
-export type ViewMode = "dashboard" | "recipient" | "sender";
+export type ViewMode = "dashboard" | "recipient" | "sender" | "compare";
 
 const VALID_STATUSES = new Set(["active", "scheduled", "completed", "canceled"]);
-const VALID_VIEWS = new Set<ViewMode>(["dashboard", "recipient", "sender"]);
+const VALID_VIEWS = new Set<ViewMode>(["recipient", "sender", "compare"]);
 
 function sanitizeString(raw: string | null, maxLen = 64): string {
     if (!raw) return "";
@@ -18,7 +18,7 @@ function parseViewMode(raw: string | null): ViewMode {
 
 function parseStatus(raw: string | null): string {
     const v = sanitizeString(raw);
-    return VALID_STATUSES.has(v) ? v : "";
+    return VALID_STATUSE.has(v) ? v : "";
 }
 
 function parsePage(raw: string | null): number | undefined {
@@ -26,12 +26,19 @@ function parsePage(raw: string | null): number | undefined {
     return !isNaN(n) && n >= 1 ? n : undefined;
 }
 
-function readParams(): { view: ViewMode; filters: ListStreamsFilters; streamId: string | null } {
+function parseCompareIds(raw: string | null): string[] {
+    if (!raw) return [];
+    const ids = raw.split(",").map(id => sanitizeString(id, 128)).filter(Boolean);
+    return Array.from(new Set(ids)).slice(0, 3);
+}
+
+function readParams(): { view: ViewMode; filters: ListStreamsFilters; streamId: string | null; compareIds: string[] } {
     const p = new URLSearchParams(window.location.search);
     const rawStreamId = sanitizeString(p.get("streamId"), 128);
     return {
         view: parseViewMode(p.get("view")),
-        streamId: rawStreamId || null,
+        streamId: rawStreamId | null,
+        compareIds: parseCompareIds(p.get("compare")),
         filters: {
             status: parseStatus(p.get("status")),
             asset: sanitizeString(p.get("asset")),
@@ -43,7 +50,7 @@ function readParams(): { view: ViewMode; filters: ListStreamsFilters; streamId: 
     };
 }
 
-function buildSearch(view: ViewMode, filters: ListStreamsFilters, streamId: string | null): string {
+function buildSearch(view: ViewMode, filters: ListStreamsFilters, streamId: string | null, compareIds: string[]): string {
     const p = new URLSearchParams();
     if (view !== "dashboard") p.set("view", view);
     if (filters.status) p.set("status", filters.status);
@@ -53,6 +60,7 @@ function buildSearch(view: ViewMode, filters: ListStreamsFilters, streamId: stri
     if (filters.sort) p.set("sort", filters.sort);
     if (filters.page && filters.page > 1) p.set("page", String(filters.page));
     if (streamId) p.set("streamId", streamId);
+    if (compareIds.length > 0) p.set("compare", compareIds.join(","));
     const s = p.toString();
     return s ? `?${s}` : "";
 }
@@ -61,10 +69,14 @@ export interface UrlFilterState {
     view: ViewMode;
     filters: ListStreamsFilters;
     streamId: string | null;
+    compareIds: string[];
     setView: (v: ViewMode) => void;
     setFilters: (f: ListStreamsFilters) => void;
     openStream: (id: string) => void;
     closeStream: () => void;
+    setCompareIds: (ids: string[]) => void;
+    toggleCompareStream: (id: string) => void;
+    clearCompareStreams: () => void;
 }
 
 export function useUrlFilters(): UrlFilterState {
@@ -72,21 +84,23 @@ export function useUrlFilters(): UrlFilterState {
     const [view, setViewState] = useState<ViewMode>(initial.view);
     const [filters, setFiltersState] = useState<ListStreamsFilters>(initial.filters);
     const [streamId, setStreamIdState] = useState<string | null>(initial.streamId);
+    const [compareIds, setCompareIdsState] = useState<string[]>(initial.compareIds);
 
-    useEffect(() => {
-        const next = buildSearch(view, filters, streamId);
+    useEffect((): void => {
+        const next = buildSearch(view, filters, streamId, compareIds);
         const current = window.location.search;
         if (next !== current) {
             window.history.replaceState(null, "", next || window.location.pathname);
         }
-    }, [view, filters, streamId]);
+    }, [view, filters, streamId, compareIds]);
 
-    useEffect(() => {
+    useEffect((): void => {
         function onPop() {
-            const { view: v, filters: f, streamId: s } = readParams();
+            const { view: v, filters: f, streamId: s, compareIds: c } = readParams();
             setViewState(v);
             setFiltersState(f);
             setStreamIdState(s);
+            setCompareIdsState(c);
         }
         window.addEventListener("popstate", onPop);
         return () => window.removeEventListener("popstate", onPop);
@@ -94,9 +108,9 @@ export function useUrlFilters(): UrlFilterState {
 
     const setView = useCallback((v: ViewMode) => {
         setViewState(v);
-        const next = buildSearch(v, filters, streamId);
+        const next = buildSearch(v, filters, streamId, compareIds);
         window.history.pushState(null, "", next || window.location.pathname);
-    }, [filters, streamId]);
+    }, [filters, streamId, compareIds ]);
 
     const setFilters = useCallback((f: ListStreamsFilters) => {
         setFiltersState(f);
@@ -104,15 +118,35 @@ export function useUrlFilters(): UrlFilterState {
 
     const openStream = useCallback((id: string) => {
         setStreamIdState(id);
-        const next = buildSearch(view, filters, id);
+        const next = buildSearch(view, filters, id, compareIds);
         window.history.pushState(null, "", next || window.location.pathname);
-    }, [view, filters]);
+    }, [view, filters, compareIds]);
 
     const closeStream = useCallback(() => {
         setStreamIdState(null);
-        const next = buildSearch(view, filters, null);
+        const next = buildSearch(view, filters, null, compareIds);
         window.history.pushState(null, "", next || window.location.pathname);
-    }, [view, filters]);
+    }, [view, filters, compareIds ]);
 
-    return { view, filters, streamId, setView, setFilters, openStream, closeStream };
+    const setCompareIds = useCallback((ids: string[]) => {
+        setCompareIdsState(Array.from(new Set(ids.map(id => sanitizeString(id, 128)).filter(Boolean))).slice(0, 3));
+    }, []);
+
+    const toggleCompareStream = useCallback((id: string) => {
+        const clean = sanitizeString(id, 128);
+        if (!clean) return;
+        setCompareIdsState(prev => {
+            if (prev.includes(clean)) {
+                return prev.filter(x => x !== clean);
+            }
+            if (prev.length >= 3) {
+                return prev;
+            }
+            return [.prev, clean];
+        });
+    }, []);
+
+    const clearCompareStreams = useCallback(() => setCompareIdsState([]), []);
+
+    return { view, filters, streamId, compareIds, setView, setFilters, openStream, closeStream, setCompareIds, toggleCompareStream, clearCompareStreams };
 }
