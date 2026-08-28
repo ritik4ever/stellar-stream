@@ -1612,6 +1612,87 @@ export const swaggerDocument = {
         },
       },
     },
+    "/api/streams/{id}/claim-history": {
+      get: {
+        summary: "Get stream claim history",
+        description:
+          "Retrieves dedicated claim history for a specific stream. Returns only claim events with amount, timestamp, tx_hash, recipient, and Stellar Explorer link.",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "The unique ID of the stream.",
+            schema: {
+              type: "string",
+            },
+          },
+          {
+            name: "page",
+            in: "query",
+            required: false,
+            description: "Page number for pagination (default: 1)",
+            schema: {
+              type: "integer",
+              default: 1,
+            },
+          },
+          {
+            name: "pageSize",
+            in: "query",
+            required: false,
+            description: "Number of items per page (default: 20, max: 100)",
+            schema: {
+              type: "integer",
+              default: 20,
+            },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Stream claim history.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          claim_id: { type: "integer" },
+                          amount: { type: "number" },
+                          claimed_at: { type: "integer" },
+                          tx_hash: { type: "string" },
+                          recipient: { type: "string" },
+                          explorer_url: { type: "string", nullable: true },
+                          stellar_explorer_url: { type: "string", nullable: true },
+                        },
+                      },
+                    },
+                    total: { type: "integer" },
+                    page: { type: "integer" },
+                    pageSize: { type: "integer" },
+                    hasMore: { type: "boolean" },
+                  },
+                },
+              },
+            },
+          },
+          "404": {
+            description: "Stream not found.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     "/api/streams/{id}/history/summary": {
       get: {
         summary: "Get stream event count summary",

@@ -22,7 +22,9 @@ import {
   getAllEvents,
   getGlobalEvents,
   getStreamHistory,
+  getStreamClaimEvents,
   countStreamEvents,
+  countStreamClaimEvents,
   getStreamEventSummary,
   StreamEventType,
 } from "./services/eventHistory";
@@ -1706,6 +1708,58 @@ app.get(
     const offset = (page - 1) * pageSize;
     const data = getStreamHistory(parsedId.value, pageSize, offset);
     const hasMore = offset + pageSize < total;
+
+    res.json({ data, total, page, pageSize, hasMore });
+  },
+);
+
+app.get(
+  "/api/streams/:id/claim-history",
+  readLimiter,
+  (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    // Parse and validate query parameters
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const pageSize = Math.min(
+      Math.max(1, parseInt(req.query.pageSize as string) || 20),
+      100,
+    );
+
+    const total = countStreamClaimEvents(parsedId.value);
+    const offset = (page - 1) * pageSize;
+    const events = getStreamClaimEvents(parsedId.value, pageSize, offset);
+    const hasMore = offset + pageSize < total;
+
+    const data = events.map((event) => {
+      const txHash =
+        event.metadata?.tx_hash ??
+        event.metadata?.txHash ??
+        "";
+      const explorerUrl = txHash
+        ? `https://stellar.expert/explorer/testnet/tx/${txHash}`
+        : null;
+
+      return {
+        claim_id: event.id,
+        amount: event.amount ?? 0,
+        claimed_at: event.timestamp,
+        tx_hash: txHash,
+        recipient: event.actor ?? stream.recipient,
+        explorer_url: explorerUrl,
+        stellar_explorer_url: explorerUrl,
+      };
+    });
 
     res.json({ data, total, page, pageSize, hasMore });
   },
