@@ -230,6 +230,22 @@ pub struct StreamTransferred {
     pub new_recipient: Address,
 }
 
+/// Emitted when a sender accelerates an active or scheduled stream.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamAccelerated {
+    // --- mandatory base fields ---
+    pub stream_id: u64,
+    /// The sender who accelerated the stream.
+    pub actor: Address,
+    pub timestamp: u64,
+    // --- event-specific fields ---
+    pub sender: Address,
+    pub old_end_time: u64,
+    pub new_end_time: u64,
+    pub new_duration_seconds: u64,
+}
+
 #[contract]
 pub struct StellarStreamContract;
 
@@ -733,6 +749,89 @@ impl StellarStreamContract {
                 timestamp: now,
                 sender,
                 resumed_at: now,
+            },
+        );
+    }
+
+    pub fn accelerate_stream(
+        env: Env,
+        stream_id: u64,
+        sender: Address,
+        new_duration_seconds: u64,
+    ) {
+        let mut stream = read_stream(&env, stream_id);
+        if stream.sender != sender {
+            panic!("sender mismatch");
+        }
+        sender.require_auth();
+
+        if stream.canceled {
+            panic!("stream canceled");
+        }
+        if stream.paused {
+            panic!("stream paused");
+        }
+        if new_duration_seconds == 0 {
+            panic!("new_duration must be positive");
+        }
+
+        let now = env.ledger().timestamp();
+        if now >= stream.end_time {
+            panic!("stream completed");
+        }
+
+        let vested = vested_amount(&stream, now);
+        if vested >= stream.total_amount {
+            panic!("stream completed");
+        }
+
+        let remaining_duration = if now <= stream.start_time {
+            stream.end_time.saturating_sub(stream.start_time)
+        } else {
+            stream.end_time.saturating_sub(now)
+        };
+
+        if new_duration_seconds >= remaining_duration {
+            panic!("new_duration must be less than remaining duration");
+        }
+
+        let old_end_time = stream.end_time;
+
+        if now <= stream.start_time {
+            stream.end_time = stream.start_time.saturating_add(new_duration_seconds);
+            if stream.cliff_seconds > new_duration_seconds {
+                stream.cliff_seconds = new_duration_seconds;
+            }
+        } else {
+            let remaining_amount = stream.total_amount - vested;
+            let new_end_time = now.saturating_add(new_duration_seconds);
+            let vested_scaled = (vested as u128).saturating_mul(new_duration_seconds as u128);
+            let shift = (vested_scaled / (remaining_amount as u128)) as u64;
+            let new_start_time = now.saturating_sub(shift);
+
+            stream.start_time = new_start_time;
+            stream.end_time = new_end_time;
+            if stream.cliff_seconds > 0 && now >= stream.start_time {
+                stream.cliff_seconds = 0;
+            }
+        }
+
+        let new_end_time = stream.end_time;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(stream_id), &stream);
+
+        env.events().publish(
+            (symbol_short!("Stream"), symbol_short!("Accel")),
+            StreamAccelerated {
+                stream_id,
+                actor: sender.clone(),
+                timestamp: now,
+                sender,
+                old_end_time,
+                new_end_time,
+                new_duration_seconds,
             },
         );
     }
