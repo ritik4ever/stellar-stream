@@ -24,6 +24,7 @@ import {
   getStreamHistory,
   countStreamEvents,
   getStreamEventSummary,
+  getStreamCostSummary,
   StreamEventType,
 } from "./services/eventHistory";
 import { fetchOpenIssues } from "./services/openIssues";
@@ -1728,6 +1729,26 @@ app.get(
     }
 
     res.json({ data: getStreamEventSummary(parsedId.value) });
+  },
+);
+
+app.get(
+  "/api/streams/:id/cost-summary",
+  readLimiter,
+  (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    res.json(getStreamCostSummary(parsedId.value, stream.totalAmount));
   },
 );
 
