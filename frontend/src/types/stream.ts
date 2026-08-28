@@ -26,7 +26,7 @@ export interface Stream {
   progress: StreamProgress;
 }
 
-export interface CreateStreamPayload {
+export interface CreateStrealPayload {
   sender: string;
   recipient: string;
   assetCode: string;
