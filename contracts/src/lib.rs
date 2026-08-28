@@ -6,6 +6,7 @@ use soroban_sdk::{
 };
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, IntoVal, Symbol};
 use crate::errors::ContractError;
+pub mod vesting;
 
 #[contract]
 pub struct EscrowVestingContract;
@@ -94,6 +95,8 @@ pub enum DataKey {
     ChildToParent(u64),
     NativeToken,
     AllowedTokens,
+    VestingSchedule(u64),
+    VestingStepReached(u64, u32),
 }
 
 // ---------------------------------------------------------------------------
@@ -353,6 +356,38 @@ impl StellarStreamContract {
         next_id
     }
 
+    /// Create a stream with up to five discrete vesting releases. An empty
+    /// schedule is intentionally represented by the existing linear path.
+    pub fn create_stream_with_vesting(
+        env: Env,
+        sender: Address,
+        recipient: Address,
+        token: Address,
+        total_amount: i128,
+        start_time: u64,
+        end_time: u64,
+        cliff_seconds: u64,
+        steps: Vec<vesting::VestingStep>,
+        metadata: Option<Map<String, String>>,
+    ) -> u64 {
+        vesting::validate_steps(&steps);
+        if steps.is_empty() {
+            return Self::create_stream(
+                env, sender, recipient, token, total_amount, start_time, end_time,
+                cliff_seconds, metadata,
+            );
+        }
+
+        let stream_id = Self::create_stream(
+            env.clone(), sender, recipient, token, total_amount, start_time, end_time,
+            cliff_seconds, metadata,
+        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::VestingSchedule(stream_id), &steps);
+        stream_id
+    }
+
     pub fn create_split_stream(
         env: Env,
         sender: Address,
@@ -493,7 +528,7 @@ impl StellarStreamContract {
 
     pub fn claimable(env: Env, stream_id: u64, at_time: u64) -> i128 {
         let stream = read_stream(&env, stream_id);
-        let vested = vested_amount(&stream, at_time);
+        let vested = vested_amount(&env, stream_id, &stream, at_time);
         let claimable = vested - stream.claimed_amount;
         if claimable < 0 { 0 } else { claimable }
     }
@@ -507,7 +542,7 @@ impl StellarStreamContract {
             let stream_opt: Option<Stream> = env.storage().persistent().get(&DataKey::Stream(stream_id));
             let amount = match stream_opt {
                 Some(stream) => {
-                    let vested = vested_amount(&stream, at_time);
+                    let vested = vested_amount(&env, stream_id, &stream, at_time);
                     let claimable = vested - stream.claimed_amount;
                     if claimable < 0 {
                         0
@@ -543,6 +578,8 @@ impl StellarStreamContract {
         if amount > claimable_now {
             panic!("amount exceeds claimable");
         }
+
+        emit_vesting_step_events(&env, stream_id, &stream, now);
 
         let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
         let actual_token = if is_native {
@@ -605,7 +642,7 @@ impl StellarStreamContract {
         let now = env.ledger().timestamp();
         stream.canceled = true;
 
-        let vested = vested_amount(&stream, now);
+        let vested = vested_amount(&env, stream_id, &stream, now);
         let sender_refund = stream.total_amount - vested;
 
         let min_end = if now > stream.start_time { now } else { stream.start_time };
@@ -758,7 +795,7 @@ impl StellarStreamContract {
 
         let mut stream = read_stream(&env, stream_id);
         let now = env.ledger().timestamp();
-        let vested = vested_amount(&stream, now);
+        let vested = vested_amount(&env, stream_id, &stream, now);
         let unclaimed_vested = vested - stream.claimed_amount;
 
         let actual_clawback = if amount > unclaimed_vested {
@@ -855,7 +892,24 @@ fn read_stream(env: &Env, stream_id: u64) -> Stream {
         .unwrap_or_else(|| panic!("stream not found"))
 }
 
-fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
+fn vested_amount(env: &Env, stream_id: u64, stream: &Stream, at_time: u64) -> i128 {
+    if let Some(steps) = env
+        .storage()
+        .persistent()
+        .get::<DataKey, Vec<vesting::VestingStep>>(&DataKey::VestingSchedule(stream_id))
+    {
+        return vesting::vested_amount(
+            env,
+            stream.start_time,
+            stream.end_time,
+            stream.paused,
+            stream.pause_started_at,
+            stream.total_amount,
+            &steps,
+            at_time,
+        );
+    }
+
     let effective_now = if stream.paused {
         stream.pause_started_at.unwrap_or(at_time)
     } else {
@@ -881,6 +935,37 @@ fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
     }
 
     stream.total_amount * (elapsed as i128) / (total_duration as i128)
+}
+
+fn emit_vesting_step_events(env: &Env, stream_id: u64, stream: &Stream, at_time: u64) {
+    let Some(steps) = env
+        .storage()
+        .persistent()
+        .get::<DataKey, Vec<vesting::VestingStep>>(&DataKey::VestingSchedule(stream_id))
+    else {
+        return;
+    };
+
+    for index in vesting::reached_steps(
+        env,
+        stream.start_time,
+        stream.paused,
+        stream.pause_started_at,
+        &steps,
+        at_time,
+    )
+    .iter()
+    {
+        let key = DataKey::VestingStepReached(stream_id, index);
+        if env.storage().persistent().has(&key) {
+            continue;
+        }
+        env.storage().persistent().set(&key, &true);
+        env.events().publish(
+            (Symbol::new(env, "VestingStepReached"), stream_id, index),
+            steps.get(index).unwrap().percentage_bps,
+        );
+    }
 }
 
 #[cfg(test)]
