@@ -229,8 +229,15 @@ describe("Create Stream Payload Schema", () => {
         expect(result.error?.issues[0].path).toContain("durationSeconds");
     });
 
-    it("should accept durationSeconds = 1 (minimum valid)", () => {
+    it("should reject durationSeconds below the 60-second minimum", () => {
         const payload = { ...validBasePayload, durationSeconds: 1 };
+        const result = createStreamPayloadSchema.safeParse(payload);
+        expect(result.success).toBe(false);
+        expect(result.error?.issues[0].path).toContain("durationSeconds");
+    });
+
+    it("should accept durationSeconds = 60 (minimum valid)", () => {
+        const payload = { ...validBasePayload, durationSeconds: 60 };
         const result = createStreamPayloadSchema.safeParse(payload);
         expect(result.success).toBe(true);
     });

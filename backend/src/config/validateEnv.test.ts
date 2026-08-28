@@ -598,6 +598,12 @@ describe("ADMIN_API_KEY validation", () => {
   });
 
   describe("Acceptance Criteria: Startup validation for SOROBAN_RPC_URL, STELLAR_CONTRACT_ID, and STELLAR_NETWORK", () => {
+    beforeEach(() => {
+      // test-setup.ts sets SOROBAN_DISABLED=true globally for the rest of the
+      // suite; these scenarios exercise real Soroban validation, so clear it.
+      delete process.env.SOROBAN_DISABLED;
+    });
+
     describe("in production mode", () => {
       beforeEach(() => {
         process.env.NODE_ENV = "production";

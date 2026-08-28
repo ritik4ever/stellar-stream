@@ -20,6 +20,7 @@ const streamStoreMocks = vi.hoisted(() => ({
   listStreamsBySender: vi.fn(),
   syncStreams: vi.fn(),
   updateStreamStartAt: vi.fn(),
+  nowInSeconds: vi.fn(() => Math.floor(Date.now() / 1000)),
 }));
 
 const eventHistoryMocks = vi.hoisted(() => ({
@@ -34,8 +35,37 @@ const eventHistoryMocks = vi.hoisted(() => ({
 
 vi.mock("./services/streamStore", () => streamStoreMocks);
 vi.mock("./services/eventHistory", () => eventHistoryMocks);
+
+// The real db module requires an initialised SQLite connection. The routes
+// under test only read the asset allowlist, so stub it out.
+vi.mock("./services/db", () => ({
+  getAllowedAssets: vi.fn(() => ["USDC", "XLM"]),
+  addAllowedAsset: vi.fn(),
+  removeAllowedAsset: vi.fn(),
+  searchStreamsFts: vi.fn(() => []),
+  syncFtsIndex: vi.fn(),
+  initDb: vi.fn(),
+  getDb: vi.fn(),
+}));
+
+// Handlers look up the in-memory cache before responding. The direct-invocation
+// helpers call handlers without an Express pipeline, so make the cache fail
+// fast (matching the catch-and-proceed fallback in the route handlers).
+vi.mock("./services/cache", () => ({
+  initCache: vi.fn(),
+  getCache: vi.fn(() => ({
+    get: vi.fn(() => {
+      throw new Error("cache unavailable in unit tests");
+    }),
+    set: vi.fn(() => {
+      throw new Error("cache unavailable in unit tests");
+    }),
+  })),
+  shutdownCache: vi.fn(),
+}));
 vi.mock("./services/auth", () => ({
   authMiddleware: vi.fn((req: any, res: any, next: any) => next()),
+  adminJwtAuth: vi.fn((req: any, res: any, next: any) => next()),
   generateChallenge: vi.fn(),
   refreshToken: vi.fn(),
   verifyChallengeAndIssueToken: vi.fn(),
@@ -163,7 +193,12 @@ function invokeListStreamsRoute(
     throw new Error("GET /api/streams route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  // Rate-limit middleware is registered ahead of the handler; the tests invoke
+  // the handler directly with a minimal req/res, so pick the final handler.
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (
+    req: any,
+    res: any,
+  ) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -176,6 +211,9 @@ function invokeListStreamsRoute(
     },
     json(payload: any) {
       jsonBody = payload;
+      return this;
+    },
+    set() {
       return this;
     },
   };
@@ -197,7 +235,10 @@ function invokeSenderStreamsRoute(
     throw new Error("GET /api/senders/:accountId/streams route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (
+    req: any,
+    res: any,
+  ) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -210,6 +251,9 @@ function invokeSenderStreamsRoute(
     },
     json(payload: any) {
       jsonBody = payload;
+      return this;
+    },
+    set() {
       return this;
     },
   };
@@ -645,15 +689,25 @@ function invokeGlobalEventsRoute(
     throw new Error("GET /api/events route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
-
-  let statusCode = 200;
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (
+    req: any,
+    res: any,
+  ) => void;  let statusCode = 200;
   let jsonBody: any;
 
   const req = { query, requestId: "test-request-id" };
   const res = {
-    status(code: number) { statusCode = code; return this; },
-    json(payload: any) { jsonBody = payload; return this; },
+    status(code: number) {
+      statusCode = code;
+      return this;
+    },
+    json(payload: any) {
+      jsonBody = payload;
+      return this;
+    },
+    set() {
+      return this;
+    },
   };
 
   handler(req, res);
@@ -686,7 +740,7 @@ describe("GET /api/events", () => {
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
-    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith("created");
+    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith("created", undefined, undefined);
 
   });
 

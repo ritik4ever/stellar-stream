@@ -1,11 +1,22 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 import Database from "better-sqlite3";
 import { vi } from "vitest";
+import type {
+  getStreamMetrics as GetStreamMetricsFn,
+  resetStreamMetricsCache as ResetStreamMetricsCacheFn,
+} from "./streamMetrics";
 
 let db: InstanceType<typeof Database>;
 vi.mock("./db", () => ({ getDb: () => db }));
 
-const { getStreamMetrics, resetStreamMetricsCache } = await import("./streamMetrics");
+// Loaded dynamically so the ./db mock (declared above) is in effect.
+let getStreamMetrics: typeof GetStreamMetricsFn;
+let resetStreamMetricsCache: typeof ResetStreamMetricsCacheFn;
+beforeAll(async () => {
+  const m = await import("./streamMetrics");
+  getStreamMetrics = m.getStreamMetrics;
+  resetStreamMetricsCache = m.resetStreamMetricsCache;
+});
 
 function setupDb() {
   db = new Database(":memory:");

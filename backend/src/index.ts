@@ -8,7 +8,7 @@ import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
 import { z } from "zod";
 import { createServer } from "http";
-import { searchStreamsFts, getAllowedAssets, addAllowedAsset, removeAllowedAsset } from "./services/db";
+import { searchStreamsFts, getAllowedAssets, addAllowedAsset, removeAllowedAsset, getDb } from "./services/db";
 import { initWebSocket } from "./services/websocket";
 import {
   normalizeUnknownApiError,
@@ -24,6 +24,7 @@ import {
   getStreamHistory,
   countStreamEvents,
   getStreamEventSummary,
+  recordEventWithDb,
   StreamEventType,
 } from "./services/eventHistory";
 import { fetchOpenIssues } from "./services/openIssues";
@@ -171,12 +172,12 @@ const listStreamsQuerySchema = z.object({
       `limit must be less than or equal to ${PAGINATION_MAX_LIMIT}`,
     )
     .optional(),
-  sort: z
-    .enum(SORT_FIELDS)
-    .optional(),
-  order: z
-    .enum(SORT_ORDERS)
-    .optional(),
+  sort: z.enum(SORT_FIELDS, {
+    message: `sort must be one of: ${SORT_FIELDS.join(", ")}`,
+  }).optional(),
+  order: z.enum(SORT_ORDERS, {
+    message: `order must be one of: ${SORT_ORDERS.join(", ")}`,
+  }).optional(),
 });
 
 const AUTH_CHALLENGE_RATE_LIMIT = Number(
@@ -545,10 +546,21 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
   const hasLimit = req.query.limit !== undefined;
 
   const now = nowInSeconds();
-  let data = listStreams(query.include_archived, query.sort ?? "createdAt", query.order ?? "desc").map((stream) => ({
-    ...stream,
-    progress: calculateProgress(stream, now),
-  }));
+  let data;
+  try {
+    data = listStreams(query.include_archived, query.sort ?? "createdAt", query.order ?? "desc").map((stream) => ({
+      ...stream,
+      progress: calculateProgress(stream, now),
+    }));
+  } catch (error: any) {
+    // DB errors (e.g. the connection was closed) must surface as a 500, not
+    // an unhandled rejection that hangs the request.
+    logger.error({ err: error }, "failed to list streams");
+    sendApiError(req, res, 500, "Failed to list streams.", {
+      code: "INTERNAL_ERROR",
+    });
+    return;
+  }
 
   if (query.status) {
     data = data.filter((stream) => stream.progress.status === query.status);
@@ -663,8 +675,13 @@ app.get("/api/events", readLimiter, (req: Request, res: Response) => {
 
   const total = countAllEvents(eventType, streamId, since);
 
+  const hasPage = req.query.page !== undefined;
+  const hasLimit =
+    req.query.limit !== undefined || req.query.pageSize !== undefined;
+
   const page = query.page ?? PAGINATION_DEFAULT_PAGE;
   const pageSize = query.pageSize ?? query.limit ?? PAGINATION_DEFAULT_LIMIT;
+  const limit = !hasPage && !hasLimit ? total : pageSize;
 
   const offset = (page - 1) * pageSize;
   const data = getGlobalEvents(
@@ -676,7 +693,7 @@ app.get("/api/events", readLimiter, (req: Request, res: Response) => {
     since,
   );
 
-  res.json({ data, total, page, pageSize, limit: pageSize });
+  res.json({ data, total, page, pageSize, limit });
 });
 
 app.get(
@@ -766,6 +783,61 @@ const claimableBatchBodySchema = z.object({
     .min(1, "At least one stream ID is required")
     .max(50, "Maximum 50 stream IDs per batch"),
 });
+
+// GET /api/streams/:id/claimable — real-time claimable amount for a single stream
+app.get(
+  "/api/streams/:id/claimable",
+  claimableLimiter,
+  async (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    try {
+      if (stream.pausedAt !== undefined || stream.canceledAt !== undefined) {
+        const at = await getLatestLedgerTime();
+        res.json({
+          streamId: stream.id,
+          claimableAmount: 0,
+          assetCode: stream.assetCode,
+          at,
+        });
+        return;
+      }
+
+      const { claimableAmount, at } = await getOnChainClaimableAmount(stream.id);
+      res.json({
+        streamId: stream.id,
+        claimableAmount: Number(claimableAmount),
+        assetCode: stream.assetCode,
+        at,
+      });
+    } catch (error: any) {
+      logger.error({ err: error, streamId: parsedId.value }, "failed to query claimable amount");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to query claimable amount.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        {
+          code: normalizedError.code ?? "INTERNAL_ERROR",
+        },
+      );
+    }
+  },
+);
 
 app.post(
   "/api/streams/claimable/batch",
@@ -1408,6 +1480,59 @@ app.post(
 );
 
 // POST /api/streams/:id/pause â€” sender pauses an active stream
+// POST /api/streams/:id/mark-complete — sender marks a fully-vested stream as complete
+app.post(
+  "/api/streams/:id/mark-complete",
+  mutationLimiter,
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    const user = (req as any).user;
+    if (stream.sender !== user.accountId) {
+      sendApiError(req, res, 403, "Only the sender can complete this stream.", {
+        code: "FORBIDDEN",
+      });
+      return;
+    }
+
+    try {
+      const updated = markStreamComplete(parsedId.value);
+      res.json({
+        data: {
+          ...updated,
+          progress: calculateProgress(updated),
+        },
+      });
+    } catch (error: any) {
+      logger.error({ err: error, streamId: parsedId.value }, "failed to mark stream complete");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to mark stream complete.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        {
+          code: normalizedError.code ?? "INTERNAL_ERROR",
+        },
+      );
+    }
+  },
+);
+
 app.post(
   "/api/streams/:id/pause",
   mutationLimiter,
@@ -1538,8 +1663,7 @@ app.post(
     try {
       // Record the claim event in the local DB.
       // In a full on-chain implementation this would submit a `claim` Soroban tx.
-      const db = (await import("./services/db")).getDb();
-      const { recordEventWithDb } = await import("./services/eventHistory");
+      const db = getDb();
       const now = Math.floor(Date.now() / 1000);
 
       // Guard against double-spend: check and write inside one atomic transaction.
@@ -1572,9 +1696,7 @@ app.post(
         return;
       }
 
-      const history = await import("./services/eventHistory").then((m) =>
-        m.getStreamHistory(stream.id),
-      );
+      const history = getStreamHistory(stream.id);
 
       res.json({
         result: {

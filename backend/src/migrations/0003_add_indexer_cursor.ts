@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 
-export function up(db: Database.Database): void {
+export function up(db: InstanceType<typeof Database>): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS indexer_cursor (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -9,7 +9,7 @@ export function up(db: Database.Database): void {
   `);
 }
 
-export function down(db: Database.Database): void {
+export function down(db: InstanceType<typeof Database>): void {
   db.exec(`DROP TABLE IF EXISTS indexer_cursor;`);
 }
 

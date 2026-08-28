@@ -11,6 +11,7 @@
     "deploy:contract": "./scripts/deploy.sh",
     "gen:bindings": "./scripts/generate-contract-bindings.sh",
     "changelog:update": "conventional-changelog -p angular -i CHANGELOG.md -s",
+    "test:chaos": "cd backend && NODE_ENV=test NODE_PATH=$PWD/node_modules npx --no-install ts-node --transpile-only --project ../scripts/chaos/tsconfig.json ../scripts/chaos/indexer-kill-restart.ts",
     "prepare": "husky"
   },
   "license": "MIT",

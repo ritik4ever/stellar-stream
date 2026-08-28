@@ -939,7 +939,7 @@ describe("getStreamById", () => {
   });
 
   it("returns full stream object with all computed progress fields for valid stream ID", async () => {
-    const now = frozenTime;
+    const now = Math.floor(Date.now() / 1000);
     const mockRow = {
       id: "stream-123",
       sender: "GSENDER123",
@@ -989,7 +989,7 @@ describe("getStreamById", () => {
   });
 
   it("returns archived_at field populated for an archived stream", async () => {
-    const now = frozenTime;
+    const now = Math.floor(Date.now() / 1000);
     const archivedTimestamp = now - 600;
     const mockRow = {
       id: "archived-stream-1",

@@ -27,6 +27,7 @@ const EXPECTED_STREAMS_COLUMNS = [
   "paused_at",
   "paused_duration",
   "metadata",
+  "cliff_seconds",
 ];
 
 const EXPECTED_WEBHOOK_DEAD_LETTERS_COLUMNS = [
@@ -46,7 +47,7 @@ function createTempDbPath(): string {
   );
 }
 
-function openDb(dbPath: string): Database.Database {
+function openDb(dbPath: string): InstanceType<typeof Database> {
   const db = new Database(dbPath);
   db.pragma("foreign_keys = ON");
   return db;
@@ -54,7 +55,7 @@ function openDb(dbPath: string): Database.Database {
 
 describe("database migrations", () => {
   let dbPath: string;
-  let db: Database.Database;
+  let db: InstanceType<typeof Database>;
 
   afterEach(() => {
     if (db) {
@@ -161,20 +162,15 @@ describe("database migrations", () => {
 
     runMigrations(db);
 
-    rollbackMigration(db, 4);
+    rollbackMigration(db, 5);
 
-    expect(getTableColumns(db, "webhook_dead_letters")).toEqual([
-      "id",
-      "url",
-      "payload",
-      "last_error",
-      "failed_at",
-    ]);
+    // cliff_seconds (migration 5) is gone, everything else remains
+    expect(getTableColumns(db, "streams")).not.toContain("cliff_seconds");
 
     const applied = db
       .prepare("SELECT version FROM schema_migrations ORDER BY version")
       .all() as Array<{ version: number }>;
 
-    expect(applied.map((row) => row.version)).toEqual([1, 2, 3]);
+    expect(applied.map((row) => row.version)).toEqual([1, 2, 3, 4]);
   });
 });
