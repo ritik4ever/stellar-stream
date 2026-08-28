@@ -349,11 +349,13 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   next(err);
 });
 
-app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+if (process.env.NODE_ENV !== "production") {
+  app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
-app.get("/api/docs/openapi.json", (_req: Request, res: Response) => {
-  res.json(swaggerDocument);
-});
+  app.get("/api/docs/openapi.json", (_req: Request, res: Response) => {
+    res.json(swaggerDocument);
+  });
+}
 
 function parseStreamId(
   streamIdRaw: unknown,
