@@ -111,7 +111,6 @@ const PAGINATION_DEFAULT_PAGE = 1;
 const PAGINATION_DEFAULT_LIMIT = 20;
 const PAGINATION_MAX_LIMIT = 100;
 const STREAM_HISTORY_DEFAULT_LIMIT = 50;
-const STREAM_HISTORY_MAX_LIMIT = 200;
 
 export const app = express();
 const port = Number(process.env.PORT ?? 3001);
@@ -1689,25 +1688,29 @@ app.get(
       return;
     }
 
+    // Parse and validate query parameters
+    const parsedQuery = listEventsQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      sendValidationError(req, res, parsedQuery.error.issues);
+      return;
+    }
+
     const stream = getStream(parsedId.value);
     if (!stream) {
       sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
       return;
     }
 
-    // Parse and validate query parameters
-    const page = Math.max(1, parseInt(req.query.page as string) || 1);
-    const pageSize = Math.min(
-      Math.max(1, parseInt(req.query.pageSize as string) || 20),
-      100,
-    );
+    const query = parsedQuery.data;
+    const page = query.page ?? PAGINATION_DEFAULT_PAGE;
+    const limit = query.limit ?? query.pageSize ?? STREAM_HISTORY_DEFAULT_LIMIT;
 
     const total = countStreamEvents(parsedId.value);
-    const offset = (page - 1) * pageSize;
-    const data = getStreamHistory(parsedId.value, pageSize, offset);
-    const hasMore = offset + pageSize < total;
+    const offset = (page - 1) * limit;
+    // History is served oldest-first (ascending timestamp order).
+    const data = getStreamHistory(parsedId.value, limit, offset, 'asc');
 
-    res.json({ data, total, page, pageSize, hasMore });
+    res.json({ data, total, page, limit });
   },
 );
 

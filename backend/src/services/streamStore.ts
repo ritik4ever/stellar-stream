@@ -809,8 +809,6 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
     const op = createStreamOperation(contractId, input, startAt);
 
     const txToSimulate = new TransactionBuilder(sourceAccount, {
-  const built = await rpcServer.prepareTransaction(
-    new TransactionBuilder(sourceAccount, {
       fee: "1000",
       networkPassphrase: netPass,
     })
