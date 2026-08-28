@@ -1,0 +1,50 @@
+# Monitoring stack for Stellar Stream — Prometheus (scrapes the backend
+# /metrics endpoint) and Grafana (dashboard with live data + alerts).
+#
+# Usage:
+#   export METRICS_USER=metrics METRICS_PASSWORD=<same as backend METRICS_AUTH password>
+#   docker compose -f monitoring/docker-compose.yml up -d
+#
+# The backend must be reachable at http://backend:3001 from this compose
+# network (run both stacks on the same network, e.g. add
+# `network_mode: host` or join networks in your main compose file).
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: stellar-stream-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    environment:
+      METRICS_USER: ${METRICS_USER:-metrics}
+      METRICS_PASSWORD: ${METRICS_PASSWORD:-change-me-in-production}
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: stellar-stream-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus-data:
+  grafana-data:
