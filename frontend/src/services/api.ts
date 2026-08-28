@@ -332,9 +332,24 @@ export interface StreamStats {
   unique_recipients: number;
 }
 
+export interface OnChainAnalytics {
+  total_streams: number;
+  active_streams: number;
+  total_vested_usdc: number;
+  total_vested_xlm: number;
+  unique_senders: number;
+  unique_recipients: number;
+}
+
 export async function fetchStats(): Promise<StreamStats> {
   const response = await fetch(`${API_BASE}/stats`);
   const body = await parseResponse<{ data: StreamStats }>(response);
+  return body.data;
+}
+
+export async function fetchOnChainAnalytics(): Promise<OnChainAnalytics> {
+  const response = await fetch(`${API_BASE}/analytics/on-chain`);
+  const body = await parseResponse<{ data: OnChainAnalytics; timestamp: string }>(response);
   return body.data;
 }
 export async function getStream(streamId: string, signal?: AbortSignal): Promise<Stream> {

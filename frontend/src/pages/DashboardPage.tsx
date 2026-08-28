@@ -16,6 +16,7 @@ import {
   ApiError,
   cancelStream,
   createStream,
+  fetchOnChainAnalytics,
   getWebSocketUrl,
   listOpenIssues,
   listStreams,
@@ -46,6 +47,14 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
   const [loadingDashboard, setLoadingDashboard] = useState(true);
   const [initialLoading, setInitialLoading] = useState(true);
   const [totalUnfilteredCount, setTotalUnfilteredCount] = useState<number>(0);
+  const [onChainAnalytics, setOnChainAnalytics] = useState<{
+    total_streams: number;
+    active_streams: number;
+    total_vested_usdc: number;
+    total_vested_xlm: number;
+    unique_senders: number;
+    unique_recipients: number;
+  } | null>(null);
   const CREATE_STREAM_SECTION_ID = "create-stream-section";
 
   const scrollToCreateStream = useCallback(() => {
@@ -140,6 +149,24 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
 
   useEffect(() => {
     void refreshUnfilteredCount();
+  }, []);
+
+  useEffect(() => {
+    // Fetch on-chain analytics periodically
+    const fetchAnalytics = async () => {
+      try {
+        const analytics = await fetchOnChainAnalytics();
+        setOnChainAnalytics(analytics);
+      } catch (error) {
+        console.error("Failed to fetch on-chain analytics:", error);
+        // Silently fail - on-chain analytics is supplementary
+      }
+    };
+
+    fetchAnalytics();
+    const interval = setInterval(fetchAnalytics, 30000); // Refresh every 30 seconds
+
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -293,10 +320,20 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
         <article className="metric-card">
           <span>Total Streams</span>
           <strong>{metrics.total}</strong>
+          {onChainAnalytics && (
+            <small style={{ display: "block", marginTop: "0.5rem", opacity: 0.7 }}>
+              On-chain: {onChainAnalytics.total_streams}
+            </small>
+          )}
         </article>
         <article className="metric-card">
           <span>Active</span>
           <strong>{metrics.active}</strong>
+          {onChainAnalytics && (
+            <small style={{ display: "block", marginTop: "0.5rem", opacity: 0.7 }}>
+              On-chain: {onChainAnalytics.active_streams}
+            </small>
+          )}
         </article>
         <article className="metric-card">
           <span>Completed</span>
@@ -305,8 +342,37 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
         <article className="metric-card">
           <span>Total Vested</span>
           <strong>{metrics.vested}</strong>
+          {onChainAnalytics && (
+            <small style={{ display: "block", marginTop: "0.5rem", opacity: 0.7 }}>
+              XLM: {onChainAnalytics.total_vested_xlm}
+              <br />
+              USDC: {onChainAnalytics.total_vested_usdc}
+            </small>
+          )}
         </article>
       </section>
+
+      {onChainAnalytics && (
+        <section className="metric-grid" style={{ marginTop: "1rem", backgroundColor: "#f5f5f5", padding: "1rem" }}>
+          <h3 style={{ gridColumn: "1 / -1", marginBottom: "1rem" }}>On-Chain Platform Analytics</h3>
+          <article className="metric-card">
+            <span>Unique Senders</span>
+            <strong>{onChainAnalytics.unique_senders}</strong>
+          </article>
+          <article className="metric-card">
+            <span>Unique Recipients</span>
+            <strong>{onChainAnalytics.unique_recipients}</strong>
+          </article>
+          <article className="metric-card">
+            <span>Total Vested (XLM)</span>
+            <strong>{onChainAnalytics.total_vested_xlm}</strong>
+          </article>
+          <article className="metric-card">
+            <span>Total Vested (USDC)</span>
+            <strong>{onChainAnalytics.total_vested_usdc}</strong>
+          </article>
+        </section>
+      )}
 
       <section className="chart-section">
         <h2 className="chart-section__title">Stream Metrics Trends</h2>

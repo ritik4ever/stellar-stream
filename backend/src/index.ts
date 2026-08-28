@@ -35,7 +35,7 @@ import {
 import { adminAuth } from "./middleware/adminAuth";
 import { deleteStreamById, reconcileStream } from "./services/streamStore";
 import { getCache } from "./services/cache";
-import { getStreamStats } from "./services/stats";
+import { getStreamStats, fetchOnChainStats } from "./services/stats";
 import { getStreamMetrics } from "./services/streamMetrics";
 
 import { startReconciliationJob } from "./services/reconciliationJob";
@@ -395,6 +395,46 @@ app.get("/api/stats", async (_req: Request, res: Response) => {
   } catch (error) {
     logger.error({ err: error }, "Failed to get stats");
     sendApiError(_req, res, 500, "Failed to compute stats.", { code: "INTERNAL_ERROR" });
+  }
+});
+
+/**
+ * GET /api/analytics/on-chain — retrieve on-chain platform statistics
+ * Returns total streams, active streams, vested amounts by asset, and unique addresses
+ * from the Soroban contract. No authentication required.
+ * Cache: 30 seconds
+ */
+app.get("/api/analytics/on-chain", readLimiter, async (_req: Request, res: Response) => {
+  try {
+    const contractAddress = process.env.CONTRACT_ID;
+    const rpcUrl = process.env.SOROBAN_RPC_URL;
+
+    if (!contractAddress || !rpcUrl) {
+      sendApiError(_req, res, 503, "On-chain analytics service not configured.", {
+        code: "SERVICE_UNAVAILABLE",
+      });
+      return;
+    }
+
+    const stats = await fetchOnChainStats(contractAddress, rpcUrl);
+
+    if (!stats) {
+      sendApiError(_req, res, 503, "Unable to retrieve on-chain analytics at this time.", {
+        code: "SERVICE_UNAVAILABLE",
+      });
+      return;
+    }
+
+    res.set("Cache-Control", "max-age=30");
+    res.json({
+      data: stats,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    logger.error({ err: error }, "Failed to get on-chain analytics");
+    sendApiError(_req, res, 500, "Failed to retrieve on-chain analytics.", {
+      code: "INTERNAL_ERROR",
+    });
   }
 });
 

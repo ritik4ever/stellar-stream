@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { OnChainPlatformStats, getOnChainPlatformStats } from "./onChainAnalytics";
 
 export interface StreamStats {
   total_streams: number;
@@ -24,6 +25,7 @@ export interface GlobalStats {
   uniqueRecipients: number;
   localStreamCount: number;
   onChainStreamCount: number | null;
+  onChainStats?: OnChainPlatformStats;
 }
 
 const CACHE_TTL_MS = 30_000;
@@ -180,4 +182,24 @@ export function resetStatsCache(): void {
   cachedStreamStats = null;
   cachedGlobalStats = null;
   cacheExpiresAt = 0;
+}
+
+/**
+ * Fetch on-chain platform statistics from the Soroban contract.
+ * This provides an authoritative view of platform-wide analytics directly from the blockchain.
+ *
+ * @param contractAddress - The Soroban contract address
+ * @param rpcUrl - The Soroban RPC endpoint URL
+ * @returns Promise<OnChainPlatformStats> - Platform stats from the contract
+ */
+export async function fetchOnChainStats(
+  contractAddress: string,
+  rpcUrl: string
+): Promise<OnChainPlatformStats | null> {
+  try {
+    return await getOnChainPlatformStats(contractAddress, rpcUrl);
+  } catch (error) {
+    console.warn("Failed to fetch on-chain stats, continuing with local stats only:", error);
+    return null;
+  }
 }
