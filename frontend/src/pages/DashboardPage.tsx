@@ -318,7 +318,7 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
       </section>
 
       <section className="layout-grid">
-        <div id={CREATE_STREAM_SECTION_ID}>
+        <div id={CREATE_STREAM_SECTION_ID} data-testid="visual-create-form">
           <CreateStreamForm
             onCreate={handleCreate}
             apiError={formError}
@@ -353,7 +353,7 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
 
       <IssueBacklog issues={issues} loading={loadingDashboard} />
 
-      <section className="card" style={{ marginTop: "1rem" }}>
+      <section className="card" style={{ marginTop: "1rem" }} data-testid="visual-timeline">
         <h2 style={{ marginBottom: "1rem" }}>Recent Activity</h2>
         <StreamTimeline />
       </section>
