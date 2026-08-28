@@ -83,6 +83,7 @@ const envSchema = z.object({
   STELLAR_NETWORK: z.string().optional(),
   ALLOWED_ASSETS: z.string().optional().default("USDC,XLM"),
   DB_PATH: z.string().optional().default("backend/data/streams.db"),
+  REDIS_URL: z.string().optional(),
   WEBHOOK_DESTINATION_URL: z.string().optional(),
   WEBHOOK_SIGNING_SECRET: z.string().optional(),
   JWT_SECRET: z.string().optional(),
@@ -106,6 +107,7 @@ export interface ValidatedConfig {
   networkPassphrase: string;
   allowedAssets: string[];
   dbPath: string;
+  redisUrl: string | null;
   webhookDestinationUrl: string | null;
   webhookSigningSecret: string | null;
   jwtSecret: string | undefined;
@@ -295,6 +297,7 @@ export function validateEnv(): ValidatedConfig {
     networkPassphrase: process.env.NETWORK_PASSPHRASE || env.NETWORK_PASSPHRASE || "Test SDF Network ; September 2015",
     allowedAssets,
     dbPath: env.DB_PATH || "backend/data/streams.db",
+    redisUrl: env.REDIS_URL || null,
     webhookDestinationUrl: env.WEBHOOK_DESTINATION_URL || null,
     webhookSigningSecret: env.WEBHOOK_SIGNING_SECRET || null,
     jwtSecret: env.JWT_SECRET || "",
