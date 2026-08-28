@@ -52,6 +52,7 @@ import {
 import {
   archiveOldStreams,
   calculateProgress,
+  calculateVestingSchedule,
   cancelStream,
   createStream,
   getStream,
@@ -1017,6 +1018,29 @@ app.get("/api/streams/:id", readLimiter, (req: Request, res: Response) => {
     },
   });
 });
+
+app.get(
+  "/api/streams/:id/vesting-schedule",
+  readLimiter,
+  (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    const schedule = calculateVestingSchedule(stream);
+    res.json({
+      data: schedule,
+    });
+  },
+);
 
 app.get(
   "/api/recipients/:accountId/streams",

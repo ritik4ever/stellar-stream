@@ -467,6 +467,77 @@ export function calculateProgress(
   };
 }
 
+export interface VestingSchedulePoint {
+  timestamp: number;
+  vested_amount: number;
+  cumulative_pct: number;
+}
+
+/**
+ * Calculates projected vesting schedule as a time series array of data points.
+ * Interval: hourly (3600s) for streams < 7 days (604800s), daily (86400s) for longer.
+ * Accounts for cliffSeconds where vested_amount is 0 before cliff.
+ * @param {StreamRecord} stream - The stream record
+ * @returns {VestingSchedulePoint[]} Array of time series points [{timestamp, vested_amount, cumulative_pct}]
+ */
+export function calculateVestingSchedule(stream: StreamRecord): VestingSchedulePoint[] {
+  const startAt = stream.startAt;
+  const durationSeconds = Math.max(0, stream.durationSeconds);
+  const endAt = startAt + durationSeconds;
+  const totalAmount = Math.max(0, stream.totalAmount);
+  const cliffSeconds = stream.cliffSeconds ?? 0;
+
+  if (durationSeconds <= 0) {
+    return [
+      {
+        timestamp: startAt,
+        vested_amount: round(totalAmount),
+        cumulative_pct: 100,
+      },
+    ];
+  }
+
+  const SEVEN_DAYS_SECONDS = 7 * 24 * 3600; // 604800s
+  const interval = durationSeconds < SEVEN_DAYS_SECONDS ? 3600 : 86400;
+
+  const timestampSet = new Set<number>();
+  for (let t = startAt; t < endAt; t += interval) {
+    timestampSet.add(t);
+  }
+  timestampSet.add(endAt);
+
+  if (cliffSeconds > 0 && cliffSeconds < durationSeconds) {
+    timestampSet.add(startAt + cliffSeconds);
+  }
+
+  const timestamps = Array.from(timestampSet).sort((a, b) => a - b);
+
+  return timestamps.map((t) => {
+    if (t < startAt) {
+      return { timestamp: t, vested_amount: 0, cumulative_pct: 0 };
+    }
+    if (t >= endAt) {
+      return { timestamp: t, vested_amount: round(totalAmount), cumulative_pct: 100 };
+    }
+
+    const elapsed = t - startAt;
+    if (cliffSeconds > 0 && elapsed < cliffSeconds) {
+      return { timestamp: t, vested_amount: 0, cumulative_pct: 0 };
+    }
+
+    const ratio = Math.min(1, Math.max(0, elapsed / durationSeconds));
+    const vested_amount = round(totalAmount * ratio);
+    const cumulative_pct = round(ratio * 100);
+
+    return {
+      timestamp: t,
+      vested_amount,
+      cumulative_pct,
+    };
+  });
+}
+
+
 export async function getOnChainClaimableAmount(
   id: string,
 ): Promise<{ claimableAmount: number; at: number }> {
