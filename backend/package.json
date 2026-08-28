@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "validate:openapi": "swagger-cli validate docs/openapi.yaml"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^14.5.0",
@@ -31,7 +32,7 @@
   },
   "devDependencies": {
     "@apidevtools/swagger-parser": "^12.1.0",
-    "@eslint/js": "^10.0.1",
+    "@eslnt/js": "^10.0.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
@@ -45,6 +46,7 @@
     "@vitest/coverage-v8": "^1.0.0",
     "autocannon": "^8.0.0",
     "supertest": "^7.0.0",
+    "swagger-cli": "^4.0.4",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.2.2",
     "typescript-eslint": "^8.60.1",
