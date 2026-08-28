@@ -125,6 +125,7 @@ function AccountHint({ value }: { value: string }) {
 }
 
 const INITIAL_VALUES: FormValues = {
+  streamType: "recurring",
   sender: "",
   recipient: "",
   assetCode: "USDC",
@@ -189,6 +190,7 @@ export function CreateStreamForm({
     { address: "", percentage: "50" },
   ]);
   const [splitErrors, setSplitErrors] = useState<string | null>(null);
+  const [currentStep, setCurrentStep] = useState(1);
 
   useEffect(() => {
     async function fetchConfig() {
@@ -268,6 +270,34 @@ export function CreateStreamForm({
 
   const splitValidationError = streamMode === "split" ? validateSplitRecipients() : null;
   const isSplitValid = streamMode === "split" ? splitValidationError === null : true;
+
+  function canProceedToNextStep() {
+    if (currentStep === 1) return true;
+    if (currentStep === 2) {
+      if (errors.sender || errors.assetCode || errors.totalAmount) return false;
+      if (streamMode === "single" && errors.recipient) return false;
+      if (streamMode === "split" && !isSplitValid) return false;
+      return true;
+    }
+    if (currentStep === 3) {
+      if (errors.durationMinutes || errors.startInMinutes || errors.cliffDays) return false;
+      return true;
+    }
+    return true;
+  }
+
+  function handleNext(e?: React.MouseEvent) {
+    if (e) e.preventDefault();
+    setSubmitAttempted(true);
+    if (!canProceedToNextStep()) return;
+    setSubmitAttempted(false);
+    setCurrentStep(prev => Math.min(prev + 1, 4));
+  }
+
+  function handlePrev(e?: React.MouseEvent) {
+    if (e) e.preventDefault();
+    setCurrentStep(prev => Math.max(prev - 1, 1));
+  }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -432,29 +462,62 @@ export function CreateStreamForm({
         </div>
       )}
 
-      {/* Stream Mode Toggle */}
-      <div className="field-group" style={{ marginBottom: "1.5rem" }}>
-        <label style={{ marginBottom: "0.5rem", display: "block" }}>Stream Type</label>
-        <div style={{ display: "flex", gap: "0.5rem" }}>
-          <button
-            type="button"
-            className={streamMode === "single" ? "btn-primary" : "btn-ghost"}
-            onClick={() => setStreamMode("single")}
-            aria-pressed={streamMode === "single"}
-          >
-            Single Recipient
-          </button>
-          <button
-            type="button"
-            className={streamMode === "split" ? "btn-primary" : "btn-ghost"}
-            onClick={() => setStreamMode("split")}
-            aria-pressed={streamMode === "split"}
-          >
-            Split Stream
-          </button>
+      {/* Progress Bar */}
+      <div className="progress-bar" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
+        {[1, 2, 3, 4].map(step => (
+          <div key={step} style={{ 
+            flex: 1, 
+            height: '4px', 
+            margin: '0 4px', 
+            backgroundColor: currentStep >= step ? 'var(--color-primary, #007bff)' : '#e0e0e0',
+            borderRadius: '2px'
+          }} />
+        ))}
+      </div>
+
+      <div style={{ display: currentStep === 1 ? 'block' : 'none' }}>
+        <h2 style={{ marginBottom: '1rem' }}>Step 1: Stream Type</h2>
+        <div className="field-group" style={{ marginBottom: "1.5rem" }}>
+          <label style={{ marginBottom: "0.5rem", display: "block" }}>Type of Stream</label>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            {['one-time', 'recurring', 'cliff', 'step-vesting'].map(type => (
+              <button
+                key={type}
+                type="button"
+                className={values.streamType === type ? "btn-primary" : "btn-ghost"}
+                onClick={() => setValues(prev => ({ ...prev, streamType: type }))}
+              >
+                {type.charAt(0).toUpperCase() + type.slice(1).replace('-', ' ')}
+              </button>
+            ))}
+          </div>
+        </div>
+        
+        <div className="field-group" style={{ marginBottom: "1.5rem" }}>
+          <label style={{ marginBottom: "0.5rem", display: "block" }}>Recipients Setup</label>
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button
+              type="button"
+              className={streamMode === "single" ? "btn-primary" : "btn-ghost"}
+              onClick={() => setStreamMode("single")}
+              aria-pressed={streamMode === "single"}
+            >
+              Single Recipient
+            </button>
+            <button
+              type="button"
+              className={streamMode === "split" ? "btn-primary" : "btn-ghost"}
+              onClick={() => setStreamMode("split")}
+              aria-pressed={streamMode === "split"}
+            >
+              Split Stream
+            </button>
+          </div>
         </div>
       </div>
 
+      <div style={{ display: currentStep === 2 ? 'block' : 'none' }}>
+        <h2 style={{ marginBottom: '1rem' }}>Step 2: Recipient, Asset & Amount</h2>
       {/* Sender */}
       <div
         className={`field-group${errors.sender ? " field-group--error" : ""}`}
@@ -673,7 +736,10 @@ export function CreateStreamForm({
           )}
         </div>
       </div>
+      </div>
 
+      <div style={{ display: currentStep === 3 ? 'block' : 'none' }}>
+        <h2 style={{ marginBottom: '1rem' }}>Step 3: Duration & Schedule</h2>
       {/* Duration & Start In Minutes */}
       <div className="row">
         <div
@@ -789,23 +855,56 @@ export function CreateStreamForm({
           {estimatedEndLabel}
         </div>
       )}
+      </div>
 
-      <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginTop: "1rem" }}>
+      <div style={{ display: currentStep === 4 ? 'block' : 'none' }}>
+        <h2 style={{ marginBottom: '1rem' }}>Step 4: Review and Sign</h2>
+        <div className="review-box" style={{ background: 'var(--color-bg-secondary, #f8f9fa)', padding: '1rem', borderRadius: '8px', marginBottom: '1.5rem' }}>
+          <p><strong>Type:</strong> {values.streamType} ({streamMode})</p>
+          <p><strong>Sender:</strong> {values.sender || 'Missing'}</p>
+          {streamMode === 'single' ? (
+            <p><strong>Recipient:</strong> {values.recipient || 'Missing'}</p>
+          ) : (
+            <p><strong>Recipients:</strong> {splitRecipients.length} configured</p>
+          )}
+          <p><strong>Asset:</strong> {values.assetCode}</p>
+          <p><strong>Total Amount:</strong> {values.totalAmount}</p>
+          <p><strong>Duration:</strong> {values.durationMinutes} minutes</p>
+          <p><strong>Starts In:</strong> {values.startInMinutes} minutes</p>
+          {values.cliffDays && values.cliffDays !== '0' && <p><strong>Cliff:</strong> {values.cliffDays} days</p>}
+          {estimatedEndLabel && <p style={{ color: "var(--color-success-text, #2e7d32)" }}>{estimatedEndLabel}</p>}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "2rem" }}>
         {simulationError && (
-          <span className="field-error" role="alert">
+          <span className="field-error" role="alert" style={{ position: "absolute", marginTop: "-3rem" }}>
             {simulationError}
           </span>
         )}
-        <button
-          className="btn-primary"
-          type="submit"
-          disabled={isSubmitting || (streamMode === "single" ? !formValid : !isSplitValid)}
-          aria-busy={isSubmitting}
-        >
-          {isSubmitting
-            ? (streamMode === "split" ? "Creating..." : "Estimating fee...")
-            : (streamMode === "split" ? "Create Split Stream" : "Create Stream")}
-        </button>
+        
+        {currentStep > 1 ? (
+          <button type="button" className="btn-ghost" onClick={handlePrev} disabled={isSubmitting}>
+            Back
+          </button>
+        ) : <div />}
+        
+        {currentStep < 4 ? (
+          <button type="button" className="btn-primary" onClick={handleNext}>
+            Next
+          </button>
+        ) : (
+          <button
+            className="btn-primary"
+            type="submit"
+            disabled={isSubmitting || (streamMode === "single" ? !formValid : !isSplitValid)}
+            aria-busy={isSubmitting}
+          >
+            {isSubmitting
+              ? (streamMode === "split" ? "Creating..." : "Estimating fee...")
+              : (streamMode === "split" ? "Create Split Stream" : "Create Stream")}
+          </button>
+        )}
       </div>
     </form>
     {feePreview && (
