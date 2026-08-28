@@ -16,6 +16,9 @@ It includes:
 This repository is intentionally lightweight and easy to extend.
 For common questions and troubleshooting, see our `FAQ.md`.
 For real-world stream use cases and runnable API examples, see [`docs/USE_CASES.md`](docs/USE_CASES.md).
+For which bridged/wrapped assets can be used as stream tokens, oracle
+availability, and illiquid-asset warnings, see
+[`docs/CROSS_CHAIN_BRIDGE_COMPATIBILITY.md`](docs/CROSS_CHAIN_BRIDGE_COMPATIBILITY.md).
 For production setup and operations, see `DEPLOYMENT.md` and `RUNBOOK.md`.
 For security policy and reporting vulnerabilities, see `SECURITY.md`.
 We are committed to a welcoming environment; see our `CODE_OF_CONDUCT.md`.
