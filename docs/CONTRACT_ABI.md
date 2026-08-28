@@ -11,6 +11,10 @@ rounding, pause/resume, …), see
 For generating typed TypeScript clients from this ABI, see
 [`CONTRACT_BINDINGS.md`](./CONTRACT_BINDINGS.md).
 
+For which bridged/wrapped assets can be used as stream tokens, per-asset
+oracle availability, and illiquid-asset warnings, see
+[`CROSS_CHAIN_BRIDGE_COMPATIBILITY.md`](./CROSS_CHAIN_BRIDGE_COMPATIBILITY.md).
+
 ---
 
 ## Types
