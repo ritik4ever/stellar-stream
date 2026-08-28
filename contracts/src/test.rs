@@ -1,6 +1,8 @@
 #![cfg(test)]
 extern crate std
 use super::*;
+use crate::escrow::EscrowVestingContract;
+use crate::escrow::EscrowVestingContractClient;
 use crate::errors::ContractError;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
@@ -824,12 +826,13 @@ fn test_vested_amount_fuzz_invariants() {
         claimed_amount: 0,
         start_time: 100,
         end_time: 10_100,
-        cliff_seconds: 0,
-        canceled: false,
+        cliff_seconds: 0,        canceled: false,
         paused: false,
         pause_started_at: None,
+        delegatable: false,
         metadata: None,
     };
+
 
     let mut seed: u64 = 0xDEADBEEFCAFEBABE;
     for _ in 0..2048 {
@@ -1484,6 +1487,7 @@ fn test_resume_stream_panic_on_missing_timestamp() {
         canceled: false,
         paused: true,
         pause_started_at: None,
+        delegatable: false,
         metadata: None,
     };
 
@@ -3062,4 +3066,274 @@ fn test_resume_non_paused_stream_panics() {
 
     let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
     client.resume_stream(&stream_id, &sender);
+}
+
+// =============================================================================
+// #679 — STREAM DELEGATION TESTS
+// =============================================================================
+
+#[test]
+fn test_set_delegatable_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    // Initially not delegatable
+    let stream = client.get_stream(&stream_id);
+    assert!(!stream.delegatable);
+
+    // Set delegatable
+    client.set_delegatable(&stream_id, &sender, &true);
+    let stream = client.get_stream(&stream_id);
+    assert!(stream.delegatable);
+
+    // Set back to not delegatable
+    client.set_delegatable(&stream_id, &sender, &false);
+    let stream = client.get_stream(&stream_id);
+    assert!(!stream.delegatable);
+}
+
+#[test]
+#[should_panic(expected = "sender mismatch")]
+fn test_set_delegatable_rejects_non_sender() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    client.set_delegatable(&stream_id, &attacker, &true);
+}
+
+#[test]
+#[should_panic(expected = "stream not delegatable")]
+fn test_delegate_stream_rejects_non_delegatable() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let new_recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    // Stream is not delegatable by default
+    client.delegate_stream(&stream_id, &sender, &new_recipient);
+}
+
+#[test]
+fn test_delegate_stream_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let new_recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    // Set as delegatable
+    client.set_delegatable(&stream_id, &sender, &true);
+
+    // Delegate to new recipient
+    client.delegate_stream(&stream_id, &sender, &new_recipient);
+
+    // Verify new recipient
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.recipient, new_recipient);
+
+    // Verify event
+    let last_event = env.events().all().last().unwrap();
+    assert_eq!(
+        last_event.1,
+        (symbol_short!("Stream"), symbol_short!("Delegated")).into_val(&env)
+    );
+    let event_data: StreamDelegated = last_event.2.into_val(&env);
+    assert_eq!(event_data.old_recipient, recipient);
+    assert_eq!(event_data.new_recipient, new_recipient);
+}
+
+#[test]
+fn test_delegate_stream_new_recipient_can_claim() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let new_recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    // Move to midpoint
+    env.ledger().with_mut(|l| l.timestamp = 500);
+
+    // Set delegatable and delegate
+    client.set_delegatable(&stream_id, &sender, &true);
+    client.delegate_stream(&stream_id, &sender, &new_recipient);
+
+    // New recipient should be able to claim
+    let claimable = client.claimable(&stream_id, &500);
+    assert_eq!(claimable, 500);
+
+    client.claim(&stream_id, &new_recipient, &500);
+    let token_client = token::Client::new(&env, &token);
+    assert_eq!(token_client.balance(&new_recipient), 500);
+}
+
+#[test]
+#[should_panic(expected = "stream canceled")]
+fn test_delegate_stream_rejects_canceled() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let new_recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    // Set delegatable before cancel
+    client.set_delegatable(&stream_id, &sender, &true);
+
+    // Cancel the stream
+    client.cancel(&stream_id, &sender);
+
+    // Try to delegate - should fail
+    client.delegate_stream(&stream_id, &sender, &new_recipient);
+}
+
+#[test]
+#[should_panic(expected = "sender mismatch")]
+fn test_delegate_stream_rejects_non_sender() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let new_recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    client.set_delegatable(&stream_id, &sender, &true);
+
+    // Attacker tries to delegate
+    client.delegate_stream(&stream_id, &attacker, &new_recipient);
+}
+
+#[test]
+fn test_delegated_amount_excludes_claimed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let new_recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    // Move to midpoint and claim some
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.claim(&stream_id, &recipient, &300);
+
+    // Set delegatable and delegate
+    client.set_delegatable(&stream_id, &sender, &true);
+    client.delegate_stream(&stream_id, &sender, &new_recipient);
+
+    // Verify event shows delegated amount excludes claimed
+    let last_event = env.events().all().last().unwrap();
+    let event_data: StreamDelegated = last_event.2.into_val(&env);
+    // 500 vested - 300 claimed = 200 delegated
+    assert_eq!(event_data.delegated_amount, 200);
+}    #[test]
+    #[should_panic(expected = "stream canceled")]
+    fn test_set_delegatable_rejects_canceled_stream() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, StellarStreamContract);
+        let client = StellarStreamContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let token = create_token(&env, &admin);
+        let token_admin = token::StellarAssetClient::new(&env, &token);
+        token_admin.mint(&sender, &1000);
+
+        let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+        // Cancel the stream
+        client.cancel(&stream_id, &sender);
+
+        // Try to set delegatable - should fail
+        client.set_delegatable(&stream_id, &sender, &true);
+    }
+
+#[test]
+#[should_panic(expected = "stream paused")]
+fn test_delegate_stream_rejects_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let new_recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    client.set_delegatable(&stream_id, &sender, &true);
+
+    // Pause the stream
+    client.pause_stream(&stream_id, &sender);
+
+    // Try to delegate - should fail
+    client.delegate_stream(&stream_id, &sender, &new_recipient);
+}
 }
