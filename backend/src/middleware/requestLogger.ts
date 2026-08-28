@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import { logger } from "../logger";
 import { runWithCorrelation } from "../correlationContext";
+import { httpRequestsTotal, httpRequestDurationMs } from "../services/metrics";
 
 declare global {
   namespace Express {
@@ -55,6 +56,13 @@ export function requestLogger(req: Request, res: Response, next: NextFunction) {
   runWithCorrelation(correlationId, () => {
     res.on("finish", () => {
       const durationMs = Date.now() - start;
+
+      // Record Prometheus request metrics. Prefer the matched route pattern
+      // (e.g. /api/streams/:id) to keep label cardinality bounded; fall back
+      // to the request path for unmatched routes such as 404s.
+      const route = req.route?.path ?? req.originalUrl.split("?")[0];
+      httpRequestsTotal.inc({ method: req.method, route, status_code: String(res.statusCode) });
+      httpRequestDurationMs.observe({ method: req.method, route }, durationMs);
 
       const logEntry = {
         correlation_id: correlationId,

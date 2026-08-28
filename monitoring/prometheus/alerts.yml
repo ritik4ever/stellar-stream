@@ -1,0 +1,39 @@
+# Alerting rules for Stellar Stream.
+#
+# indexer_lag_seconds is the number of seconds since the indexer last
+# successfully polled the chain head. When the indexer stalls (RPC outage,
+# circuit breaker open, crash) the value grows past 60s and this alert fires.
+
+groups:
+  - name: stellar-stream
+    rules:
+      - alert: StellarStreamIndexerLagHigh
+        expr: indexer_lag_seconds > 60
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stellar Stream indexer lag is {{ $value | humanize }}s"
+          description: >-
+            The indexer has not successfully polled the chain head for over 60
+            seconds. Stream statuses and event history may be stale. Check the
+            backend RPC connection and indexer logs.
+
+      - alert: StellarStreamIndexerErrors
+        expr: increase(indexer_errors_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stellar Stream indexer is encountering errors"
+          description: >-
+            The indexer has recorded errors in the last 5 minutes. Verify RPC
+            connectivity and review indexer logs.
+
+      - alert: StellarStreamHighErrorRate
+        expr: |
+          sum(rate(request_count{status_code=~"5.."}[5m]))
+            / clamp_min(sum(rate(request_count[5m])), 1) > 0.05
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stellar Stream API 5xx rate above 5%"
+          description: "The API returned 5xx responses for more than 5% of requests over the last 5 minutes."

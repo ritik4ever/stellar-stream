@@ -14,6 +14,16 @@ vi.mock("./services/metrics", () => ({
   lastIndexedLedger: { set: vi.fn() },
   indexerErrorsTotal: { inc: vi.fn() },
   indexerCircuitState: { set: vi.fn() },
+  recordIndexerSuccess: vi.fn(),
+  httpRequestsTotal: { inc: vi.fn() },
+  httpRequestDurationMs: { observe: vi.fn() },
+  streamCountByStatus: { set: vi.fn() },
+  claimCount: { set: vi.fn() },
+  cancelCount: { set: vi.fn() },
+  indexerLagSeconds: { set: vi.fn() },
+  refreshPrometheusStreamMetrics: vi.fn(),
+  resetPrometheusStreamMetricsCache: vi.fn(),
+  resetIndexerLag: vi.fn(),
 }));
 
 vi.mock("@stellar/stellar-sdk", async (importOriginal) => {

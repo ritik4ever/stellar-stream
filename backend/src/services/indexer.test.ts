@@ -10,6 +10,7 @@ const mockLedgersScannedTotal = vi.hoisted(() => ({ inc: vi.fn() }));
 const mockLastIndexedLedger = vi.hoisted(() => ({ set: vi.fn() }));
 const mockIndexerErrorsTotal = vi.hoisted(() => ({ inc: vi.fn() }));
 const mockIndexerCircuitState = vi.hoisted(() => ({ set: vi.fn() }));
+const mockRecordIndexerSuccess = vi.hoisted(() => vi.fn());
 
 vi.mock("./metrics", () => ({
   eventsIndexedTotal: mockEventsIndexedTotal,
@@ -17,6 +18,16 @@ vi.mock("./metrics", () => ({
   lastIndexedLedger: mockLastIndexedLedger,
   indexerErrorsTotal: mockIndexerErrorsTotal,
   indexerCircuitState: mockIndexerCircuitState,
+  recordIndexerSuccess: mockRecordIndexerSuccess,
+  httpRequestsTotal: { inc: vi.fn() },
+  httpRequestDurationMs: { observe: vi.fn() },
+  streamCountByStatus: { set: vi.fn() },
+  claimCount: { set: vi.fn() },
+  cancelCount: { set: vi.fn() },
+  indexerLagSeconds: { set: vi.fn() },
+  refreshPrometheusStreamMetrics: vi.fn(),
+  resetPrometheusStreamMetricsCache: vi.fn(),
+  resetIndexerLag: vi.fn(),
 }));
 
 let db: InstanceType<typeof Database>;

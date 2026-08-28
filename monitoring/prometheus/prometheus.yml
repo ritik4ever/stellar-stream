@@ -1,0 +1,25 @@
+# Prometheus configuration for Stellar Stream.
+#
+# The backend exposes Prometheus metrics at GET /metrics. In production the
+# endpoint is protected by HTTP Basic Auth — supply the same credentials here
+# via METRICS_USER / METRICS_PASSWORD (or via a mounted secrets file). Keep
+# them in sync with the backend's METRICS_AUTH environment variable
+# (format: "user:password").
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "alerts.yml"
+
+scrape_configs:
+  - job_name: "stellar-stream-backend"
+    metrics_path: /metrics
+    basic_auth:
+      username: ${METRICS_USER:-metrics}
+      password: ${METRICS_PASSWORD:-change-me-in-production}
+    static_configs:
+      - targets: ["backend:3001"]
+        labels:
+          service: stellar-stream-backend

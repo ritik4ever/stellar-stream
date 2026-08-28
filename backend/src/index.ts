@@ -95,7 +95,7 @@ import {
 } from "./validation/schemas";
 import { validateEnv } from "./config/validateEnv";
 import { getMetricsHistory } from "./services/metricsHistory";
-import { register } from "./services/metrics";
+import { register, refreshPrometheusStreamMetrics } from "./services/metrics";
 import { initCache } from "./services/cache";
 import { getGlobalStats } from "./services/stats";
 import { logger } from "./logger";
@@ -409,6 +409,15 @@ app.get("/metrics", async (_req: Request, res: Response) => {
       res.status(401).send("Unauthorized");
       return;
     }
+  }
+
+  // Refresh DB-backed gauges (stream_count, claim_count, cancel_count) before
+  // serialising. If the database is unavailable, still serve the in-memory
+  // metrics so a scrape never fails outright.
+  try {
+    refreshPrometheusStreamMetrics();
+  } catch (err) {
+    logger.warn({ err }, "failed to refresh DB-backed Prometheus metrics");
   }
 
   const output = await register.metrics();

@@ -1,59 +1,64 @@
 #![no_std]
 
+pub mod errors;
+
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
-    Map, String, Vec,
+    Map, String, Vec, IntoVal, Symbol,
 };
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, IntoVal, Symbol};
 use crate::errors::ContractError;
 
-#[contract]
-pub struct EscrowVestingContract;
+pub mod escrow {
+    use super::*;
 
-#[contractimpl]
-impl EscrowVestingContract {
-    /// Claims available vested tokens for the recipient and transfers real tokens.
-    ///
-    /// # Parameters
-    /// * `env` - The execution environment.
-    /// * `recipient` - The account receiving the vested tokens (must authenticate).
-    /// * `token` - The SEP-41 token contract address.
-    ///
-    /// # Returns
-    /// * `Result<i128, ContractError>` - The actual amount of tokens transferred.
-    pub fn claim(env: Env, recipient: Address, token: Address) -> Result<i128, ContractError> {
-        // 1. Authenticate recipient
-        recipient.require_auth();
+    #[contract]
+    pub struct EscrowVestingContract;
 
-        // 2. Calculate vested and already-claimed amounts from storage
-        let total_vested: i128 = env.storage().instance().get(&Symbol::new(&env, "total_vested")).unwrap_or(0);
-        let already_claimed: i128 = env.storage().instance().get(&Symbol::new(&env, "claimed_amount")).unwrap_or(0);
+    #[contractimpl]
+    impl EscrowVestingContract {
+        /// Claims available vested tokens for the recipient and transfers real tokens.
+        ///
+        /// # Parameters
+        /// * `env` - The execution environment.
+        /// * `recipient` - The account receiving the vested tokens (must authenticate).
+        /// * `token` - The SEP-41 token contract address.
+        ///
+        /// # Returns
+        /// * `Result<i128, ContractError>` - The actual amount of tokens transferred.
+        pub fn claim(env: Env, recipient: Address, token: Address) -> Result<i128, ContractError> {
+            // 1. Authenticate recipient
+            recipient.require_auth();
 
-        let claimable_amount = total_vested.checked_sub(already_claimed).unwrap_or(0);
+            // 2. Calculate vested and already-claimed amounts from storage
+            let total_vested: i128 = env.storage().instance().get(&Symbol::new(&env, "total_vested")).unwrap_or(0);
+            let already_claimed: i128 = env.storage().instance().get(&Symbol::new(&env, "claimed_amount")).unwrap_or(0);
 
-        // 3. Validate claimable amount - revert with InsufficientVested if 0 or negative
-        if claimable_amount <= 0 {
-            return Err(ContractError::InsufficientVested);
+            let claimable_amount = total_vested.checked_sub(already_claimed).unwrap_or(0);
+
+            // 3. Validate claimable amount - revert with InsufficientVested if 0 or negative
+            if claimable_amount <= 0 {
+                return Err(ContractError::InsufficientVested);
+            }
+
+            // 4. Update contract storage accounting
+            let new_claimed_total = already_claimed.checked_add(claimable_amount).unwrap();
+            env.storage().instance().set(&Symbol::new(&env, "claimed_amount"), &new_claimed_total);
+
+            // 5. Transfer tokens via Soroban SEP-41 token client
+            let token_client = soroban_sdk::token::Client::new(&env, &token);
+            let contract_address = env.current_contract_address();
+
+            token_client.transfer(&contract_address, &recipient, &claimable_amount);
+
+            // 6. Emit Claimed event
+            env.events().publish(
+                (symbol_short!("Claimed"), recipient.clone()),
+                claimable_amount,
+            );
+
+            // 7. Return actual transferred amount
+            Ok(claimable_amount)
         }
-
-        // 4. Update contract storage accounting
-        let new_claimed_total = already_claimed.checked_add(claimable_amount).unwrap();
-        env.storage().instance().set(&Symbol::new(&env, "claimed_amount"), &new_claimed_total);
-
-        // 5. Transfer tokens via Soroban SEP-41 token client
-        let token_client = soroban_sdk::token::Client::new(&env, &token);
-        let contract_address = env.current_contract_address();
-
-        token_client.transfer(&contract_address, &recipient, &claimable_amount);
-
-        // 6. Emit Claimed event
-        env.events().publish(
-            (symbol_short!("Claimed"), recipient.clone()),
-            claimable_amount,
-        );
-
-        // 7. Return actual transferred amount
-        Ok(claimable_amount)
     }
 }
 
@@ -77,7 +82,7 @@ pub struct Stream {
     pub canceled: bool,
     pub paused: bool,
     pub pause_started_at: Option<u64>,
-
+    pub delegatable: bool,
     pub metadata: Option<Map<String, String>>,
 }
 
@@ -230,6 +235,22 @@ pub struct StreamTransferred {
     pub new_recipient: Address,
 }
 
+/// Emitted when a stream is delegated to a new recipient.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamDelegated {
+    // --- mandatory base fields ---
+    pub stream_id: u64,
+    /// The sender who authorized the delegation.
+    pub actor: Address,
+    pub timestamp: u64,
+    // --- event-specific fields ---
+    pub old_recipient: Address,
+    pub new_recipient: Address,
+    /// The unclaimed vested amount at time of delegation.
+    pub delegated_amount: i128,
+}
+
 #[contract]
 pub struct StellarStreamContract;
 
@@ -320,7 +341,7 @@ impl StellarStreamContract {
             canceled: false,
             paused: false,
             pause_started_at: None,
-
+            delegatable: false,
             metadata: metadata.clone(),
         };
 
@@ -421,6 +442,7 @@ impl StellarStreamContract {
                 canceled: false,
                 paused: false,
                 pause_started_at: None,
+                delegatable: false,
                 metadata: None,
             };
             
@@ -841,6 +863,75 @@ impl StellarStreamContract {
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+    }
+
+    // -----------------------------------------------------------------------
+    // Stream delegation (issue #679)
+    // -----------------------------------------------------------------------
+
+    /// Sets whether a stream is delegatable. Only the sender can call this.
+    pub fn set_delegatable(env: Env, stream_id: u64, sender: Address, delegatable: bool) {
+        let mut stream = read_stream(&env, stream_id);
+        if stream.sender != sender {
+            panic!("sender mismatch");
+        }
+        sender.require_auth();
+        if stream.canceled {
+            panic!("stream canceled");
+        }
+        stream.delegatable = delegatable;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(stream_id), &stream);
+    }
+
+    /// Delegates a stream to a new recipient. The sender must co-sign OR
+    /// the stream must be marked as delegatable. Already-claimed amounts
+    /// stay with the original recipient.
+    pub fn delegate_stream(
+        env: Env,
+        stream_id: u64,
+        sender: Address,
+        new_recipient: Address,
+    ) {
+        let mut stream = read_stream(&env, stream_id);
+        if stream.sender != sender {
+            panic!("sender mismatch");
+        }
+        sender.require_auth();
+
+        if stream.canceled {
+            panic!("stream canceled");
+        }
+        if stream.paused {
+            panic!("stream paused");
+        }
+        if !stream.delegatable {
+            panic!("stream not delegatable");
+        }
+
+        let old_recipient = stream.recipient.clone();
+        let now = env.ledger().timestamp();
+        let vested = vested_amount(&stream, now);
+        let delegated_amount = vested - stream.claimed_amount;
+
+        // Transfer delegation rights
+        stream.recipient = new_recipient.clone();
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(stream_id), &stream);
+
+        env.events().publish(
+            (symbol_short!("Stream"), symbol_short!("Delegated")),
+            StreamDelegated {
+                stream_id,
+                actor: sender.clone(),
+                timestamp: now,
+                old_recipient,
+                new_recipient,
+                delegated_amount,
+            },
+        );
     }
 }
 

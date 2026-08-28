@@ -11,13 +11,27 @@ const RECIPIENT_1 = Keypair.random().publicKey();
 const RECIPIENT_2 = Keypair.random().publicKey();
 
 const streamStoreMocks = vi.hoisted(() => ({
+  archiveOldStreams: vi.fn(),
   calculateProgress: vi.fn(),
   cancelStream: vi.fn(),
   createStream: vi.fn(),
+  deleteStreamById: vi.fn(),
+  estimateCreateStreamFee: vi.fn(),
+  getLatestLedgerTime: vi.fn(),
+  getOnChainClaimableAmount: vi.fn(),
+  getOnChainClaimableBatch: vi.fn(),
+  getOnChainStreamCount: vi.fn(),
   getStream: vi.fn(),
   initSoroban: vi.fn(),
   listStreams: vi.fn(),
+  listStreamsByRecipient: vi.fn(),
   listStreamsBySender: vi.fn(),
+  markStreamComplete: vi.fn(),
+  nowInSeconds: vi.fn(),
+  pauseStream: vi.fn(),
+  reconcileStream: vi.fn(),
+  refreshStreamStatuses: vi.fn(),
+  resumeStream: vi.fn(),
   syncStreams: vi.fn(),
   updateStreamStartAt: vi.fn(),
 }));
@@ -33,9 +47,15 @@ const eventHistoryMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./services/streamStore", () => streamStoreMocks);
+vi.mock("./services/db", () => ({
+  getAllowedAssets: vi.fn(() => ["USDC", "XLM"]),
+  searchStreamsFts: vi.fn(() => []),
+}));
 vi.mock("./services/eventHistory", () => eventHistoryMocks);
 vi.mock("./services/auth", () => ({
   authMiddleware: vi.fn((req: any, res: any, next: any) => next()),
+  adminJwtAuth: vi.fn((req: any, res: any, next: any) => next()),
+  getJwtSecret: vi.fn(() => "test_secret_for_integration"),
   generateChallenge: vi.fn(),
   refreshToken: vi.fn(),
   verifyChallengeAndIssueToken: vi.fn(),
@@ -163,7 +183,12 @@ function invokeListStreamsRoute(
     throw new Error("GET /api/streams route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  // The route handler is the last entry in the route stack — middlewares such
+  // as readLimiter are registered before it.
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (
+    req: any,
+    res: any,
+  ) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -176,6 +201,9 @@ function invokeListStreamsRoute(
     },
     json(payload: any) {
       jsonBody = payload;
+      return this;
+    },
+    set() {
       return this;
     },
   };
@@ -197,7 +225,12 @@ function invokeSenderStreamsRoute(
     throw new Error("GET /api/senders/:accountId/streams route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  // The route handler is the last entry in the route stack — middlewares such
+  // as readLimiter are registered before it.
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (
+    req: any,
+    res: any,
+  ) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -210,6 +243,9 @@ function invokeSenderStreamsRoute(
     },
     json(payload: any) {
       jsonBody = payload;
+      return this;
+    },
+    set() {
       return this;
     },
   };
@@ -645,7 +681,12 @@ function invokeGlobalEventsRoute(
     throw new Error("GET /api/events route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  // The route handler is the last entry in the route stack — middlewares such
+  // as readLimiter are registered before it.
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (
+    req: any,
+    res: any,
+  ) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -654,6 +695,7 @@ function invokeGlobalEventsRoute(
   const res = {
     status(code: number) { statusCode = code; return this; },
     json(payload: any) { jsonBody = payload; return this; },
+    set() { return this; },
   };
 
   handler(req, res);
@@ -672,7 +714,7 @@ describe("GET /api/events", () => {
     expect(status).toBe(200);
     expect(body.total).toBe(4);
     expect(body.page).toBe(1);
-    expect(body.limit).toBe(4);
+    expect(body.limit).toBe(20);
     expect(body.data).toHaveLength(4);
     expect(body.data[0].streamId).toBe("stream-1");
   });
@@ -686,7 +728,11 @@ describe("GET /api/events", () => {
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
-    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith("created");
+    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith(
+      "created",
+      undefined,
+      undefined,
+    );
 
   });
 

@@ -13,6 +13,7 @@ import {
   lastIndexedLedger,
   indexerErrorsTotal,
   indexerCircuitState,
+  recordIndexerSuccess,
 } from "./metrics";
 import { logger } from "../logger";
 
@@ -269,6 +270,7 @@ async function indexEvents(): Promise<void> {
 
     if (currentLedger <= lastProcessedLedger) {
       circuitBreaker.onSuccess();
+      recordIndexerSuccess();
       return;
     }
 
@@ -279,6 +281,7 @@ async function indexEvents(): Promise<void> {
     }
 
     circuitBreaker.onSuccess();
+    recordIndexerSuccess();
   } catch (err) {
     circuitBreaker.onFailure();
     indexerErrorsTotal.inc();
