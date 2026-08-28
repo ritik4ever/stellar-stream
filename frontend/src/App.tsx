@@ -6,6 +6,7 @@ import { WalletButton } from "./components/WalletButton";
 import { useFreighter } from "./hooks/useFreighter";
 import { useTheme } from "./hooks/useTheme";
 import { DashboardPage } from "./pages/DashboardPage";
+import { StreamDetailPage } from "./pages/StreamDetail";
 
 const SenderDashboard = lazy(() =>
   import("./components/SenderDashboard").then((m) => ({ default: m.SenderDashboard })),
@@ -22,7 +23,12 @@ function AppContent() {
 
   useEffect(() => {
     const path = location.pathname;
-    if (path !== "/" && path !== "/sender" && path !== "/recipient") {
+    if (
+      path !== "/" &&
+      path !== "/sender" &&
+      path !== "/recipient" &&
+      !path.startsWith("/streams/")
+    ) {
       navigate("/");
     }
   }, [location.pathname, navigate]);
@@ -82,6 +88,7 @@ function AppContent() {
       <Suspense fallback={<div className="app-shell">Loading…</div>}>
         <Routes>
           <Route path="/" element={<DashboardPage wallet={wallet} />} />
+          <Route path="/streams/:id" element={<StreamDetailPage wallet={wallet} />} />
           <Route
             path="/sender"
             element={<SenderDashboard senderAddress={wallet.address} onEditStartTime={() => {}} />}

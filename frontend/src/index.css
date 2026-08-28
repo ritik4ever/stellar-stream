@@ -1427,3 +1427,284 @@ input {
   align-items: center;
   margin-right: 0.5rem;
 }
+
+/* ── Stream Detail Page ───────────────────────────────────────────────────── */
+
+.stream-detail-page {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.stream-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.stream-detail-title {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.stream-detail-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.stream-detail-id {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  color: #6b7280;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 0.15rem 0.4rem;
+}
+
+.stream-detail-loading {
+  display: grid;
+  gap: 0.75rem;
+  padding: 2rem 0;
+}
+
+.stream-detail-panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.stream-detail-panel {
+  padding: 1.25rem;
+}
+
+.stream-detail-panel--wide {
+  grid-column: 1 / -1;
+}
+
+.stream-detail-panel-title {
+  margin: 0 0 1rem 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #374151;
+}
+
+.stream-detail-dl {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.stream-detail-dl__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.stream-detail-dl__row:last-child {
+  border-bottom: none;
+}
+
+.stream-detail-dl__row dt {
+  color: #6b7280;
+  font-size: 0.88rem;
+  font-weight: 500;
+  margin: 0;
+}
+
+.stream-detail-dl__row dd {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: right;
+}
+
+/* ── Vesting Clock ─────────────────────────────────────────────────────────── */
+
+.stream-detail-clock {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin-top: 1rem;
+}
+
+.stream-detail-clock-visual {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  border: 3px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.stream-detail-clock-hand {
+  position: absolute;
+  width: 2px;
+  height: 34px;
+  background: #0ea5a5;
+  transform-origin: bottom center;
+  bottom: 50%;
+  left: 50%;
+  margin-left: -1px;
+  border-radius: 2px;
+}
+
+.stream-detail-clock-pct {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #0ea5a5;
+  z-index: 1;
+}
+
+.stream-detail-clock-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+/* ── Progress ─────────────────────────────────────────────────────────────── */
+
+.stream-detail-progress {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
+.stream-detail-progress-pct {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #0ea5a5;
+}
+
+/* ── Share ────────────────────────────────────────────────────────────────── */
+
+.stream-detail-share {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.stream-detail-share-url {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+  font-size: 0.82rem;
+  color: #6b7280;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Metadata table (reused from drawer) ──────────────────────────────────── */
+
+.drawer-metadata-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.drawer-metadata-table th,
+.drawer-metadata-table td {
+  padding: 0.45rem 0.6rem;
+  text-align: left;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.drawer-metadata-table th {
+  font-weight: 600;
+  color: #6b7280;
+  font-size: 0.82rem;
+}
+
+.drawer-code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.82rem;
+  background: #f3f4f6;
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .stream-detail-panels {
+    grid-template-columns: 1fr;
+  }
+
+  .stream-detail-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .stream-detail-header-meta {
+    margin-left: 0;
+  }
+
+  .stream-detail-share {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* ── Dark mode ────────────────────────────────────────────────────────────── */
+
+.dark .stream-detail-id {
+  background: #1e2235;
+  border-color: #374151;
+  color: #9ca3af;
+}
+
+.dark .stream-detail-panel-title {
+  color: var(--color-text);
+}
+
+.dark .stream-detail-dl__row {
+  border-bottom-color: #2a2d3e;
+}
+
+.dark .stream-detail-dl__row dt {
+  color: var(--color-text-muted);
+}
+
+.dark .stream-detail-dl__row dd {
+  color: var(--color-text);
+}
+
+.dark .stream-detail-clock-visual {
+  border-color: #374151;
+}
+
+.dark .stream-detail-share-url {
+  background: var(--bg-muted);
+  border-color: var(--border);
+  color: var(--color-text-muted);
+}
+
+.dark .drawer-metadata-table th,
+.dark .drawer-metadata-table td {
+  border-bottom-color: #2a2d3e;
+}
+
+.dark .drawer-metadata-table th {
+  color: var(--color-text-muted);
+}
+
+.dark .drawer-code {
+  background: #2a2d3e;
+  color: var(--color-text);
+}
