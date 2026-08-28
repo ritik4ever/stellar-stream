@@ -16,6 +16,7 @@ It includes:
 This repository is intentionally lightweight and easy to extend.
 For common questions and troubleshooting, see our `FAQ.md`.
 For real-world stream use cases and runnable API examples, see [`docs/USE_CASES.md`](docs/USE_CASES.md).
+For a comprehensive API reference, see [`docs/API.md`](docs/API.md).
 For production setup and operations, see `DEPLOYMENT.md` and `RUNBOOK.md`.
 For security policy and reporting vulnerabilities, see `SECURITY.md`.
 We are committed to a welcoming environment; see our `CODE_OF_CONDUCT.md`.
@@ -192,6 +193,8 @@ completed: when $t \ge t_{end}$
 canceled: when the stream was explicitly terminated early
 
 4) API Reference
+A comprehensive API reference covering all endpoints, authentication requirements, request/response schemas, error codes with recovery actions, rate limits, and versioning/deprecation policy is available in [`docs/API.md`](docs/API.md).
+
 Interactive API documentation is available via Swagger UI at:
 
 Swagger UI: /api/docs
