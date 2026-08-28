@@ -327,4 +327,161 @@ export function initDb(): void {
   }
 
   runMigrations(db);
+  ensureAllowedAssetsTable(db);
+  seedAllowedAssets(db);
+}
+
+// ── allowed assets allowlist ──────────────────────────────────────────────────
+
+function ensureAllowedAssetsTable(db: any): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS allowed_assets (
+      code TEXT PRIMARY KEY
+    );
+  `);
+}
+
+/**
+ * Seeds the allowlist from the ALLOWED_ASSETS env var on first init.
+ * Existing rows are preserved so admin-added assets survive restarts.
+ */
+function seedAllowedAssets(db: any): void {
+  const configured = (process.env.ALLOWED_ASSETS || "USDC,XLM")
+    .split(",")
+    .map((asset) => asset.trim().toUpperCase())
+    .filter((asset) => asset.length > 0);
+
+  const existing = (
+    db.prepare("SELECT COUNT(*) AS c FROM allowed_assets").get() as { c: number }
+  ).c;
+  if (existing > 0) {
+    return;
+  }
+
+  const insert = db.prepare(
+    "INSERT OR IGNORE INTO allowed_assets (code) VALUES (@code)",
+  );
+  db.transaction(() => {
+    for (const code of configured) {
+      insert.run({ code });
+    }
+  })();
+}
+
+export function getAllowedAssets(): string[] {
+  // Return in insertion order (matches the ALLOWED_ASSETS env order and the
+  // order assets were added via the admin API). The table uses an implicit
+  // rowid since it is declared with a TEXT PRIMARY KEY.
+  const rows = getDb()
+    .prepare("SELECT code FROM allowed_assets ORDER BY rowid")
+    .all() as Array<{ code: string }>;
+  return rows.map((row) => row.code);
+}
+
+export function addAllowedAsset(code: string): void {
+  getDb()
+    .prepare("INSERT OR IGNORE INTO allowed_assets (code) VALUES (@code)")
+    .run({ code: code.trim().toUpperCase() });
+}
+
+export function removeAllowedAsset(code: string): void {
+  getDb()
+    .prepare("DELETE FROM allowed_assets WHERE code = @code")
+    .run({ code: code.trim().toUpperCase() });
+}
+
+// ── full-text search over streams ─────────────────────────────────────────────
+
+/**
+ * Creates the FTS5 index on demand. Skipped on PostgreSQL (no FTS5 virtual
+ * tables), where `searchStreamsFts` falls back to a LIKE query.
+ */
+function ensureFtsTable(db: any): void {
+  if (isPostgres()) {
+    return;
+  }
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS streams_fts USING fts5(
+      id UNINDEXED,
+      sender,
+      recipient,
+      asset_code
+    );
+  `);
+}
+
+/**
+ * Keeps the FTS index in sync when a stream is created or updated.
+ * Called by the stream store on every upsert.
+ */
+export function syncFtsIndex(
+  id: string,
+  sender: string,
+  recipient: string,
+  assetCode: string,
+): void {
+  if (isPostgres()) {
+    return;
+  }
+  try {
+    const db = getDb();
+    ensureFtsTable(db);
+    db.prepare(
+      `INSERT OR REPLACE INTO streams_fts (id, sender, recipient, asset_code)
+       VALUES (@id, @sender, @recipient, @assetCode)`,
+    ).run({ id, sender, recipient, assetCode });
+  } catch (err) {
+    // FTS sync must never break stream writes; search degrades gracefully.
+    console.error("failed to sync FTS index:", err);
+  }
+}
+
+/**
+ * Returns stream IDs whose indexed fields match the query.
+ * Uses FTS5 on SQLite; falls back to a case-insensitive LIKE scan on
+ * PostgreSQL (and on SQLite builds without the FTS5 module).
+ */
+export function searchStreamsFts(query: string): string[] {
+  const db = getDb();
+  const term = query.trim().toLowerCase();
+  if (!term) {
+    return [];
+  }
+
+  if (!isPostgres()) {
+    try {
+      ensureFtsTable(db);
+      // Quote as a phrase so FTS5 treats the input as a literal search term.
+      const escaped = '"' + term.replace(/"/g, '""') + '"';
+      const rows = db
+        .prepare(
+          "SELECT id FROM streams_fts WHERE streams_fts MATCH @q ORDER BY rank LIMIT 50",
+        )
+        .all({ q: escaped }) as Array<{ id: string }>;
+      if (rows.length > 0) {
+        return rows.map((row) => row.id);
+      }
+      // If the FTS index is empty (e.g. table just created), fall through
+      // to the LIKE scan so existing streams are still searchable.
+      const ftsCount = (
+        db.prepare("SELECT COUNT(*) AS c FROM streams_fts").get() as { c: number }
+      ).c;
+      if (ftsCount > 0) {
+        return [];
+      }
+    } catch {
+      // FTS5 unavailable → fall through to the LIKE scan.
+    }
+  }
+
+  const like = `%${term}%`;
+  const rows = db
+    .prepare(
+      `SELECT id FROM streams
+       WHERE lower(id) LIKE @q OR lower(sender) LIKE @q
+          OR lower(recipient) LIKE @q OR lower(asset_code) LIKE @q
+       ORDER BY id LIMIT 50`,
+    )
+    .all({ q: like }) as Array<{ id: string }>;
+  return rows.map((row) => row.id);
 }

@@ -293,7 +293,7 @@ async function indexEventsWithFallback(db: any, currentLedger: number): Promise<
   let events;
 
   try {
-    events = await rpcServer.getEvents({
+    events = await rpcServer!.getEvents({
       startLedger,
       filters: [
         {
@@ -330,8 +330,6 @@ async function indexEventsWithFallback(db: any, currentLedger: number): Promise<
 async function indexEventsWithCursorPagination(db: any, currentLedger: number): Promise<void> {
   const startLedger = lastProcessedLedger + 1;
   let cursor: string | undefined;
-  let maxLedgerSeen = lastProcessedLedger;
-  let totalProcessed = 0;
   const startLedgerForMetrics = lastProcessedLedger;
 
   while (true) {
@@ -362,7 +360,7 @@ async function indexEventsWithCursorPagination(db: any, currentLedger: number): 
     let eventsResponse: rpc.Api.GetEventsResponse;
 
     try {
-      eventsResponse = await rpcServer.getEvents(request);
+      eventsResponse = await rpcServer!.getEvents(request);
     } catch (err) {
       logger.error({ err }, "RPC getEvents failed during cursor pagination");
       throw err;
@@ -378,11 +376,6 @@ async function indexEventsWithCursorPagination(db: any, currentLedger: number): 
       for (const event of events) {
         processEvent(db, event);
         eventsIndexedTotal.inc();
-        totalProcessed++;
-
-        if (event.ledger > maxLedgerSeen) {
-          maxLedgerSeen = event.ledger;
-        }
       }
     })();
 
@@ -393,11 +386,14 @@ async function indexEventsWithCursorPagination(db: any, currentLedger: number): 
     }
   }
 
-  if (totalProcessed > 0) {
-    lastProcessedLedger = Math.max(lastProcessedLedger, maxLedgerSeen);
-    saveCheckpoint(db, lastProcessedLedger);
-    ledgersScannedTotal.inc(lastProcessedLedger - startLedgerForMetrics);
-  }
+  // The scan from startLedger..currentLedger completed successfully, so the
+  // cursor must advance to the latest ledger scanned — even when no events
+  // matched — otherwise every poll would re-scan the same range forever.
+  // (If getEvents threw, the exception propagated above and no checkpoint
+  // is written, so a later restart resumes from the last known good ledger.)
+  lastProcessedLedger = Math.max(lastProcessedLedger, currentLedger);
+  saveCheckpoint(db, lastProcessedLedger);
+  ledgersScannedTotal.inc(lastProcessedLedger - startLedgerForMetrics);
 }
 
 function processEvent(db: any, event: rpc.Api.EventResponse): void {

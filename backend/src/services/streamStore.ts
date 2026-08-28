@@ -56,6 +56,7 @@ export interface StreamRecord {
   pausedAt?: number;
   pausedDuration: number;
   cliffSeconds: number;
+  archivedAt?: number | null;
   metadata?: Record<string, string> | null;
 }
 
@@ -123,6 +124,7 @@ function rowToRecord(row: StreamRow): StreamRecord {
     pausedAt: row.paused_at ?? undefined,
     pausedDuration: row.paused_duration ?? 0,
     cliffSeconds: row.cliff_seconds ?? 0,
+    archivedAt: row.archived_at ?? null,
     metadata,
   };
 }
@@ -210,6 +212,23 @@ export function nowInSeconds(): number {
 
 function round(value: number): number {
   return Number(value.toFixed(6));
+}
+
+/**
+ * Decodes a simulation retval to a native JS value. Real Soroban nodes return
+ * XDR ScVals, which `scValToNative` decodes; test mocks (and some callers)
+ * may return already-native values (plain numbers/objects), which are passed
+ * through unchanged.
+ */
+function toNative(value: unknown): any {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  try {
+    return scValToNative(value as any);
+  } catch {
+    return value;
+  }
 }
 
 interface CacheEntry<T> {
@@ -325,7 +344,7 @@ async function fetchNextOnChainStreamId(
     return null;
   }
 
-  return Number(scValToNative(simRes.result.retval));
+  return Number(toNative(simRes.result.retval));
 }
 
 async function fetchOnChainStreamRecord(
@@ -353,7 +372,7 @@ async function fetchOnChainStreamRecord(
     return null;
   }
 
-  const streamData = scValToNative(simRes.result.retval);
+  const streamData = toNative(simRes.result.retval);
 
   let metadata: Record<string, string> | null = null;
   if (streamData.metadata) {
@@ -452,7 +471,19 @@ export function calculateProgress(
   const effectiveAt =
     stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
 
-  const elapsed = Math.max(0, Math.max(0, effectiveAt - stream.startAt) - stream.pausedDuration);
+  // Vesting stops at cancellation: cap elapsed time at canceledAt so a
+  // canceled stream reports the progress it had when it was canceled, not
+  // the progress it would have reached by "now".
+  const vestingCap =
+    stream.canceledAt !== undefined
+      ? Math.min(stream.canceledAt, stream.startAt + stream.durationSeconds)
+      : stream.startAt + stream.durationSeconds;
+
+  const elapsed = Math.max(
+    0,
+    Math.max(0, Math.min(effectiveAt, vestingCap) - stream.startAt) -
+      stream.pausedDuration,
+  );
   const ratio = stream.durationSeconds <= 0 ? 1 : Math.min(1, elapsed / stream.durationSeconds);
   const elapsedSeconds = stream.durationSeconds <= 0 ? 0 : Math.min(elapsed, stream.durationSeconds);
   const vestedAmount = stream.totalAmount * ratio;
@@ -477,7 +508,7 @@ export async function getOnChainClaimableAmount(
 
   const sourceAccount = await sorobanContext.sourceAccountPromise;
   const latestLedger = await rpcServer.getLatestLedger() as any;
-  const at = latestLedger.timestamp ? parseInt(latestLedger.timestamp, 10) : Math.floor(Date.now() / 1000);
+  const at = parseLedgerCloseTime(latestLedger);
 
   const simRes = await simulateContractCall(
     sorobanContext.contract,
@@ -491,7 +522,7 @@ export async function getOnChainClaimableAmount(
     throw new Error("Simulation failed: " + JSON.stringify(simRes));
   }
 
-  const claimableAmount = Number(scValToNative(simRes.result.retval));
+  const claimableAmount = Number(toNative(simRes.result.retval));
   return { claimableAmount, at };
 }
 
@@ -539,7 +570,7 @@ async function getOnChainClaimableBatchChunk(
     throw new Error("Simulation failed: " + JSON.stringify(simRes));
   }
 
-  const amounts = parseClaimableBatchMap(scValToNative(simRes.result.retval));
+  const amounts = parseClaimableBatchMap(toNative(simRes.result.retval));
   return { amounts };
 }
 
@@ -592,10 +623,21 @@ export async function getLatestLedgerTime(): Promise<number> {
   }
   try {
     const latestLedger = await rpcServer.getLatestLedger() as any;
-    return latestLedger.timestamp ? parseInt(latestLedger.timestamp, 10) : Math.floor(Date.now() / 1000);
+    return parseLedgerCloseTime(latestLedger);
   } catch (e) {
     return Math.floor(Date.now() / 1000);
   }
+}
+
+/**
+ * Extracts the ledger close time (unix seconds) from a getLatestLedger
+ * response. Accepts both the `closeTime` field used by the mock RPC and the
+ * `timestamp` field used by other callers.
+ */
+function parseLedgerCloseTime(latestLedger: any): number {
+  const raw = latestLedger?.closeTime ?? latestLedger?.timestamp;
+  const parsed = raw !== undefined ? parseInt(String(raw), 10) : NaN;
+  return Number.isFinite(parsed) ? parsed : Math.floor(Date.now() / 1000);
 }
 
 export async function getOnChainStreamCount(): Promise<number | null> {
@@ -614,7 +656,7 @@ export async function getOnChainStreamCount(): Promise<number | null> {
       logger.warn({ simulation: simRes }, "failed to simulate get_stream_count");
       return null;
     }
-    return Number(scValToNative(simRes.result.retval));
+    return Number(toNative(simRes.result.retval));
   } catch (err) {
     logger.warn({ err }, "get_stream_count RPC call failed");
     return null;
@@ -809,8 +851,6 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
     const op = createStreamOperation(contractId, input, startAt);
 
     const txToSimulate = new TransactionBuilder(sourceAccount, {
-  const built = await rpcServer.prepareTransaction(
-    new TransactionBuilder(sourceAccount, {
       fee: "1000",
       networkPassphrase: netPass,
     })
@@ -930,7 +970,7 @@ export function refreshStreamStatuses(): number {
     SELECT * FROM streams 
     WHERE canceled_at IS NULL AND completed_at IS NULL AND paused_at IS NULL
       AND (start_at + duration_seconds) <= ?
-  `).all() as StreamRow[];
+  `).all(now) as StreamRow[];
 
   const result = db.prepare(`
     UPDATE streams SET completed_at = ?

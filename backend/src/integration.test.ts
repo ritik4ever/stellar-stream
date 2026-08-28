@@ -3,7 +3,8 @@ import request from "supertest";
 import { app } from "./index";
 import { initDb, getDb } from "./services/db";
 import { initCache, getCache } from "./services/cache";
-import { Keypair } from "@stellar/stellar-sdk";
+import { Account, Keypair, StrKey } from "@stellar/stellar-sdk";
+import { initSoroban, refreshStreamStatuses } from "./services/streamStore";
 import jwt from "jsonwebtoken";
 import { getJwtSecret } from "./services/auth";
 import path from "path";
@@ -22,6 +23,7 @@ vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
         getLatestLedger: mockGetLatestLedger,
         simulateTransaction: mockSimulateTransaction,
         prepareTransaction: vi.fn().mockImplementation((tx) => tx),
+        getAccount: vi.fn().mockResolvedValue(new Account(Keypair.random().publicKey(), "1")),
       })),
       Api: {
         ...actual.rpc.Api,
@@ -35,14 +37,38 @@ vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
 // Use a separate test database
 const TEST_DB_PATH = path.join(__dirname, "..", "data", "test-streams.db");
 
+/**
+ * Builds a fresh app instance with the given env overrides stubbed. Used by
+ * the rate-limit tests, which need an app whose in-memory rate-limit buckets
+ * are empty and whose limiters were constructed with the default limits.
+ */
+async function buildFreshApp(env: Record<string, string> = {}) {
+  for (const [key, value] of Object.entries(env)) {
+    vi.stubEnv(key, value);
+  }
+  vi.resetModules();
+  const freshDb = await import("./services/db");
+  freshDb.initDb();
+  const freshCache = await import("./services/cache");
+  freshCache.initCache();
+  const fresh = await import("./index");
+  return fresh.app;
+}
+
 describe("Backend Integration Tests", () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     // Set test database path
     process.env.DB_PATH = TEST_DB_PATH;
 
     // Initialize database and cache
     initDb();
     initCache();
+
+    // Wire up the mocked Soroban RPC (rpc.Server is mocked above) so the
+    // claimable / reconcile endpoints exercise their on-chain simulation path.
+    // Must be a valid StrKey C-address for the Contract constructor.
+    process.env.CONTRACT_ID = StrKey.encodeContract(Buffer.alloc(32, 7));
+    await initSoroban();
   });
 
   beforeEach(async () => {
@@ -832,7 +858,21 @@ describe("Backend Integration Tests", () => {
         expect(response.body.error).toContain("Stream ID must be");
       });
 
+      // Uses a fresh app so the 30/min claimable rate-limit bucket is empty
+      // (the tests above already consumed part of the shared budget).
       it("should enforce rate limit of 30 requests per minute", async () => {
+        const freshApp = await buildFreshApp();
+        const freshStore = await import("./services/streamStore");
+        await freshStore.initSoroban();
+
+        // Insert mockStream into the fresh app's database so it can be found
+        const freshDbModule = await import("./services/db");
+        const freshDb = freshDbModule.getDb();
+        freshDb.prepare(`
+          INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+          VALUES (@id, @sender, @recipient, @assetCode, @totalAmount, @durationSeconds, @startAt, @createdAt)
+        `).run(mockStream);
+
         mockGetLatestLedger.mockResolvedValue({
           sequence: 12345,
           closeTime: "1716812160",
@@ -843,7 +883,7 @@ describe("Backend Integration Tests", () => {
         });
 
         for (let i = 0; i < 31; i++) {
-          const response = await request(app).get(`/api/streams/${mockStream.id}/claimable`);
+          const response = await request(freshApp).get(`/api/streams/${mockStream.id}/claimable`);
           if (i < 30) {
             expect(response.status).toBe(200);
           } else {
@@ -1315,7 +1355,8 @@ describe("Backend Integration Tests", () => {
       beforeEach(() => {
         senderKeypair = Keypair.random();
         const now = Math.floor(Date.now() / 1000);
-        reconcileStreamId = `200-${testCounter++}`;
+        // streamIdSchema only accepts positive integers
+        reconcileStreamId = String(1000 + testCounter++);
 
         const db = getDb();
         db.prepare(`
@@ -1481,9 +1522,10 @@ describe("Backend Integration Tests", () => {
         const db = getDb();
         const now = Math.floor(Date.now() / 1000);
 
-        // Create a stream that has already completed
+        // Create a stream that has already completed (id must be a positive
+        // integer to pass streamIdSchema on the history route)
         const completedStream = {
-          id: "completed-test",
+          id: "1500",
           sender: "GC7Y4M77LNYKYF4K4V5A737W3G3L3T7XQWZJZL4R64Z43W3T7XZQK2L4",
           recipient: "GB4Z3ZK3X24Z3T7XZQK2L4R64Z43W3T7XZQK2L4R64Z43W3T7XZQK2L4",
           asset_code: "USDC",
@@ -1526,7 +1568,6 @@ describe("Backend Integration Tests", () => {
         `).run(completedStream.id, "created", completedStream.created_at, completedStream.sender);
 
         // Call refreshStreamStatuses to mark stream as completed and record event
-        const { refreshStreamStatuses } = await import("./services/streamStore");
         refreshStreamStatuses();
 
         // Verify stream is marked as completed
@@ -1865,7 +1906,14 @@ describe("Backend Integration Tests", () => {
   });
 
   describe("Rate Limiting", () => {
+    // The global test-setup raises rate limits so 429 never masks the 401s
+    // asserted by the auth suites. These tests assert the limiters' default
+    // behavior instead, so they build a fresh app instance (fresh in-memory
+    // rate-limit buckets) with the env var(s) restored to their defaults.
+
     it("should enforce mutation rate limit on POST /api/streams", async () => {
+      const freshApp = await buildFreshApp({ MUTATION_RATE_LIMIT: "10" });
+
       const sender = Keypair.random().publicKey();
       const recipient = Keypair.random().publicKey();
 
@@ -1879,7 +1927,7 @@ describe("Backend Integration Tests", () => {
 
       // Make 11 requests (limit is 10 per minute)
       for (let i = 0; i < 11; i++) {
-        const response = await request(app)
+        const response = await request(freshApp)
           .post("/api/streams")
           .send(payload);
 
@@ -1893,9 +1941,13 @@ describe("Backend Integration Tests", () => {
           expect(response.headers["retry-after"]).toBeDefined();
         }
       }
+
+      vi.unstubAllEnvs();
     });
 
     it("should return Retry-After header on rate limit", async () => {
+      const freshApp = await buildFreshApp({ MUTATION_RATE_LIMIT: "10" });
+
       const sender = Keypair.random().publicKey();
       const recipient = Keypair.random().publicKey();
 
@@ -1909,11 +1961,11 @@ describe("Backend Integration Tests", () => {
 
       // Make requests to hit the limit
       for (let i = 0; i < 11; i++) {
-        await request(app).post("/api/streams").send(payload);
+        await request(freshApp).post("/api/streams").send(payload);
       }
 
       // 11th request should have Retry-After header
-      const response = await request(app)
+      const response = await request(freshApp)
         .post("/api/streams")
         .send(payload);
 
@@ -1922,6 +1974,8 @@ describe("Backend Integration Tests", () => {
       const retryAfter = parseInt(response.headers["retry-after"], 10);
       expect(retryAfter).toBeGreaterThan(0);
       expect(retryAfter).toBeLessThanOrEqual(60);
+
+      vi.unstubAllEnvs();
     });
   });
 });
