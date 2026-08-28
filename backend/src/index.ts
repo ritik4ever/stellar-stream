@@ -378,6 +378,43 @@ function parseStreamId(
   return { ok: true, value: parsed.data };
 }
 
+const STREAMS_CACHE_TTL = 30;
+const STREAMS_LIST_CACHE_VERSION_KEY = "streams:list:version";
+const STREAMS_DETAIL_CACHE_VERSION_PREFIX = "streams:detail:version:";
+
+async function getCacheVersion(key: string): Promise<number> {
+  try {
+    return (await getCache().get<number>(key)) ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function incrementCacheVersion(key: string): Promise<void> {
+  try {
+    const cache = getCache();
+    const version = (await cache.get<number>(key)) ?? 0;
+    await cache.set(key, version + 1, 86400);
+  } catch {
+    // Ignore cache version increment failures; TTLs provide eventual consistency.
+  }
+}
+
+function getStreamsListCacheVersion(): Promise<number> {
+  return getCacheVersion(STREAMS_LIST_CACHE_VERSION_KEY);
+}
+
+function getStreamDetailCacheVersion(streamId: string): Promise<number> {
+  return getCacheVersion(`${STREAMS_DETAIL_CACHE_VERSION_PREFIX}${streamId}`);
+}
+
+async function invalidateStreamCaches(streamId: string): Promise<void> {
+  await Promise.all([
+    incrementCacheVersion(`${STREAMS_DETAIL_CACHE_VERSION_PREFIX}${streamId}`),
+    incrementCacheVersion(STREAMS_LIST_CACHE_VERSION_KEY),
+  ]);
+}
+
 app.get("/api/health", (_req: Request, res: Response) => {
   res.json({
     service: "stellar-stream-backend",
@@ -527,13 +564,15 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
   }
 
   const query = parsedQuery.data;
-  const cacheKey = `streams:list:${JSON.stringify(query)}`;
+  const cacheVersion = await getStreamsListCacheVersion();
+  const cacheKey = `streams:list:${cacheVersion}:${JSON.stringify(query)}`;
   
   try {
     const cache = getCache();
     const cached = await cache.get<{ data: any[], total: number, page: number, limit: number }>(cacheKey);
     if (cached) {
-      res.set("Cache-Control", "max-age=5");
+      res.set("X-Cache", "HIT");
+      res.set("Cache-Control", `max-age=${STREAMS_CACHE_TTL}`);
       res.json(cached);
       return;
     }
@@ -609,12 +648,13 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
 
   try {
     const cache = getCache();
-    await cache.set(cacheKey, result, 5);
+    await cache.set(cacheKey, result, STREAMS_CACHE_TTL);
   } catch {
     // If cache fails, just proceed
   }
 
-  res.set("Cache-Control", "max-age=5");
+  res.set("X-Cache", "MISS");
+  res.set("Cache-Control", `max-age=${STREAMS_CACHE_TTL}`);
   res.json(result);
 });
 
@@ -997,26 +1037,30 @@ app.get(
   },
 );
 
-app.get("/api/streams/:id", readLimiter, (req: Request, res: Response) => {
+app.get("/api/streams/:id", readLimiter, async (req: Request, res: Response) => {
   const parsedId = parseStreamId(req.params.id);
   if (!parsedId.ok) {
     sendValidationError(req, res, parsedId.issues);
     return;
   }
 
-  const stream = getStream(parsedId.value);
-  if (!stream) {
-    sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
-    return;
+  const cacheVersion = await getStreamDetailCacheVersion(parsedId.value);
+  const cacheKey = `streams:detail:${parsedId.value}:${cacheVersion}`;
+
+  try {
+    const cache = getCache();
+    const cached = await cache.get<{ data: any }>(cacheKey);
+    if (cached) {
+      res.set("X-Cache", "HIT");
+      res.set("Cache-Control", `max-age=${STREAMS_CACHE_TTL}`);
+      res.json(cached);
+      return;
+    }
+  } catch {
+    // If cache fails, just proceed without caching
   }
 
-  res.json({
-    data: {
-      ...stream,
-      progress: calculateProgress(stream),
-    },
-  });
-});
+  const stream = getStream(parsedId
 
 app.get(
   "/api/recipients/:accountId/streams",
