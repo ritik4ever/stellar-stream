@@ -420,4 +420,14 @@ export function clearCache() {
   cache.clear();
 }
 
+/**
+ * Fetches multiple streams by their IDs.
+ * Reuses the existing getStream cache for each stream.
+ * @param ids - Array of stream IDs
+ * @returns Array of Stream objects in the same order as ids
+ */
+export async function getStreamsByIds(ids: string[]): Promise<Stream[]> {
+  return Promise.all(ids.map(id => getStream(id)));
+}
+
 
