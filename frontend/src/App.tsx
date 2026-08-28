@@ -1,5 +1,5 @@
 ﻿import { lazy, Suspense, useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, useNavigate, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { DarkModeToggle } from "./components/DarkModeToggle";
 import { OfflineBanner } from "./components/OfflineBanner";
 import { WalletButton } from "./components/WalletButton";
@@ -22,7 +22,7 @@ function AppContent() {
 
   useEffect(() => {
     const path = location.pathname;
-    if (path !== "/" && path !== "/sender" && path !== "/recipient") {
+    if (path !== "/" && path !== "/sender" && path !== "/recipient" && path !== "/incoming") {
       navigate("/");
     }
   }, [location.pathname, navigate]);
@@ -30,7 +30,7 @@ function AppContent() {
   const currentTab =
     location.pathname === "/sender"
       ? "sender"
-      : location.pathname === "/recipient"
+      : location.pathname === "/recipient" || location.pathname === "/incoming"
         ? "recipient"
         : "dashboard";
 
@@ -71,7 +71,7 @@ function AppContent() {
         <button
           type="button"
           className={`app-nav-link ${currentTab === "recipient" ? "app-nav-link--active" : ""}`}
-          onClick={() => navigate("/recipient")}
+          onClick={() => navigate("/incoming")}
         >
           Recipient dashboard
         </button>
@@ -87,9 +87,10 @@ function AppContent() {
             element={<SenderDashboard senderAddress={wallet.address} onEditStartTime={() => {}} />}
           />
           <Route
-            path="/recipient"
+            path="/incoming"
             element={<RecipientDashboard recipientAddress={wallet.address} />}
           />
+          <Route path="/recipient" element={<Navigate to="/incoming" replace />} />
         </Routes>
       </Suspense>
     </div>
