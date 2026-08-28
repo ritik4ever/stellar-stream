@@ -3,7 +3,13 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '../server';
-import { StreamDetailDrawer } from './StreamDetailDrawer';
+import {
+  getFarcasterShareUrl,
+  getPublicStreamUrl,
+  getTwitterShareUrl,
+  StreamDetailDrawer,
+} from './StreamDetailDrawer';
+import { Stream } from '../types/stream';
 import { clearCache } from '../services/api';
 
 // ---------------------------------------------------------------------------
@@ -457,5 +463,59 @@ describe('TxHashLink — Stellar Expert transaction links (#399)', () => {
     // "created" event has no txHash — only the "claimed" event has a link
     const links = screen.queryAllByRole('link', { name: /View transaction/i });
     expect(links.length).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('Stream sharing', () => {
+  const stream = {
+    id: '42/featured',
+    sender: 'GSENDER123',
+    recipient: 'GRECIPIENT456',
+    assetCode: 'USDC',
+    totalAmount: 1000,
+    durationSeconds: 86400,
+    startAt: 1700000000,
+    createdAt: 1699990000,
+    progress: {
+      status: 'active' as const,
+      ratePerSecond: 0.01157,
+      elapsedSeconds: 43200,
+      vestedAmount: 500,
+      remainingAmount: 500,
+      percentComplete: 50,
+    },
+  } satisfies Stream;
+
+  it('builds encoded public, Twitter, and Farcaster URLs', () => {
+    const publicUrl = getPublicStreamUrl(stream.id);
+    expect(publicUrl).toBe(`${window.location.origin}/stream/42%2Ffeatured`);
+
+    const twitterUrl = new URL(getTwitterShareUrl(stream));
+    expect(twitterUrl.origin).toBe('https://twitter.com');
+    expect(twitterUrl.pathname).toBe('/intent/tweet');
+    expect(twitterUrl.searchParams.get('url')).toBe(publicUrl);
+    expect(twitterUrl.searchParams.get('text')).toContain('1000 USDC');
+
+    const farcasterUrl = new URL(getFarcasterShareUrl(stream));
+    expect(farcasterUrl.origin).toBe('https://warpcast.com');
+    expect(farcasterUrl.pathname).toBe('/~/compose');
+    expect(farcasterUrl.searchParams.get('embeds[]')).toBe(publicUrl);
+  });
+
+  it('renders share links and gives copy success feedback', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(<StreamDetailDrawer streamId="42" onClose={onClose} />);
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Share on Twitter' })).toBeInTheDocument());
+
+    expect(screen.getByRole('link', { name: 'Share on Farcaster' })).toHaveAttribute('target', '_blank');
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Link copied' })).toBeInTheDocument());
+    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/stream/42`);
   });
 });

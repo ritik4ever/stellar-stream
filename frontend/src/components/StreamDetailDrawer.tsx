@@ -6,6 +6,25 @@ import { CliffMarker } from "./CliffMarker";
 
 const STELLAR_EXPERT_BASE = "https://stellar.expert/explorer/testnet/tx";
 
+export function getPublicStreamUrl(streamId: string): string {
+  return `${window.location.origin}/stream/${encodeURIComponent(streamId)}`;
+}
+
+export function getTwitterShareUrl(stream: Stream): string {
+  const text = `StellarStream: ${stream.totalAmount} ${stream.assetCode} stream for ${stream.recipient} (${stream.progress.status})`;
+  const params = new URLSearchParams({ text, url: getPublicStreamUrl(stream.id) });
+  return `https://twitter.com/intent/tweet?${params.toString()}`;
+}
+
+export function getFarcasterShareUrl(stream: Stream): string {
+  const text = `StellarStream: ${stream.totalAmount} ${stream.assetCode} stream for ${stream.recipient}`;
+  const params = new URLSearchParams({
+    text,
+    "embeds[]": getPublicStreamUrl(stream.id),
+  });
+  return `https://warpcast.com/~/compose?${params.toString()}`;
+}
+
 /**
  * Renders a transaction hash as a truncated, clickable link to Stellar Expert.
  * Shows first 8 + last 8 characters with the full hash in a tooltip.
@@ -114,6 +133,7 @@ export function StreamDetailDrawer({
   const [pausing, setPausing] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   // Abort controller to avoid race conditions on rapid open/close
   const abortRef = useRef<AbortController | null>(null);
@@ -221,6 +241,17 @@ export function StreamDetailDrawer({
       setActionError(err instanceof Error ? err.message : "Resume failed.");
     } finally {
       setResuming(false);
+    }
+  }
+
+  async function handleCopyLink() {
+    if (!stream) return;
+    try {
+      await navigator.clipboard.writeText(getPublicStreamUrl(stream.id));
+      setLinkCopied(true);
+      window.setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      setLinkCopied(false);
     }
   }
 
@@ -357,6 +388,31 @@ export function StreamDetailDrawer({
                     </div>
                   )}
                 </dl>
+              </section>
+
+              <section className="drawer-section" aria-labelledby="drawer-share-heading">
+                <h3 id="drawer-share-heading" className="drawer-section-title">Share</h3>
+                <div className="action-cell">
+                  <a
+                    className="btn-ghost"
+                    href={getTwitterShareUrl(stream)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Share on Twitter
+                  </a>
+                  <a
+                    className="btn-ghost"
+                    href={getFarcasterShareUrl(stream)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Share on Farcaster
+                  </a>
+                  <button type="button" className="btn-ghost" onClick={handleCopyLink}>
+                    {linkCopied ? "Link copied" : "Copy link"}
+                  </button>
+                </div>
               </section>
 
               {/* On-chain metadata */}
