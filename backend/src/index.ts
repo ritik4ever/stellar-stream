@@ -2046,6 +2046,65 @@ app.post(
   },
 );
 
+app.get(
+  "/api/admin/webhooks/dead-letters",
+  adminAuth,
+  (req: Request, res: Response) => {
+    const page = req.query.page
+      ? parseInt(req.query.page as string, 10)
+      : PAGINATION_DEFAULT_PAGE;
+    const limit = req.query.limit
+      ? parseInt(req.query.limit as string, 10)
+      : PAGINATION_DEFAULT_LIMIT;
+
+    if (isNaN(page) || page < 1) {
+      sendApiError(req, res, 400, "page must be a positive integer", {
+        code: "VALIDATION_ERROR",
+      });
+      return;
+    }
+
+    if (isNaN(limit) || limit < 1 || limit > PAGINATION_MAX_LIMIT) {
+      sendApiError(
+        req,
+        res,
+        400,
+        `limit must be between 1 and ${PAGINATION_MAX_LIMIT}`,
+        { code: "VALIDATION_ERROR" },
+      );
+      return;
+    }
+
+    try {
+      const total = countDeadLetters();
+      const offset = (page - 1) * limit;
+      const data = getDeadLetters(limit, offset);
+
+      res.json({
+        data,
+        total,
+        page,
+        limit,
+      });
+    } catch (error: any) {
+      logger.error({ err: error }, "failed to fetch dead-letter webhooks via admin");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to fetch dead-letter webhooks.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        {
+          code: normalizedError.code ?? "INTERNAL_ERROR",
+        },
+      );
+    }
+  },
+);
+
 app.delete(
   "/api/admin/webhooks/dead-letters",
   adminAuth,
