@@ -94,6 +94,8 @@ pub enum DataKey {
     ChildToParent(u64),
     NativeToken,
     AllowedTokens,
+    PlatformFeeBps,
+    FeeRecipient,
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +232,18 @@ pub struct StreamTransferred {
     pub new_recipient: Address,
 }
 
+/// Emitted when a platform fee is collected during stream creation.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FeeCollected {
+    pub stream_id: u64,
+    pub actor: Address,
+    pub timestamp: u64,
+    pub fee_amount: i128,
+    pub fee_recipient: Address,
+    pub token: Address,
+}
+
 #[contract]
 pub struct StellarStreamContract;
 
@@ -241,13 +255,54 @@ impl StellarStreamContract {
 
     /// One-time setup: stores the admin address used for clawback authorization.
     /// Panics if called a second time to prevent privilege escalation.
-    pub fn initialize(env: Env, admin: Address, native_token: Address, allowed_tokens: Vec<Address>) {
+    pub fn initialize(env: Env, admin: Address, native_token: Address, allowed_tokens: Vec<Address>, fee_recipient: Address, platform_fee_bps: u32) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::NativeToken, &native_token);
         env.storage().instance().set(&DataKey::AllowedTokens, &allowed_tokens);
+        env.storage().instance().set(&DataKey::FeeRecipient, &fee_recipient);
+        env.storage().instance().set(&DataKey::PlatformFeeBps, &platform_fee_bps);
+    }
+
+    // -----------------------------------------------------------------------
+    // Fee configuration
+    // -----------------------------------------------------------------------
+
+    pub fn get_platform_fee_bps(env: Env) -> u32 {
+        env.storage().instance().get(&DataKey::PlatformFeeBps).unwrap_or(0)
+    }
+
+    pub fn get_fee_recipient(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::FeeRecipient)
+            .unwrap_or_else(|| panic!("not initialized"))
+    }
+
+    pub fn set_platform_fee_bps(env: Env, new_fee_bps: u32, admin: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("not initialized"));
+        if admin != stored_admin {
+            panic!("Unauthorized");
+        }
+        env.storage().instance().set(&DataKey::PlatformFeeBps, &new_fee_bps);
+    }
+
+    pub fn set_fee_recipient(env: Env, new_recipient: Address, admin: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("not initialized"));
+        if admin != stored_admin {
+            panic!("Unauthorized");
+        }
+        env.storage().instance().set(&DataKey::FeeRecipient, &new_recipient);
     }
 
     // -----------------------------------------------------------------------
@@ -301,6 +356,21 @@ impl StellarStreamContract {
         let contract_address = env.current_contract_address();
         token_client.transfer(&sender, &contract_address, &total_amount);
 
+        // Calculate platform fee
+        let platform_fee_bps = Self::get_platform_fee_bps(env.clone());
+        let fee_amount: i128 = if platform_fee_bps == 0 {
+            0
+        } else {
+            (total_amount * platform_fee_bps as i128) / 10_000
+        };
+
+        // Deduct fee and transfer to recipient if non-zero
+        let net_amount = total_amount - fee_amount;
+        if fee_amount > 0 {
+            let fee_recipient = Self::get_fee_recipient(env.clone());
+            token_client.transfer(&contract_address, &fee_recipient, &fee_amount);
+        }
+
         let mut next_id: u64 = env
             .storage()
             .persistent()
@@ -312,7 +382,7 @@ impl StellarStreamContract {
             sender: sender.clone(),
             recipient: recipient.clone(),
             token: token.clone(),
-            total_amount,
+            total_amount: net_amount,
             claimed_amount: 0,
             start_time,
             end_time,
@@ -332,6 +402,22 @@ impl StellarStreamContract {
             .set(&DataKey::Stream(next_id), &stream);
 
         let now = env.ledger().timestamp();
+        
+        // Emit fee collected event if fee is non-zero
+        if fee_amount > 0 {
+            env.events().publish(
+                (symbol_short!("Stream"), symbol_short!("FeeCol")),
+                FeeCollected {
+                    stream_id: next_id,
+                    actor: sender.clone(),
+                    timestamp: now,
+                    fee_amount,
+                    fee_recipient: Self::get_fee_recipient(env.clone()),
+                    token: actual_token.clone(),
+                },
+            );
+        }
+        
         env.events().publish(
             (symbol_short!("Stream"), symbol_short!("Created")),
             StreamCreated {
@@ -342,7 +428,7 @@ impl StellarStreamContract {
                 recipient,
                 token: token.clone(),
                 token_symbol: token_client.symbol(),
-                total_amount,
+                total_amount: net_amount,
                 start_time,
                 end_time,
                 cliff_seconds,
@@ -386,6 +472,21 @@ impl StellarStreamContract {
         }
         let contract_address = env.current_contract_address();
         token_client.transfer(&sender, &contract_address, &total_amount);
+
+        // Calculate platform fee on total amount
+        let platform_fee_bps = Self::get_platform_fee_bps(env.clone());
+        let fee_amount: i128 = if platform_fee_bps == 0 {
+            0
+        } else {
+            (total_amount * platform_fee_bps as i128) / 10_000
+        };
+
+        // Deduct fee and transfer to recipient if non-zero
+        let net_amount = total_amount - fee_amount;
+        if fee_amount > 0 {
+            let fee_recipient = Self::get_fee_recipient(env.clone());
+            token_client.transfer(&contract_address, &fee_recipient, &fee_amount);
+        }
 
         let mut next_id: u64 = env
             .storage()
@@ -451,8 +552,22 @@ impl StellarStreamContract {
             );
         }
 
-        if allocated_total != total_amount {
-            panic!("allocations must equal total_amount");
+        if allocated_total != net_amount {
+            panic!("allocations must equal net_amount (total_amount - platform fee)");
+        }
+
+        if fee_amount > 0 {
+            env.events().publish(
+                (symbol_short!("Stream"), symbol_short!("FeeCol")),
+                FeeCollected {
+                    stream_id: parent_stream_id,
+                    actor: sender.clone(),
+                    timestamp: env.ledger().timestamp(),
+                    fee_amount,
+                    fee_recipient: Self::get_fee_recipient(env.clone()),
+                    token: actual_token.clone(),
+                },
+            );
         }
 
         env.storage()

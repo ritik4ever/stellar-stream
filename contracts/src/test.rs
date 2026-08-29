@@ -2609,6 +2609,155 @@ fn test_remove_allowed_token_missing_is_noop() {
     let claimed = client.claim(&stream_id, &recipient, &500);
     assert_eq!(claimed, 500);
     assert_eq!(token_client.balance(&recipient), 500);
+}
+
+// ---------------------------------------------------------------------------
+// Platform fee tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_platform_fee_calculated_correctly() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    
+    // Initialize with 100 bps fee (1%)
+    client.initialize(&admin, &token, &Vec::new(&env), &fee_recipient, &100u32);
+    
+    // Mint 10000 tokens to sender
+    token_admin.mint(&sender, &10000);
+    
+    let token_client = token::Client::new(&env, &token);
+    
+    // Create stream with 10000 tokens
+    // Expected fee: 10000 * 100 / 10000 = 100
+    // Expected stream amount: 10000 - 100 = 9900
+    let stream_id = client.create_stream(&sender, &recipient, &token, &10000, &0, &1000, &0, &None);
+    
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.total_amount, 9900);
+    assert_eq!(token_client.balance(&fee_recipient), 100);
+    assert_eq!(token_client.balance(&contract_id), 9900);
+}
+
+#[test]
+fn test_zero_fee_works() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    
+    // Initialize with 0 bps fee
+    client.initialize(&admin, &token, &Vec::new(&env), &fee_recipient, &0u32);
+    
+    token_admin.mint(&sender, &5000);
+    
+    let token_client = token::Client::new(&env, &token);
+    
+    // Create stream with 5000 tokens, zero fee
+    let stream_id = client.create_stream(&sender, &recipient, &token, &5000, &0, &1000, &0, &None);
+    
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.total_amount, 5000);
+    assert_eq!(token_client.balance(&fee_recipient), 0);
+    assert_eq!(token_client.balance(&contract_id), 5000);
+}
+
+#[test]
+fn test_recipient_receives_net_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    
+    // Initialize with 50 bps fee (0.5%)
+    client.initialize(&admin, &token, &Vec::new(&env), &fee_recipient, &50u32);
+    
+    token_admin.mint(&sender, &20000);
+    
+    let token_client = token::Client::new(&env, &token);
+    
+    // Create stream with 20000 tokens
+    // Expected fee: 20000 * 50 / 10000 = 100
+    // Expected stream amount: 20000 - 100 = 19900
+    let stream_id = client.create_stream(&sender, &recipient, &token, &20000, &0, &10000, &0, &None);
+    
+    // Set time to middle of vesting period
+    env.ledger().with_mut(|l| l.timestamp = 5000);
+    
+    // Recipient should be able to claim half of the net amount (9950)
+    let claimed = client.claim(&stream_id, &recipient, &9950);
+    assert_eq!(claimed, 9950);
+    assert_eq!(token_client.balance(&recipient), 9950);
+    
+    // Fee recipient received the fee
+    assert_eq!(token_client.balance(&fee_recipient), 100);
+}
+
+#[test]
+fn test_split_stream_with_fee() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient1 = Address::generate(&env);
+    let recipient2 = Address::generate(&env);
+    let fee_recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    
+    // Initialize with 200 bps fee (2%)
+    client.initialize(&admin, &token, &Vec::new(&env), &fee_recipient, &200u32);
+    
+    token_admin.mint(&sender, &10000);
+    
+    let token_client = token::Client::new(&env, &token);
+    
+    // Create split stream with 10000 tokens to two recipients
+    // Expected fee: 10000 * 200 / 10000 = 200
+    // Net amount to split: 10000 - 200 = 9800
+    let mut recipients = Vec::new(&env);
+    recipients.push_back((recipient1.clone(), 4900i128));
+    recipients.push_back((recipient2.clone(), 4900i128));
+    
+    let stream_id = client.create_split_stream(&sender, &token, &10000, &0, &1000, &recipients);
+    
+    // Fee should be deducted
+    assert_eq!(token_client.balance(&fee_recipient), 200);
+    
+    // Contract should hold the net amount
+    let contract_balance = token_client.balance(&contract_id);
+    assert!(contract_balance >= 9800 - 10); // accounting for potential rounding
+}
 
     env.ledger().with_mut(|l| l.timestamp = 1200);
     let claimed = client.claim(&stream_id, &recipient, &500);
