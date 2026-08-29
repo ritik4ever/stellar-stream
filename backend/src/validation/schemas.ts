@@ -190,10 +190,20 @@ export const listEventsQuerySchema = z.object({
     .trim()
     .min(1, "streamId must not be empty if provided")
     .optional(),
+  actor: z
+    .string()
+    .trim()
+    .min(1, "actor must not be empty if provided")
+    .optional(),
   since: z
     .coerce.number()
     .int("since must be an integer")
     .positive("since must be a positive unix timestamp")
+    .optional(),
+  to: z
+    .coerce.number()
+    .int("to must be an integer")
+    .positive("to must be a positive unix timestamp")
     .optional(),
   cursor: z
     .coerce.number()
