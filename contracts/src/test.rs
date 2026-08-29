@@ -3063,3 +3063,167 @@ fn test_resume_non_paused_stream_panics() {
     let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
     client.resume_stream(&stream_id, &sender);
 }
+
+// =============================================================================
+// get_streams_by_sender tests
+// =============================================================================
+
+#[test]
+fn test_get_streams_by_sender_returns_all_stream_ids() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &5000);
+
+    let id1 = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    let id2 = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    let id3 = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    let streams = client.get_streams_by_sender(&sender, &0, &10);
+    assert_eq!(streams.len(), 3);
+    assert_eq!(streams.get_unchecked(0), id1);
+    assert_eq!(streams.get_unchecked(1), id2);
+    assert_eq!(streams.get_unchecked(2), id3);
+}
+
+#[test]
+fn test_get_streams_by_sender_empty_for_unknown_sender() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let unknown = Address::generate(&env);
+    let streams = client.get_streams_by_sender(&unknown, &0, &10);
+    assert_eq!(streams.len(), 0);
+}
+
+#[test]
+fn test_get_streams_by_sender_pagination() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &5000);
+
+    // Create 5 streams
+    let mut ids = soroban_sdk::Vec::new(&env);
+    for _ in 0..5 {
+        let id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+        ids.push_back(id);
+    }
+
+    // Page 0, size 2 → first 2
+    let page0 = client.get_streams_by_sender(&sender, &0, &2);
+    assert_eq!(page0.len(), 2);
+    assert_eq!(page0.get_unchecked(0), ids.get_unchecked(0));
+    assert_eq!(page0.get_unchecked(1), ids.get_unchecked(1));
+
+    // Page 1, size 2 → next 2
+    let page1 = client.get_streams_by_sender(&sender, &1, &2);
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1.get_unchecked(0), ids.get_unchecked(2));
+    assert_eq!(page1.get_unchecked(1), ids.get_unchecked(3));
+
+    // Page 2, size 2 → last 1
+    let page2 = client.get_streams_by_sender(&sender, &2, &2);
+    assert_eq!(page2.len(), 1);
+    assert_eq!(page2.get_unchecked(0), ids.get_unchecked(4));
+
+    // Page 3, size 2 → empty
+    let page3 = client.get_streams_by_sender(&sender, &3, &2);
+    assert_eq!(page3.len(), 0);
+}
+
+#[test]
+fn test_get_streams_by_sender_includes_split_stream_children() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient_a = Address::generate(&env);
+    let recipient_b = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &5000);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back((recipient_a.clone(), 400));
+    recipients.push_back((recipient_b.clone(), 600));
+    let parent_id = client.create_split_stream(&sender, &token, &1000, &0, &1000, &recipients);
+    let children = client.get_split_children(&parent_id);
+
+    let streams = client.get_streams_by_sender(&sender, &0, &10);
+    // parent + 2 children = 3 stream IDs
+    assert_eq!(streams.len(), 3);
+    assert_eq!(streams.get_unchecked(0), parent_id);
+    assert_eq!(streams.get_unchecked(1), children.get_unchecked(0));
+    assert_eq!(streams.get_unchecked(2), children.get_unchecked(1));
+}
+
+#[test]
+fn test_get_streams_by_sender_does_not_mix_senders() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender_a = Address::generate(&env);
+    let sender_b = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender_a, &2000);
+    token_admin.mint(&sender_b, &2000);
+
+    let id_a1 = client.create_stream(&sender_a, &recipient, &token, &1000, &0, &1000, &0, &None);
+    let id_b1 = client.create_stream(&sender_b, &recipient, &token, &1000, &0, &1000, &0, &None);
+    let id_a2 = client.create_stream(&sender_a, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    let streams_a = client.get_streams_by_sender(&sender_a, &0, &10);
+    assert_eq!(streams_a.len(), 2);
+    assert_eq!(streams_a.get_unchecked(0), id_a1);
+    assert_eq!(streams_a.get_unchecked(1), id_a2);
+
+    let streams_b = client.get_streams_by_sender(&sender_b, &0, &10);
+    assert_eq!(streams_b.len(), 1);
+    assert_eq!(streams_b.get_unchecked(0), id_b1);
+}
+
+#[test]
+fn test_get_streams_by_sender_page_size_clamped_to_100() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &5000);
+
+    client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    // Requesting page_size > 100 should be clamped
+    let result = client.get_streams_by_sender(&sender, &0, &200);
+    assert_eq!(result.len(), 2);
+}

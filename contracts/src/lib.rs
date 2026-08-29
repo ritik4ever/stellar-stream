@@ -94,6 +94,7 @@ pub enum DataKey {
     ChildToParent(u64),
     NativeToken,
     AllowedTokens,
+    SenderStreams(Address),
 }
 
 // ---------------------------------------------------------------------------
@@ -331,6 +332,17 @@ impl StellarStreamContract {
             .persistent()
             .set(&DataKey::Stream(next_id), &stream);
 
+        // Maintain sender streams index
+        let mut sender_streams: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SenderStreams(sender.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        sender_streams.push_back(next_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::SenderStreams(sender.clone()), &sender_streams);
+
         let now = env.ledger().timestamp();
         env.events().publish(
             (symbol_short!("Stream"), symbol_short!("Created")),
@@ -461,7 +473,21 @@ impl StellarStreamContract {
         env.storage()
             .persistent()
             .set(&DataKey::NextStreamId, &next_id);
-            
+
+        // Maintain sender streams index (parent + all children)
+        let mut sender_streams: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SenderStreams(sender.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        sender_streams.push_back(parent_stream_id);
+        for child_id in child_ids.iter() {
+            sender_streams.push_back(child_id);
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::SenderStreams(sender.clone()), &sender_streams);
+
         parent_stream_id
     }
 
@@ -474,6 +500,39 @@ impl StellarStreamContract {
 
     pub fn get_stream(env: Env, stream_id: u64) -> Stream {
         read_stream(&env, stream_id)
+    }
+
+    /// Returns a paginated list of stream IDs created by the given sender.
+    ///
+    /// # Parameters
+    /// * `sender` - The sender address to query.
+    /// * `page` - Zero-based page index.
+    /// * `page_size` - Number of results per page (max 100).
+    ///
+    /// # Returns
+    /// * `Vec<u64>` - Stream IDs in creation order for the requested page.
+    pub fn get_streams_by_sender(env: Env, sender: Address, page: u32, page_size: u32) -> Vec<u64> {
+        let effective_page_size = if page_size == 0 { 100 } else { core::cmp::min(page_size, 100) };
+        let sender_streams: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SenderStreams(sender))
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let total = sender_streams.len() as u32;
+        let start = page.saturating_mul(effective_page_size) as u32;
+        if start >= total {
+            return Vec::new(&env);
+        }
+        let end = core::cmp::min(start + effective_page_size, total);
+
+        let mut result = Vec::new(&env);
+        for i in start..end {
+            if let Some(id) = sender_streams.get(i as u32) {
+                result.push_back(id);
+            }
+        }
+        result
     }
 
     pub fn get_next_stream_id(env: Env) -> u64 {
