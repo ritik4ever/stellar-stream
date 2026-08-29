@@ -2,9 +2,8 @@
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
-    Map, String, Vec,
+    IntoVal, Map, String, Symbol, Vec,
 };
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, IntoVal, Symbol};
 use crate::errors::ContractError;
 
 #[contract]
@@ -77,6 +76,9 @@ pub struct Stream {
     pub canceled: bool,
     pub paused: bool,
     pub pause_started_at: Option<u64>,
+    pub auto_renew: bool,
+    pub max_renewals: u32,
+    pub renewals_completed: u32,
 
     pub metadata: Option<Map<String, String>>,
 }
@@ -230,6 +232,21 @@ pub struct StreamTransferred {
     pub new_recipient: Address,
 }
 
+/// Emitted when a completed stream is renewed (auto-renew).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamRenewed {
+    // --- mandatory base fields ---
+    pub stream_id: u64,
+    /// The original stream that was renewed.
+    pub actor: Address,
+    pub timestamp: u64,
+    // --- event-specific fields ---
+    pub old_stream_id: u64,
+    pub new_stream_id: u64,
+    pub renewals_remaining: u32,
+}
+
 #[contract]
 pub struct StellarStreamContract;
 
@@ -320,6 +337,9 @@ impl StellarStreamContract {
             canceled: false,
             paused: false,
             pause_started_at: None,
+            auto_renew: false,
+            max_renewals: 0,
+            renewals_completed: 0,
 
             metadata: metadata.clone(),
         };
@@ -421,6 +441,9 @@ impl StellarStreamContract {
                 canceled: false,
                 paused: false,
                 pause_started_at: None,
+                auto_renew: false,
+                max_renewals: 0,
+                renewals_completed: 0,
                 metadata: None,
             };
             
@@ -844,6 +867,142 @@ impl StellarStreamContract {
     }
 }
 
+    // -----------------------------------------------------------------------
+    // Recurring streams (auto-renew)
+    // -----------------------------------------------------------------------
+
+    /// Enables auto-renewal for a stream. Can only be called by the sender.
+    /// `max_renewals` sets how many times the stream may be automatically renewed.
+    pub fn enable_auto_renew(env: Env, stream_id: u64, sender: Address, max_renewals: u32) {
+        let mut stream = read_stream(&env, stream_id);
+        if stream.sender != sender {
+            panic!("sender mismatch");
+        }
+        sender.require_auth();
+
+        stream.auto_renew = true;
+        stream.max_renewals = max_renewals;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(stream_id), &stream);
+    }
+
+    /// Renews a completed or fully-claimed stream by creating a new stream with the
+    /// same parameters. The sender must have sufficient token balance for the new
+    /// escrow. Returns the ID of the newly created stream.
+    pub fn renew_stream(env: Env, stream_id: u64, sender: Address) -> u64 {
+        let mut stream = read_stream(&env, stream_id);
+        if stream.sender != sender {
+            panic!("sender mismatch");
+        }
+        sender.require_auth();
+
+        if !stream.auto_renew {
+            panic!("auto-renew not enabled");
+        }
+        if stream.renewals_completed >= stream.max_renewals {
+            panic!("max renewals reached");
+        }
+
+        // Verify stream is completed or fully claimed
+        let now = env.ledger().timestamp();
+        let is_completed = now >= stream.end_time;
+        let is_fully_claimed = stream.claimed_amount >= stream.total_amount;
+        if !is_completed && !is_fully_claimed {
+            panic!("stream not yet completed");
+        }
+
+        // Check sender balance for renewal
+        let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
+        let actual_token = if is_native {
+            env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+        } else {
+            stream.token.clone()
+        };
+        let token_client = TokenClient::new(&env, &actual_token);
+        let sender_balance = token_client.balance(&sender);
+        if sender_balance < stream.total_amount {
+            panic!("insufficient sender balance for renewal");
+        }
+
+        // Escrow tokens from sender for the new stream
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&sender, &contract_address, &stream.total_amount);
+
+        // Increment renewal counter on old stream
+        stream.renewals_completed += 1;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(stream_id), &stream);
+
+        // Create new stream with same params
+        let mut next_id: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::NextStreamId)
+            .unwrap_or(0);
+        next_id += 1;
+
+        let new_stream = Stream {
+            sender: stream.sender.clone(),
+            recipient: stream.recipient.clone(),
+            token: stream.token.clone(),
+            total_amount: stream.total_amount,
+            claimed_amount: 0,
+            start_time: now,
+            end_time: now + (stream.end_time - stream.start_time),
+            cliff_seconds: stream.cliff_seconds,
+            canceled: false,
+            paused: false,
+            pause_started_at: None,
+            auto_renew: stream.auto_renew,
+            max_renewals: stream.max_renewals,
+            renewals_completed: 0,
+            metadata: stream.metadata.clone(),
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::NextStreamId, &next_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(next_id), &new_stream);
+
+        // Emit StreamCreated for the new stream
+        env.events().publish(
+            (symbol_short!("Stream"), symbol_short!("Created")),
+            StreamCreated {
+                stream_id: next_id,
+                actor: sender.clone(),
+                timestamp: now,
+                sender: stream.sender.clone(),
+                recipient: stream.recipient.clone(),
+                token: stream.token.clone(),
+                token_symbol: token_client.symbol(),
+                total_amount: stream.total_amount,
+                start_time: now,
+                end_time: now + (stream.end_time - stream.start_time),
+                cliff_seconds: stream.cliff_seconds,
+                metadata: stream.metadata.clone(),
+            },
+        );
+
+        // Emit StreamRenewed event
+        let renewals_remaining = stream.max_renewals.saturating_sub(stream.renewals_completed);
+        env.events().publish(
+            (symbol_short!("Stream"), symbol_short!("Renewed")),
+            StreamRenewed {
+                stream_id: next_id,
+                actor: sender.clone(),
+                timestamp: now,
+                old_stream_id: stream_id,
+                new_stream_id: next_id,
+                renewals_remaining,
+            },
+        );
+
+        next_id
+    }
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
