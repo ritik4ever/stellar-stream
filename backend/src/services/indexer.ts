@@ -400,7 +400,7 @@ async function indexEventsWithCursorPagination(db: any, currentLedger: number): 
   }
 }
 
-function processEvent(db: any, event: rpc.Api.EventResponse): void {
+export function processEvent(db: any, event: rpc.Api.EventResponse): void {
   try {
     const topic = event.topic.map((t: any) => scValToNative(t));
     const value = scValToNative(event.value);
