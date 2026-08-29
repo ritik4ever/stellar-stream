@@ -8,7 +8,7 @@ import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
 import { z } from "zod";
 import { createServer } from "http";
-import { searchStreamsFts, getAllowedAssets, addAllowedAsset, removeAllowedAsset } from "./services/db";
+import { searchStreamsFts, getAllowedAssets, addAllowedAsset, removeAllowedAsset, getDb, isPostgres } from "./services/db";
 import { initWebSocket } from "./services/websocket";
 import {
   normalizeUnknownApiError,
@@ -30,6 +30,7 @@ import { fetchOpenIssues } from "./services/openIssues";
 import {
   initIndexer,
   startIndexer,
+  stopIndexer,
   getCircuitBreakerStatus,
 } from "./services/indexer";
 import { adminAuth } from "./middleware/adminAuth";
@@ -1963,6 +1964,49 @@ async function startServer() {
   server.listen(config.port, () => {
     logger.info({ port: config.port }, "StellarStream API listening with WebSocket support");
   });
+
+  let isShuttingDown = false;
+  const gracefulShutdown = (signal: string) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    logger.info({ signal }, "shutdown signal received, starting graceful shutdown");
+
+    const startTime = Date.now();
+
+    stopIndexer();
+
+    server.close((err) => {
+      if (err) {
+        logger.error({ err }, "error closing HTTP server");
+      }
+      
+      try {
+        const db = getDb();
+        if (!isPostgres()) {
+          db.pragma("wal_checkpoint(TRUNCATE)");
+        }
+        db.close();
+      } catch (dbErr) {
+        logger.error({ err: dbErr }, "error checkpointing database");
+      }
+
+      const durationMs = Date.now() - startTime;
+      logger.info({ durationMs }, "graceful shutdown completed");
+      process.exit(err ? 1 : 0);
+    });
+
+    if ('closeIdleConnections' in server) {
+      (server as any).closeIdleConnections();
+    }
+
+    setTimeout(() => {
+      logger.error("graceful shutdown timed out after 30s, forcing exit");
+      process.exit(1);
+    }, 30000).unref();
+  };
+
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 }
 
 if (require.main === module) {
