@@ -397,6 +397,186 @@ td {
   transition: width 0.3s ease-in-out;
 }
 
+/* ── VestingBar ─────────────────────────────────────────────────────────── */
+
+:root {
+  --vesting-claimed: #10b981;   /* green  — claimed */
+  --vesting-vested: #3b82f6;    /* blue   — vested, unclaimed */
+  --vesting-unvested: #e5e7eb;  /* gray   — unvested */
+}
+
+.vesting-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+/* Cliff pin row sits above the track */
+.vesting-bar__cliff-row {
+  position: relative;
+  height: 24px;
+  pointer-events: none;
+}
+
+/* The horizontal track */
+.vesting-bar__track {
+  position: relative;
+  display: flex;
+  height: 10px;
+  border-radius: 999px;
+  overflow: visible; /* allow tooltip to overflow */
+  background: var(--vesting-unvested, #e5e7eb);
+  cursor: default;
+}
+
+/* Each coloured segment */
+.vesting-bar__segment {
+  height: 100%;
+  transition: width 0.4s ease-in-out;
+  flex-shrink: 0;
+}
+
+/* Rounded ends on first and last visible segments */
+.vesting-bar__segment:first-child {
+  border-radius: 999px 0 0 999px;
+}
+
+.vesting-bar__segment:last-child {
+  border-radius: 0 999px 999px 0;
+}
+
+.vesting-bar__segment:only-child {
+  border-radius: 999px;
+}
+
+/* Tooltip */
+.vesting-bar__tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  transform: translateX(-50%);
+  background: #1f2937;
+  color: #f9fafb;
+  border-radius: 6px;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  min-width: 200px;
+}
+
+.vesting-bar__tooltip::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 0 5px 5px;
+  border-style: solid;
+  border-color: transparent transparent #1f2937 transparent;
+}
+
+.vesting-bar__tooltip-line {
+  margin: 0;
+}
+
+/* Cliff marker pin */
+.vesting-bar__cliff {
+  position: absolute;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  cursor: help;
+}
+
+.vesting-bar__cliff::after {
+  content: "";
+  display: block;
+  width: 2px;
+  height: 14px;
+  background: currentColor;
+  border-radius: 1px;
+}
+
+.vesting-bar__cliff--reached {
+  color: #10b981;
+}
+
+.vesting-bar__cliff--pending {
+  color: #f59e0b;
+}
+
+.vesting-bar__cliff-pin {
+  font-size: 0.75rem;
+  line-height: 1;
+  user-select: none;
+}
+
+/* Legend row */
+.vesting-bar__legend {
+  display: flex;
+  gap: 0.75rem;
+  font-size: 0.72rem;
+  color: #6b7280;
+}
+
+.vesting-bar__legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.vesting-bar__legend-item::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.vesting-bar__legend-item--claimed::before {
+  background: var(--vesting-claimed, #10b981);
+}
+
+.vesting-bar__legend-item--vested::before {
+  background: var(--vesting-vested, #3b82f6);
+}
+
+.vesting-bar__legend-item--unvested::before {
+  background: var(--vesting-unvested, #e5e7eb);
+  border: 1px solid #d1d5db;
+}
+
+/* ── Dark mode overrides ─────────────────────────────────────────────────── */
+
+.dark :root,
+.dark {
+  --vesting-unvested: #374151;
+}
+
+.dark .vesting-bar__tooltip {
+  background: #111827;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.dark .vesting-bar__tooltip::before {
+  border-color: transparent transparent #111827 transparent;
+}
+
+.dark .vesting-bar__legend {
+  color: #9ca3af;
+}
+
+.dark .vesting-bar__legend-item--unvested::before {
+  border-color: #4b5563;
+}
+
 .badge {
   text-transform: capitalize;
   font-size: 0.78rem;
