@@ -62,7 +62,8 @@ async function run() {
 }
 
 run().catch(err => {
-  console.error("Postgres Worker Error:", err);
+  process.stderr.write("Postgres Worker Error: " + (err.message || err) + "
+");
   process.exit(1);
 });
 `;
