@@ -1,17 +1,40 @@
-import Database from "better-sqlite3";
 import path from "path";
 import { runMigrations } from "./migrations";
+import { SQLITE_DEFAULT_READ_POOL_SIZE } from "./sqlite/constants";
+import { SqliteConnectionPool } from "./sqlite/connection-pool";
 
-const DB_PATH =
-  process.env.DB_PATH || path.join(__dirname, "..", "..", "data", "streams.db");
+function resolveDbPath(): string {
+  return process.env.DB_PATH || path.join(__dirname, "..", "..", "data", "streams.db");
+}
 
 let db: any;
+let sqlitePool: SqliteConnectionPool | null = null;
 
 export function getDb(): any {
   if (!db) {
     throw new Error("Database not initialized. Call initDb() first.");
   }
   return db;
+}
+
+export function getReadDb(): any {
+  if (sqlitePool) {
+    return sqlitePool.getReader();
+  }
+  return getDb();
+}
+
+export function closeDb(): void {
+  if (sqlitePool) {
+    sqlitePool.close();
+    sqlitePool = null;
+    db = undefined;
+    return;
+  }
+  if (db) {
+    db.close();
+    db = undefined;
+  }
 }
 
 export function isPostgres(): boolean {
@@ -259,39 +282,37 @@ class PostgresDatabase {
   }
 
   public prepare(sql: string): any {
-    const dbInstance = this;
     return {
-      run(...params: any[]): any {
+      run: (...params: any[]): any => {
         const paramObj = params.length === 1 && typeof params[0] === "object" && params[0] !== null && !Array.isArray(params[0]) ? params[0] : params;
-        const res = dbInstance.querySync(sql, paramObj);
+        const res = this.querySync(sql, paramObj);
         return {
           changes: res.rowCount,
           lastInsertRowid: 0,
         };
       },
-      get(...params: any[]): any {
+      get: (...params: any[]): any => {
         const paramObj = params.length === 1 && typeof params[0] === "object" && params[0] !== null && !Array.isArray(params[0]) ? params[0] : params;
-        const res = dbInstance.querySync(sql, paramObj);
+        const res = this.querySync(sql, paramObj);
         return res.rows[0] || undefined;
       },
-      all(...params: any[]): any {
+      all: (...params: any[]): any => {
         const paramObj = params.length === 1 && typeof params[0] === "object" && params[0] !== null && !Array.isArray(params[0]) ? params[0] : params;
-        const res = dbInstance.querySync(sql, paramObj);
+        const res = this.querySync(sql, paramObj);
         return res.rows;
       },
     };
   }
 
-  public transaction(fn: Function): any {
-    const dbInstance = this;
+  public transaction(fn: (...args: any[]) => any): any {
     return (...args: any[]) => {
-      dbInstance.exec("BEGIN");
+      this.exec("BEGIN");
       try {
         const result = fn(...args);
-        dbInstance.exec("COMMIT");
+        this.exec("COMMIT");
         return result;
       } catch (error) {
-        dbInstance.exec("ROLLBACK");
+        this.exec("ROLLBACK");
         throw error;
       }
     };
@@ -308,22 +329,33 @@ class PostgresDatabase {
   }
 }
 
+function resolveReadPoolSize(): number {
+  const raw = process.env.SQLITE_READ_POOL_SIZE;
+  if (!raw) {
+    return SQLITE_DEFAULT_READ_POOL_SIZE;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : SQLITE_DEFAULT_READ_POOL_SIZE;
+}
+
 export function initDb(): void {
+  closeDb();
+
   if (isPostgres()) {
     db = new PostgresDatabase(process.env.DATABASE_URL!);
   } else {
-    const dir = path.dirname(DB_PATH);
+    const dbPath = resolveDbPath();
+    const dir = path.dirname(dbPath);
     const fs = require("fs");
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    db = new Database(DB_PATH);
-    db.pragma("journal_mode = WAL");
-    db.pragma("foreign_keys = ON");
-    db.pragma("synchronous = NORMAL");
-    db.pragma("busy_timeout = 5000");
-    db.pragma("cache_size = -64000");
+    sqlitePool = new SqliteConnectionPool({
+      filePath: dbPath,
+      readPoolSize: resolveReadPoolSize(),
+    });
+    db = sqlitePool.getWriter();
   }
 
   runMigrations(db);
