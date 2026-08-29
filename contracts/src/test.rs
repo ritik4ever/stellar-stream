@@ -3063,3 +3063,207 @@ fn test_resume_non_paused_stream_panics() {
     let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
     client.resume_stream(&stream_id, &sender);
 }
+// ---------------------------------------------------------------------------
+// Recurring streams (auto-renew) tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_enable_auto_renew() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &2000);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    client.enable_auto_renew(&stream_id, &sender, &3);
+
+    let stream = client.get_stream(&stream_id);
+    assert!(stream.auto_renew);
+    assert_eq!(stream.max_renewals, 3);
+    assert_eq!(stream.renewals_completed, 0);
+}
+
+#[test]
+#[should_panic(expected = "sender mismatch")]
+fn test_enable_auto_renew_wrong_sender() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let wrong_sender = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    client.enable_auto_renew(&stream_id, &wrong_sender, &3);
+}
+
+#[test]
+fn test_renew_stream_after_completion() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &2000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    client.enable_auto_renew(&stream_id, &sender, &3);
+
+    // Move past end time
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+
+    let new_stream_id = client.renew_stream(&stream_id, &sender);
+    assert!(new_stream_id > stream_id);
+
+    // Verify old stream renewal counter incremented
+    let old_stream = client.get_stream(&stream_id);
+    assert_eq!(old_stream.renewals_completed, 1);
+
+    // Verify new stream
+    let new_stream = client.get_stream(&new_stream_id);
+    assert_eq!(new_stream.sender, sender);
+    assert_eq!(new_stream.recipient, recipient);
+    assert_eq!(new_stream.total_amount, 1000);
+    assert_eq!(new_stream.claimed_amount, 0);
+    assert!(new_stream.auto_renew);
+    assert_eq!(new_stream.max_renewals, 3);
+    assert_eq!(new_stream.renewals_completed, 0);
+    // New stream starts at now (1500) and ends at now + duration (1500 + 1000)
+    assert_eq!(new_stream.start_time, 1500);
+    assert_eq!(new_stream.end_time, 2500);
+}
+
+#[test]
+fn test_renew_stream_after_full_claim() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &2000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    client.enable_auto_renew(&stream_id, &sender, &2);
+
+    // Claim all before end time
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    client.claim(&stream_id, &recipient, &1000);
+
+    // Can renew because fully claimed
+    let new_stream_id = client.renew_stream(&stream_id, &sender);
+    assert!(new_stream_id > stream_id);
+
+    let old_stream = client.get_stream(&stream_id);
+    assert_eq!(old_stream.renewals_completed, 1);
+}
+
+#[test]
+#[should_panic(expected = "auto-renew not enabled")]
+fn test_renew_stream_without_enable() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+
+    client.renew_stream(&stream_id, &sender);
+}
+
+#[test]
+#[should_panic(expected = "max renewals reached")]
+fn test_renew_stream_max_renewals_enforced() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &5000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    client.enable_auto_renew(&stream_id, &sender, &1);
+
+    // First renewal
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    let new_id = client.renew_stream(&stream_id, &sender);
+    assert_eq!(new_id, stream_id + 1);
+
+    // Second renewal should fail (max_renewals=1, already used 1)
+    env.ledger().with_mut(|l| l.timestamp = 3000);
+    client.renew_stream(&stream_id, &sender);
+}
+
+#[test]
+#[should_panic(expected = "stream not yet completed")]
+fn test_renew_stream_before_completion() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    client.enable_auto_renew(&stream_id, &sender, &3);
+
+    // Try to renew before stream ends
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.renew_stream(&stream_id, &sender);
+}
+
+#[test]
+#[should_panic(expected = "insufficient sender balance for renewal")]
+fn test_renew_stream_insufficient_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    // Only mint exactly enough for the first stream, nothing left for renewal
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    client.enable_auto_renew(&stream_id, &sender, &3);
+
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    // Should fail: no balance left for renewal escrow
+    client.renew_stream(&stream_id, &sender);
+}
