@@ -25,6 +25,7 @@ CONTRACTS_DIR="contracts"
 CONTRACT_ID_FILE="contract_id.txt"
 NETWORK_PASSPHRASE="${NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}"
 RPC_URL="${RPC_URL:-https://soroban-testnet.stellar.org:443}"
+NETWORK="${NETWORK:-testnet}"
 
 # Check for required environment variables
 if [ -z "$SECRET_KEY" ]; then
@@ -93,7 +94,7 @@ echo -e "${YELLOW}Deploying contract to testnet...${NC}"
 DEPLOY_OUTPUT=$(soroban contract deploy \
     --wasm target/wasm32v1-none/release/stellar_stream.wasm \
     --source-account "$SECRET_KEY" \
-    --network testnet \
+    --network "$NETWORK" \
     --network-passphrase "$NETWORK_PASSPHRASE" \
     --rpc-url "$RPC_URL" \
     2>&1)
