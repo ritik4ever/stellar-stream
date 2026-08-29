@@ -821,13 +821,6 @@ describe("createStream", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-describe("getStreamById", () => {
-  const frozenTime = Math.floor(Date.now() / 1000);
-
-  beforeEach(() => {
-    vi.resetModules();
-    vi.clearAllMocks();
-    vi.spyOn(Date, "now").mockReturnValue(frozenTime * 1000);
 
     mockState.nextId = 1;
     mockState.existingStreamIds = new Set<string>();
@@ -899,11 +892,34 @@ describe("getStreamById", () => {
 
     expect(stream.id).toBe("42");
   });
-});
-  });
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+});
+
+describe("getStreamById", () => {
+  const frozenTime = Math.floor(Date.now() / 1000);
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    vi.spyOn(Date, "now").mockReturnValue(frozenTime * 1000);
+
+    mockState.nextId = 1;
+    mockState.existingStreamIds = new Set<string>();
+    mockState.chainStreams = new Map<number, any>();
+    mockState.upsertedStreams = [];
+    mockState.createdEventIds = new Set<string>();
+
+    dbMocks.initDb.mockImplementation(() => undefined);
+    dbMocks.getDb.mockReturnValue(createDbMock());
+
+    delete process.env.SOROBAN_DISABLED;
+    delete process.env.SOROBAN_ENABLED;
+    process.env.CONTRACT_ID = "C1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890";
+    process.env.RPC_URL = "https://soroban-testnet.stellar.org:443";
+    process.env.STELLAR_SECRET_KEY = "SDUMMYSECRETKEY12345678901234567890123456789012345678901";
   });
 
   function createGetDbMock(streamRow?: any) {
@@ -1020,5 +1036,120 @@ describe("getStreamById", () => {
     expect(result?.archived_at).toBe(archivedTimestamp);
     expect(result?.archived_at).not.toBeNull();
     expect(result?.status).toBe("completed");
+  });
+});
+
+describe("findRecentDuplicate", () => {
+  const frozenTime = Math.floor(Date.now() / 1000);
+  const ROW = {
+    id: "7",
+    sender: "GSENDER",
+    recipient: "GRECIPIENT",
+    asset_code: "USDC",
+    total_amount: 500,
+    duration_seconds: 3600,
+    start_at: frozenTime,
+    created_at: frozenTime,
+    canceled_at: null,
+    completed_at: null,
+    refunded_amount: null,
+    archived_at: null,
+    paused_at: null,
+    paused_duration: 0,
+    cliff_seconds: 0,
+    metadata: null,
+  };
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    vi.spyOn(Date, "now").mockReturnValue(frozenTime * 1000);
+
+    mockState.nextId = 1;
+    mockState.existingStreamIds = new Set<string>();
+    mockState.chainStreams = new Map<number, any>();
+    mockState.upsertedStreams = [];
+    mockState.createdEventIds = new Set<string>();
+
+    dbMocks.initDb.mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function duplicateDbMock(returnRow: typeof ROW | undefined, onGet?: (params: any) => void) {
+    return {
+      prepare(sql: string) {
+        if (sql.includes("WHERE sender = @sender") && sql.includes("created_at >= @since")) {
+          return {
+            get: (params: any) => {
+              onGet?.(params);
+              return returnRow;
+            },
+          };
+        }
+        throw new Error(`Unexpected SQL: ${sql}`);
+      },
+    };
+  }
+
+  it("returns a recent stream with identical sender, recipient, asset, and amount", async () => {
+    dbMocks.getDb.mockReturnValue(duplicateDbMock(ROW));
+
+    const { findRecentDuplicate } = await import("./streamStore");
+    const duplicate = findRecentDuplicate({
+      sender: "GSENDER",
+      recipient: "GRECIPIENT",
+      assetCode: "usdc",
+      totalAmount: 500,
+    });
+
+    expect(duplicate).toMatchObject({
+      id: "7",
+      sender: "GSENDER",
+      recipient: "GRECIPIENT",
+      assetCode: "USDC",
+      totalAmount: 500,
+    });
+  });
+
+  it("queries with the 60-second window and uppercased asset code", async () => {
+    let captured: any;
+    dbMocks.getDb.mockReturnValue(
+      duplicateDbMock(undefined, (params) => {
+        captured = params;
+      }),
+    );
+
+    const { findRecentDuplicate } = await import("./streamStore");
+    findRecentDuplicate({
+      sender: "GSENDER",
+      recipient: "GRECIPIENT",
+      assetCode: "usdc",
+      totalAmount: 500,
+    });
+
+    expect(captured).toEqual({
+      sender: "GSENDER",
+      recipient: "GRECIPIENT",
+      assetCode: "USDC",
+      totalAmount: 500,
+      since: frozenTime - 60,
+    });
+  });
+
+  it("returns undefined when no matching stream exists", async () => {
+    dbMocks.getDb.mockReturnValue(duplicateDbMock(undefined));
+
+    const { findRecentDuplicate } = await import("./streamStore");
+    const duplicate = findRecentDuplicate({
+      sender: "GSENDER",
+      recipient: "GRECIPIENT",
+      assetCode: "USDC",
+      totalAmount: 999,
+    });
+
+    expect(duplicate).toBeUndefined();
   });
 });

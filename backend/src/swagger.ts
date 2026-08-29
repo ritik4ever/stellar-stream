@@ -780,7 +780,19 @@ export const swaggerDocument = {
       },
       post: {
         summary: "Create a new stream",
-        description: "Creates a new stream with the given inputs.",
+        description: "Creates a new stream with the given inputs. Rejects near-duplicate streams (same sender, recipient, asset, and amount created within the last 60 seconds) with 409 unless the `X-Allow-Duplicate: true` header is sent.",
+        parameters: [
+          {
+            name: "X-Allow-Duplicate",
+            in: "header",
+            required: false,
+            description: "Set to `true` to bypass the near-duplicate check (same sender, recipient, asset, and amount within 60 seconds).",
+            schema: {
+              type: "string",
+              enum: ["true", "false"],
+            },
+          },
+        ],
         requestBody: {
           required: true,
           content: {
@@ -813,6 +825,32 @@ export const swaggerDocument = {
               "application/json": {
                 schema: {
                   $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
+          "409": {
+            description: "A near-duplicate stream (same sender, recipient, asset, and amount) was created within the last 60 seconds. Includes the existing stream ID.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    error: {
+                      type: "string",
+                    },
+                    statusCode: {
+                      type: "number",
+                    },
+                    code: {
+                      type: "string",
+                      example: "DUPLICATE_STREAM",
+                    },
+                    existingStreamId: {
+                      type: "string",
+                      description: "ID of the previously created stream.",
+                    },
+                  },
                 },
               },
             },

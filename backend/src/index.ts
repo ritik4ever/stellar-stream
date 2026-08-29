@@ -11,6 +11,7 @@ import { createServer } from "http";
 import { searchStreamsFts, getAllowedAssets, addAllowedAsset, removeAllowedAsset } from "./services/db";
 import { initWebSocket } from "./services/websocket";
 import {
+  buildApiErrorResponse,
   normalizeUnknownApiError,
   sendApiError,
   sendError,
@@ -54,6 +55,7 @@ import {
   calculateProgress,
   cancelStream,
   createStream,
+  findRecentDuplicate,
   getStream,
   getOnChainClaimableAmount,
   getOnChainClaimableBatch,
@@ -663,8 +665,13 @@ app.get("/api/events", readLimiter, (req: Request, res: Response) => {
 
   const total = countAllEvents(eventType, streamId, since);
 
+  const hasPage = req.query.page !== undefined || req.query.pageSize !== undefined;
+  const hasLimit = req.query.limit !== undefined || req.query.pageSize !== undefined;
   const page = query.page ?? PAGINATION_DEFAULT_PAGE;
-  const pageSize = query.pageSize ?? query.limit ?? PAGINATION_DEFAULT_LIMIT;
+  const pageSize =
+    !hasPage && !hasLimit
+      ? total
+      : (query.pageSize ?? query.limit ?? PAGINATION_DEFAULT_LIMIT);
 
   const offset = (page - 1) * pageSize;
   const data = getGlobalEvents(
@@ -1273,6 +1280,20 @@ app.post(
     }
 
     try {
+      if (req.get("X-Allow-Duplicate")?.toLowerCase() !== "true") {
+        const duplicate = findRecentDuplicate(parsedBody.data);
+        if (duplicate) {
+          const body = buildApiErrorResponse(
+            req,
+            409,
+            "A stream with the same sender, recipient, asset, and amount was already created within the last 60 seconds.",
+            { code: "DUPLICATE_STREAM" },
+          );
+          res.status(409).json({ ...body, existingStreamId: duplicate.id });
+          return;
+        }
+      }
+
       const stream = await createStream(parsedBody.data);
       res.status(201).json({
         data: {

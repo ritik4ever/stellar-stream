@@ -778,6 +778,44 @@ export async function reconcileMissingStreams(): Promise<number> {
   }
 }
 
+const DUPLICATE_WINDOW_SECONDS = 60;
+
+/**
+ * Finds a "near-duplicate" stream: an existing stream created within the last
+ * N seconds with the same sender, recipient, asset, and total amount.
+ * Used to guard against accidental double-submissions of the same stream.
+ */
+export function findRecentDuplicate(
+  input: Pick<
+    StreamInput,
+    "sender" | "recipient" | "assetCode" | "totalAmount"
+  >,
+): StreamRecord | undefined {
+  const db = getDb();
+  const since = nowInSeconds() - DUPLICATE_WINDOW_SECONDS;
+  const row = db
+    .prepare(
+      `
+      SELECT * FROM streams
+      WHERE sender = @sender
+        AND recipient = @recipient
+        AND asset_code = @assetCode
+        AND total_amount = @totalAmount
+        AND created_at >= @since
+      ORDER BY created_at DESC
+      LIMIT 1
+      `,
+    )
+    .get({
+      sender: input.sender,
+      recipient: input.recipient,
+      assetCode: input.assetCode.toUpperCase(),
+      totalAmount: input.totalAmount,
+      since,
+    }) as StreamRow | undefined;
+  return row ? rowToRecord(row) : undefined;
+}
+
 export async function createStream(input: StreamInput): Promise<StreamRecord> {
   const startAt = input.startAt ?? nowInSeconds();
   const sorobanDisabled =
@@ -809,8 +847,6 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
     const op = createStreamOperation(contractId, input, startAt);
 
     const txToSimulate = new TransactionBuilder(sourceAccount, {
-  const built = await rpcServer.prepareTransaction(
-    new TransactionBuilder(sourceAccount, {
       fee: "1000",
       networkPassphrase: netPass,
     })
