@@ -1,0 +1,134 @@
+name: Contract Deployment Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "contracts/**"
+      - "scripts/deploy.sh"
+      - ".github/workflows/contract-deploy.yml"
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'testnet'
+        type: choice
+        options:
+          - testnet
+          - staging
+          - mainnet
+
+jobs:
+  deploy-testnet:
+    name: Deploy to Testnet
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: testnet
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Soroban CLI
+        run: cargo install --locked soroban-cli
+
+      - name: Deploy Contract
+        env:
+          SECRET_KEY: ${{ secrets.STELLAR_SECRET_KEY }}
+          NETWORK: testnet
+          NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+          RPC_URL: "https://soroban-testnet.stellar.org:443"
+        run: ./scripts/deploy.sh
+
+      - name: Update Env Variables
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CONTRACT_ID=$(cat contracts/contract_id.txt)
+          echo "CONTRACT_ID=$CONTRACT_ID" >> $GITHUB_ENV
+          echo "Contract deployed with ID: $CONTRACT_ID"
+          gh variable set STELLAR_CONTRACT_ID --body "$CONTRACT_ID" --env testnet || echo "Warning: Failed to set Github Variable"
+
+  deploy-staging:
+    name: Deploy to Staging
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-please')
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Soroban CLI
+        run: cargo install --locked soroban-cli
+
+      - name: Deploy Contract
+        env:
+          SECRET_KEY: ${{ secrets.STELLAR_SECRET_KEY }}
+          NETWORK: testnet
+          NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+          RPC_URL: "https://soroban-testnet.stellar.org:443"
+        run: ./scripts/deploy.sh
+
+      - name: Update Env Variables
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CONTRACT_ID=$(cat contracts/contract_id.txt)
+          echo "CONTRACT_ID=$CONTRACT_ID" >> $GITHUB_ENV
+          echo "Contract deployed with ID: $CONTRACT_ID"
+          gh variable set STELLAR_CONTRACT_ID --body "$CONTRACT_ID" --env staging || echo "Warning: Failed to set Github Variable"
+
+  deploy-mainnet:
+    name: Deploy to Mainnet
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'mainnet'
+    runs-on: ubuntu-latest
+    environment: mainnet
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Soroban CLI
+        run: cargo install --locked soroban-cli
+
+      - name: Deploy Contract
+        env:
+          SECRET_KEY: ${{ secrets.STELLAR_MAINNET_SECRET_KEY }}
+          NETWORK: mainnet
+          NETWORK_PASSPHRASE: "Public Global Stellar Network ; September 2015"
+          RPC_URL: "https://soroban-mainnet.stellar.org:443"
+        run: ./scripts/deploy.sh
+
+      - name: Update Env Variables
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CONTRACT_ID=$(cat contracts/contract_id.txt)
+          echo "CONTRACT_ID=$CONTRACT_ID" >> $GITHUB_ENV
+          echo "Contract deployed with ID: $CONTRACT_ID"
+          gh variable set STELLAR_CONTRACT_ID --body "$CONTRACT_ID" --env mainnet || echo "Warning: Failed to set Github Variable"
