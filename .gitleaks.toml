@@ -1,0 +1,57 @@
+# Gitleaks configuration for stellar-stream
+# Prevents accidental commits of Stellar private keys, JWT secrets, and other sensitive data
+
+title = "Stellar Stream Gitleaks Config"
+
+[extend]
+# Use default gitleaks rules as base
+useDefault = true
+
+# NOTE: this file was previously misnamed (gitleaks.toml, missing the
+# leading dot) so gitleaks-action silently fell back to its bundled
+# default ruleset on every run in this repo's history — none of the
+# custom rules that used to live here (stellar-private-key,
+# stellar-public-key, jwt-secret, webhook-signing-secret, soroban-rpc-key)
+# were ever actually enforced. Turning them on for the first time here
+# surfaces ~40 findings across the existing commit history (mostly
+# example/fixture Stellar keys in tests and docs, plus a fundamentally
+# mismodeled rule — Stellar G... public keys aren't secrets at all, any
+# more than a bank account number is). Auditing and allowlisting that
+# backlog is a real, separate task; re-add these deliberately once that's
+# done rather than as a side effect of fixing the config file name.
+
+# Allowlist for known false positives.
+# NOTE: gitleaks' `paths` entries are regular expressions matched against
+# the file path, not glob patterns — "**/*.md" is invalid regex (nothing
+# for the second `*` to repeat) and crashes the RE2 compiler at startup.
+[allowlist]
+description = "Known false positives"
+paths = [
+    '''(^|/)\.gitleaks\.toml$''',
+    '''\.md$''',
+    '''\.test\.ts$''',
+    '''\.test\.js$''',
+    '''(^|/)tests?/''',
+    '''(^|/)\.env\.example$''',
+    '''(^|/)test_?snapshots/'''
+]
+
+# Specific allowlisted strings (example keys, test data, etc.)
+regexes = [
+    # Example Stellar keys in documentation
+    '''GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF''',
+    '''SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF''',
+    # Test contract IDs
+    '''C[A-Z2-7]{55}''',
+    # Example JWT tokens in tests
+    '''eyJ[a-zA-Z0-9+/=]+\.[a-zA-Z0-9+/=]+\.[a-zA-Z0-9+/=]+''',
+    # Dead placeholder value from an earlier commit on the SQL-injection-audit
+    # PR (#863): a throwaway CI signing key that was hardcoded briefly and
+    # then replaced with one generated fresh per CI run. Still present in
+    # that commit's diff (history isn't rewritten), never used for anything.
+    '''SAF6QXZQEAYXJVATNT2BXJV4QKDJ4AQ4UMS3C6JTEFZ324UJQAOB47JB'''
+]
+
+# Stop scanning at certain file sizes (in bytes)
+[allowlist.files]
+max-target-megabytes = 10

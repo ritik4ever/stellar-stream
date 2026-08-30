@@ -53,6 +53,7 @@ export interface StreamRecord {
   canceledAt?: number;
   completedAt?: number;
   refundedAmount?: number;
+  archivedAt?: number;
   pausedAt?: number;
   pausedDuration: number;
   cliffSeconds: number;
@@ -120,6 +121,7 @@ function rowToRecord(row: StreamRow): StreamRecord {
     canceledAt: row.canceled_at ?? undefined,
     completedAt: row.completed_at ?? undefined,
     refundedAmount: row.refunded_amount ?? undefined,
+    archivedAt: row.archived_at ?? undefined,
     pausedAt: row.paused_at ?? undefined,
     pausedDuration: row.paused_duration ?? 0,
     cliffSeconds: row.cliff_seconds ?? 0,
@@ -162,7 +164,7 @@ function upsertStream(record: StreamRecord): void {
     canceledAt: record.canceledAt ?? null,
     completedAt: record.completedAt ?? null,
     refundedAmount: record.refundedAmount ?? null,
-    archivedAt: null,
+    archivedAt: record.archivedAt ?? null,
     pausedAt: record.pausedAt ?? null,
     pausedDuration: record.pausedDuration ?? 0,
     cliffSeconds: record.cliffSeconds ?? 0,
@@ -449,8 +451,13 @@ export function calculateProgress(
   stream: StreamRecord,
   at = nowInSeconds(),
 ): StreamProgress {
-  const effectiveAt =
-    stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
+  let effectiveAt = at;
+  if (stream.pausedAt !== undefined) {
+    effectiveAt = Math.min(effectiveAt, stream.pausedAt);
+  }
+  if (stream.canceledAt !== undefined) {
+    effectiveAt = Math.min(effectiveAt, stream.canceledAt);
+  }
 
   const elapsed = Math.max(0, Math.max(0, effectiveAt - stream.startAt) - stream.pausedDuration);
   const ratio = stream.durationSeconds <= 0 ? 1 : Math.min(1, elapsed / stream.durationSeconds);
@@ -475,9 +482,21 @@ export async function getOnChainClaimableAmount(
     throw new Error("Soroban RPC server is not initialized.");
   }
 
-  const sourceAccount = await sorobanContext.sourceAccountPromise;
   const latestLedger = await rpcServer.getLatestLedger() as any;
-  const at = latestLedger.timestamp ? parseInt(latestLedger.timestamp, 10) : Math.floor(Date.now() / 1000);
+  const at = latestLedger.timestamp
+    ? parseInt(latestLedger.timestamp, 10)
+    : latestLedger.closeTime
+      ? parseInt(latestLedger.closeTime, 10)
+      : Math.floor(Date.now() / 1000);
+
+  // A paused or canceled stream stops vesting, so nothing further is
+  // claimable on-chain — skip the simulation entirely.
+  const stream = getStream(id);
+  if (stream && (stream.canceledAt !== undefined || stream.pausedAt !== undefined)) {
+    return { claimableAmount: 0, at };
+  }
+
+  const sourceAccount = await sorobanContext.sourceAccountPromise;
 
   const simRes = await simulateContractCall(
     sorobanContext.contract,
@@ -808,25 +827,19 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
     const sourceAccount = await rpcServer.getAccount(serverKeypair.publicKey());
     const op = createStreamOperation(contractId, input, startAt);
 
-    const txToSimulate = new TransactionBuilder(sourceAccount, {
-  const built = await rpcServer.prepareTransaction(
-    new TransactionBuilder(sourceAccount, {
-      fee: "1000",
-      networkPassphrase: netPass,
-    })
-      .addOperation(op)
-      .setTimeout(30)
-      .build();
+    const built = await rpcServer.prepareTransaction(
+      new TransactionBuilder(sourceAccount, {
+        fee: "1000",
+        networkPassphrase: netPass,
+      })
+        .addOperation(op)
+        .setTimeout(30)
+        .build(),
+    );
 
-    const simRes = await rpcServer.simulateTransaction(txToSimulate);
-    if (!rpc.Api.isSimulationSuccess(simRes)) {
-      throw new Error("Soroban RPC simulation failed: " + JSON.stringify(simRes));
-    }
+    built.sign(serverKeypair);
 
-    const preparedTx = await rpcServer.prepareTransaction(txToSimulate);
-    preparedTx.sign(serverKeypair);
-
-    const sendRes = await retryWithBackoff(() => rpcServer!.sendTransaction(preparedTx));
+    const sendRes = await retryWithBackoff(() => rpcServer!.sendTransaction(built));
     if (sendRes.status !== "PENDING") {
       throw new Error("Failed to send transaction: " + JSON.stringify(sendRes));
     }
@@ -927,10 +940,10 @@ export function refreshStreamStatuses(): number {
   const now = nowInSeconds();
 
   const toComplete = db.prepare(`
-    SELECT * FROM streams 
+    SELECT * FROM streams
     WHERE canceled_at IS NULL AND completed_at IS NULL AND paused_at IS NULL
       AND (start_at + duration_seconds) <= ?
-  `).all() as StreamRow[];
+  `).all(now) as StreamRow[];
 
   const result = db.prepare(`
     UPDATE streams SET completed_at = ?

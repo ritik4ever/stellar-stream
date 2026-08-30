@@ -1,15 +1,29 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { validateEnv } from "./validateEnv";
 
 describe("validateEnv", () => {
-  const originalEnv = process.env;
+  // Snapshot as a plain object (not a reference to the live process.env,
+  // which is a special exotic object: `process.env = {...}` only sets keys
+  // from the new object without clearing existing ones, so a reference
+  // snapshot would silently accumulate mutations across tests).
+  const originalEnv = { ...process.env };
   const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
   const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => { });
   const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => { });
   const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => { });
 
+  function clearEnv() {
+    Object.keys(process.env).forEach((key) => {
+      delete process.env[key];
+    });
+  }
+
   beforeEach(() => {
-    process.env = { ...originalEnv };
+    // Start every test from a genuinely empty env so each test's own
+    // `process.env = { ... }` fully determines what's set — matching what
+    // that assignment looks like it does (it doesn't actually clear
+    // pre-existing keys; see note above).
+    clearEnv();
     exitSpy.mockClear();
     consoleErrorSpy.mockClear();
     consoleWarnSpy.mockClear();
@@ -17,7 +31,11 @@ describe("validateEnv", () => {
   });
 
   afterEach(() => {
-    process.env = originalEnv;
+    clearEnv();
+  });
+
+  afterAll(() => {
+    Object.assign(process.env, originalEnv);
   });
 
   describe("Acceptance Criteria 1: Invalid config fails fast with helpful messages", () => {

@@ -29,6 +29,8 @@ const EXPECTED_STREAMS_COLUMNS = [
   "metadata",
 ];
 
+const EXPECTED_STREAMS_ONLY_COLUMNS = [...EXPECTED_STREAMS_COLUMNS, "cliff_seconds"];
+
 const EXPECTED_WEBHOOK_DEAD_LETTERS_COLUMNS = [
   "id",
   "url",
@@ -46,7 +48,7 @@ function createTempDbPath(): string {
   );
 }
 
-function openDb(dbPath: string): Database.Database {
+function openDb(dbPath: string): any {
   const db = new Database(dbPath);
   db.pragma("foreign_keys = ON");
   return db;
@@ -54,7 +56,7 @@ function openDb(dbPath: string): Database.Database {
 
 describe("database migrations", () => {
   let dbPath: string;
-  let db: Database.Database;
+  let db: any;
 
   afterEach(() => {
     if (db) {
@@ -81,7 +83,7 @@ describe("database migrations", () => {
       migrations.map((migration) => migration.version)
     );
 
-    expect(getTableColumns(db, "streams")).toEqual(EXPECTED_STREAMS_COLUMNS);
+    expect(getTableColumns(db, "streams")).toEqual(EXPECTED_STREAMS_ONLY_COLUMNS);
     expect(getTableColumns(db, "stream_archive")).toEqual(EXPECTED_STREAMS_COLUMNS);
     expect(getTableColumns(db, "webhook_dead_letters")).toEqual(
       EXPECTED_WEBHOOK_DEAD_LETTERS_COLUMNS
@@ -120,7 +122,7 @@ describe("database migrations", () => {
     expect(applied.map((row) => row.version)).toEqual(
       migrations.map((migration) => migration.version)
     );
-    expect(getTableColumns(db, "streams")).toEqual(EXPECTED_STREAMS_COLUMNS);
+    expect(getTableColumns(db, "streams")).toEqual(EXPECTED_STREAMS_ONLY_COLUMNS);
 
     runMigrations(db);
 
@@ -129,7 +131,7 @@ describe("database migrations", () => {
       .all() as Array<{ version: number }>;
 
     expect(appliedAfterSecondRun).toHaveLength(migrations.length);
-    expect(getTableColumns(db, "streams")).toEqual(EXPECTED_STREAMS_COLUMNS);
+    expect(getTableColumns(db, "streams")).toEqual(EXPECTED_STREAMS_ONLY_COLUMNS);
   });
 
   it("seeds baseline migrations for pre-existing databases", () => {
@@ -152,7 +154,7 @@ describe("database migrations", () => {
     expect(applied.map((row) => row.version)).toEqual(
       migrations.map((migration) => migration.version)
     );
-    expect(getTableColumns(db, "streams")).toEqual(EXPECTED_STREAMS_COLUMNS);
+    expect(getTableColumns(db, "streams")).toEqual(EXPECTED_STREAMS_ONLY_COLUMNS);
   });
 
   it("rolls back the latest migration using the down script", () => {
@@ -175,6 +177,6 @@ describe("database migrations", () => {
       .prepare("SELECT version FROM schema_migrations ORDER BY version")
       .all() as Array<{ version: number }>;
 
-    expect(applied.map((row) => row.version)).toEqual([1, 2, 3]);
+    expect(applied.map((row) => row.version)).toEqual([1, 2, 3, 5, 6]);
   });
 });

@@ -42,6 +42,12 @@ export default tseslint.config(
     },
   },
   {
+    files: ['**/*.stories.tsx'],
+    rules: {
+      'no-console': 'off',
+    },
+  },
+  {
     files: ['**/*.test.ts', '**/*.test.tsx'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',

@@ -22,8 +22,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }} # Optional: for gitleaks pro features
-        with:
-          config-path: gitleaks.toml
+          # gitleaks-action doesn't take a `config-path` input (that was
+          # silently ignored) — it auto-detects .gitleaks.toml at the repo
+          # root, or a custom path can be set via GITLEAKS_CONFIG.
+          GITLEAKS_CONFIG: .gitleaks.toml
           
       - name: Upload Gitleaks Report
         if: failure()

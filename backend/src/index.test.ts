@@ -18,6 +18,7 @@ const streamStoreMocks = vi.hoisted(() => ({
   initSoroban: vi.fn(),
   listStreams: vi.fn(),
   listStreamsBySender: vi.fn(),
+  nowInSeconds: vi.fn(() => Math.floor(Date.now() / 1000)),
   syncStreams: vi.fn(),
   updateStreamStartAt: vi.fn(),
 }));
@@ -34,11 +35,19 @@ const eventHistoryMocks = vi.hoisted(() => ({
 
 vi.mock("./services/streamStore", () => streamStoreMocks);
 vi.mock("./services/eventHistory", () => eventHistoryMocks);
+vi.mock("./services/db", () => ({
+  searchStreamsFts: vi.fn(),
+  getAllowedAssets: vi.fn(() => ["USDC", "XLM"]),
+  addAllowedAsset: vi.fn(),
+  removeAllowedAsset: vi.fn(),
+}));
 vi.mock("./services/auth", () => ({
   authMiddleware: vi.fn((req: any, res: any, next: any) => next()),
+  adminJwtAuth: vi.fn((req: any, res: any, next: any) => next()),
   generateChallenge: vi.fn(),
   refreshToken: vi.fn(),
   verifyChallengeAndIssueToken: vi.fn(),
+  getJwtSecret: vi.fn(() => "test_secret_for_integration"),
 }));
 
 const TEST_JWT_SECRET = "test_secret_for_integration";
@@ -163,7 +172,7 @@ function invokeListStreamsRoute(
     throw new Error("GET /api/streams route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (req: any, res: any) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -176,6 +185,9 @@ function invokeListStreamsRoute(
     },
     json(payload: any) {
       jsonBody = payload;
+      return this;
+    },
+    set() {
       return this;
     },
   };
@@ -197,7 +209,7 @@ function invokeSenderStreamsRoute(
     throw new Error("GET /api/senders/:accountId/streams route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (req: any, res: any) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -210,6 +222,9 @@ function invokeSenderStreamsRoute(
     },
     json(payload: any) {
       jsonBody = payload;
+      return this;
+    },
+    set() {
       return this;
     },
   };
@@ -645,7 +660,7 @@ function invokeGlobalEventsRoute(
     throw new Error("GET /api/events route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (req: any, res: any) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -654,6 +669,7 @@ function invokeGlobalEventsRoute(
   const res = {
     status(code: number) { statusCode = code; return this; },
     json(payload: any) { jsonBody = payload; return this; },
+    set() { return this; },
   };
 
   handler(req, res);
@@ -686,7 +702,7 @@ describe("GET /api/events", () => {
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
-    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith("created");
+    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith("created", undefined, undefined);
 
   });
 
