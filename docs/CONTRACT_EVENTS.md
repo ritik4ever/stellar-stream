@@ -209,6 +209,45 @@ The claim reverts with `ClaimTooFrequent`.
 
 ---
 
+### ProposalCreated *(new — DAO governance, #695)*
+
+**Topic:** `("Proposal", "Created")`  
+**Triggered by:** `create_proposal()`
+
+| Field         | Type             | Description                                         |
+|---------------|------------------|-----------------------------------------------------|
+| `proposal_id` | `u64`            | Unique proposal identifier.                         |
+| `proposer`    | `Address`        | Account that created the proposal.                  |
+| `target`      | `ProposalTarget` | What the proposal changes when executed.            |
+| `voting_end`  | `u64`            | Ledger timestamp when voting closes (created + 7d). |
+| `timestamp`   | `u64`            | Ledger close time when the proposal was created.    |
+
+### VoteCast *(new — DAO governance, #695)*
+
+**Topic:** `("Proposal", "Vote")`  
+**Triggered by:** `vote()`
+
+| Field         | Type      | Description                                    |
+|---------------|-----------|------------------------------------------------|
+| `proposal_id` | `u64`     | Proposal being voted on.                       |
+| `voter`       | `Address` | Account that voted.                            |
+| `support`     | `bool`    | `true` = for, `false` = against.               |
+| `weight`      | `i128`    | Voter's governance token balance at vote time. |
+| `timestamp`   | `u64`     | Ledger close time of the vote.                 |
+
+### ProposalExecuted *(new — DAO governance, #695)*
+
+**Topic:** `("Proposal", "Executed")`  
+**Triggered by:** `execute()` (only when the proposal passes)
+
+| Field         | Type             | Description                  |
+|---------------|------------------|------------------------------|
+| `proposal_id` | `u64`            | Executed proposal.           |
+| `target`      | `ProposalTarget` | The change that was applied. |
+| `timestamp`   | `u64`            | Ledger close time of the execution. |
+
+---
+
 ## Event Ordering Guarantees
 
 Within a single transaction:

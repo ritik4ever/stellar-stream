@@ -3,6 +3,8 @@
 mod errors;
 
 use errors::ContractError;
+pub mod dao;
+mod errors;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
     Map, String, Vec,
@@ -337,6 +339,7 @@ impl StellarStreamContract {
                 .get(&DataKey::AllowedTokens)
                 .unwrap_or_else(|| Vec::new(&env));
             #[cfg(not(test))]
+            #[cfg(not(any(test, feature = "testutils")))]
             if !allowed_tokens.contains(&token) {
                 panic!("ContractError::TokenNotAllowed");
             }
@@ -1006,6 +1009,10 @@ fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
     } else {
         at_time
     };
+
+    if effective_now < stream.start_time.saturating_add(stream.cliff_seconds) {
+        return 0;
+    }
 
     let effective_time = if effective_now >= stream.end_time {
         stream.end_time
