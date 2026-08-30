@@ -84,3 +84,45 @@ the exact panic string is the contract's error contract. The edge cases in
 | `too many stream ids` | `get_claimable_batch` | More than 20 ids in one batch. |
 | `unauthorized` | `clawback`, allowlist admin fns | Caller is not the stored admin. |
 | `contract not initialized` / `not initialized` | admin/native paths | Called before `initialize`. |
+
+---
+
+## Stream status model
+
+The contract does not store a `status` field; status is derived from the stored
+stream fields (`canceled`, `paused`, `claimed_amount`, `total_amount`,
+`start_time`, `end_time`) and the current ledger timestamp. There are exactly
+**four** statuses:
+
+| Status | Condition (checked in order) |
+|--------|------------------------------|
+| `Canceled` | `stream.canceled == true` |
+| `Paused` | `stream.paused == true` |
+| `Completed` | `at_time >= end_time` **or** `claimed_amount >= total_amount` |
+| `Active` | anything else (includes pre-start / "scheduled" streams) |
+
+Precedence is `Canceled > Paused > Completed > Active`. The backend refines
+`Active` into `scheduled`/`active` and tracks a separate `completedAt` state.
+
+## Property-based test guarantees
+
+[`contracts/src/tests/property_tests.rs`](../contracts/src/tests/property_tests.rs)
+(gated behind the `proptest` feature) verifies the invariants below over
+**10,000 randomly generated stream configurations per property**:
+
+```bash
+cd contracts
+cargo test --features proptest
+```
+
+| Property | Invariant |
+|----------|-----------|
+| `vested_amount_always_in_bounds` | `0 <= vested_amount(stream, t) <= total_amount` for every `t` |
+| `claimable_never_exceeds_vested_minus_claimed` | `claimable(stream, t) == max(0, vested − claimed)`; in particular `claimable <= vested − claimed` whenever `vested >= claimed` |
+| `status_is_always_one_of_four` | `stream_status(stream, t)` is always one of the four statuses above and is consistent with the stored state |
+| `cancel_always_produces_canceled_status` | after `cancel`, `stream.canceled == true` and the derived status is `Canceled` |
+
+The generated inputs cover amounts up to 10¹⁸, timestamps up to 2×10⁶,
+non-zero cliffs, pre-start / mid-stream / post-end times, paused streams, and
+canceled streams. Inputs are bounded so the integer arithmetic in
+`vested_amount` cannot overflow `i128`.

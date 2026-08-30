@@ -6,8 +6,20 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# `testutils` mirrors the lenient token-allowlist behavior used in tests
+# (see the `#[cfg(any(test, feature = "testutils"))]` branches in lib.rs).
+testutils = []
+# `proptest` gates the property-based tests in src/tests/property_tests.rs:
+#   cargo test --features proptest
+proptest = ["dep:proptest"]
+
 [dependencies]
 soroban-sdk = "21.0.0"
+# Optional so it is only compiled when the `proptest` feature is enabled
+# (Cargo does not allow optional dev-dependencies). It is only referenced
+# from `src/tests/property_tests.rs`, which is gated on cfg(test).
+proptest = { version = "1", optional = true }
 
 [dev-dependencies]
 soroban-sdk = { version = "21.0.0", features = ["testutils"] }

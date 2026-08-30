@@ -14,6 +14,74 @@ fn create_token(env: &Env, admin: &Address) -> Address {
     token_contract_id.address()
 }
 
+// ---------------------------------------------------------------------------
+// Legacy vesting contract used only by unit tests below
+//
+// Kept here (test-only) so the tests keep passing; it is not part of the
+// deployed StellarStream contract ABI. It was previously defined in lib.rs
+// where its `claim` entry point collided with `StellarStreamContract::claim`.
+// ---------------------------------------------------------------------------
+
+#[contract]
+struct EscrowVestingContract;
+
+#[contractimpl]
+impl EscrowVestingContract {
+    /// Claims available vested tokens for the recipient and transfers real tokens.
+    ///
+    /// # Parameters
+    /// * `env` - The execution environment.
+    /// * `recipient` - The account receiving the vested tokens (must authenticate).
+    /// * `token` - The SEP-41 token contract address.
+    ///
+    /// # Returns
+    /// * `Result<i128, ContractError>` - The actual amount of tokens transferred.
+    pub fn claim(env: Env, recipient: Address, token: Address) -> Result<i128, ContractError> {
+        // 1. Authenticate recipient
+        recipient.require_auth();
+
+        // 2. Calculate vested and already-claimed amounts from storage
+        let total_vested: i128 = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "total_vested"))
+            .unwrap_or(0);
+        let already_claimed: i128 = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, "claimed_amount"))
+            .unwrap_or(0);
+
+        let claimable_amount = total_vested.checked_sub(already_claimed).unwrap_or(0);
+
+        // 3. Validate claimable amount - revert with InsufficientVested if 0 or negative
+        if claimable_amount <= 0 {
+            return Err(ContractError::InsufficientVested);
+        }
+
+        // 4. Update contract storage accounting
+        let new_claimed_total = already_claimed.checked_add(claimable_amount).unwrap();
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "claimed_amount"), &new_claimed_total);
+
+        // 5. Transfer tokens via Soroban SEP-41 token client
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+        let contract_address = env.current_contract_address();
+
+        token_client.transfer(&contract_address, &recipient, &claimable_amount);
+
+        // 6. Emit Claimed event
+        env.events().publish(
+            (symbol_short!("Claimed"), recipient.clone()),
+            claimable_amount,
+        );
+
+        // 7. Return actual transferred amount
+        Ok(claimable_amount)
+    }
+}
+
 #[contract]
 struct MockToken;
 #[contractimpl]
@@ -54,6 +122,7 @@ fn test_claim_transfers_tokens_and_updates_balance() {
     let contract_id = env.register_contract(None, escrow::EscrowVestingContract);
     let client = escrow::EscrowVestingContractClient::new(&env, &contract_id);
 
+    // Setup mock recipient and SAC token
     // Setup mock admin, recipient, and SAC token
     let recipient = Address::generate(&env);
 
@@ -2517,6 +2586,470 @@ fn test_cancel_after_partial_claim_full_lifecycle() {
     // Step 7: Token conservation: sender_refund + claimed == total original amount
     let recipient_balance = token_client.balance(&recipient);
     assert_eq!(sender_refund + recipient_balance, 100);
+}
+
+// =============================================================================
+// #593 — Multi-token allowlist management tests
+// =============================================================================
+
+/// After initialize with an allowlist, get_allowed_tokens returns those tokens.
+#[test]
+fn test_get_allowed_tokens_returns_initialized_list() {
+// #594 — Comprehensive stream state transitions & edge-case coverage
+// =============================================================================
+
+/// Full lifecycle: create → claim partial → advance to completion → claim remainder
+#[test]
+fn test_full_lifecycle_create_claim_complete() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_a = Address::generate(&env);
+    let token_b = Address::generate(&env);
+
+    let allowed = soroban_sdk::vec![&env, token_a.clone(), token_b.clone()];
+    client.initialize(&admin, &Address::generate(&env), &allowed);
+
+    let result = client.get_allowed_tokens();
+    assert_eq!(result.len(), 2);
+    assert!(result.contains(&token_a));
+    assert!(result.contains(&token_b));
+}
+
+/// get_allowed_tokens returns empty Vec before initialize is called.
+#[test]
+fn test_get_allowed_tokens_returns_empty_before_init() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let result = client.get_allowed_tokens();
+    assert_eq!(result.len(), 0);
+}
+
+/// add_allowed_token appends a new token to the allowlist.
+#[test]
+fn test_add_allowed_token_appends_to_list() {
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+    let token_client = token::Client::new(&env, &token);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    assert_eq!(client.get_stream_count(), 1);
+
+    env.ledger().with_mut(|l| l.timestamp = 400);
+    let claimed = client.claim(&stream_id, &recipient, &400);
+    assert_eq!(claimed, 400);
+    assert_eq!(token_client.balance(&recipient), 400);
+
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    let claimed = client.claim(&stream_id, &recipient, &600);
+    assert_eq!(claimed, 600);
+    assert_eq!(token_client.balance(&recipient), 1000);
+
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.claimed_amount, 1000);
+    assert_eq!(stream.total_amount, 1000);
+
+    assert_eq!(client.claimable(&stream_id, &1000), 0);
+    assert_eq!(client.claimable(&stream_id, &2000), 0);
+}
+
+/// Full lifecycle: create → wait for partial vesting → cancel → verify refund and final state
+#[test]
+fn test_full_lifecycle_create_cancel() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    assert_eq!(client.get_allowed_tokens().len(), 0);
+
+    let token_a = Address::generate(&env);
+    client.add_allowed_token(&admin, &token_a);
+
+    let result = client.get_allowed_tokens();
+    assert_eq!(result.len(), 1);
+    assert!(result.contains(&token_a));
+}
+
+/// add_allowed_token is idempotent: adding the same token twice keeps only one entry.
+#[test]
+fn test_add_allowed_token_idempotent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_a = Address::generate(&env);
+    client.initialize(
+        &admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env, token_a.clone()],
+    );
+
+    // Add the same token again
+    client.add_allowed_token(&admin, &token_a);
+
+    assert_eq!(client.get_allowed_tokens().len(), 1);
+}
+
+/// Non-admin cannot add a token; panics with "unauthorized".
+#[test]
+#[should_panic(expected = "unauthorized")]
+fn test_add_allowed_token_non_admin_panics() {
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+    let token_client = token::Client::new(&env, &token);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 600);
+    client.cancel(&stream_id, &sender);
+
+    let stream = client.get_stream(&stream_id);
+    assert!(stream.canceled);
+    assert_eq!(stream.total_amount, 600);
+    assert_eq!(stream.end_time, 600);
+
+    assert_eq!(token_client.balance(&sender), 400);
+
+    let claimed = client.claim(&stream_id, &recipient, &600);
+    assert_eq!(claimed, 600);
+    assert_eq!(token_client.balance(&recipient), 600);
+
+    assert_eq!(client.claimable(&stream_id, &2000), 0);
+    assert_eq!(
+        token_client.balance(&sender) + token_client.balance(&recipient),
+        1000
+    );
+}
+
+/// Full lifecycle: create → pause → resume → claim → complete
+#[test]
+fn test_full_lifecycle_pause_resume_claim() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    client.add_allowed_token(&attacker, &Address::generate(&env));
+}
+
+/// remove_allowed_token removes an existing token from the allowlist.
+#[test]
+fn test_remove_allowed_token_removes_from_list() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_a = Address::generate(&env);
+    let token_b = Address::generate(&env);
+    client.initialize(
+        &admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env, token_a.clone(), token_b.clone()],
+    );
+
+    client.remove_allowed_token(&admin, &token_a);
+
+    let result = client.get_allowed_tokens();
+    assert_eq!(result.len(), 1);
+    assert!(!result.contains(&token_a));
+    assert!(result.contains(&token_b));
+}
+
+/// remove_allowed_token on a token not in the list is a no-op (no panic).
+#[test]
+fn test_remove_allowed_token_missing_is_noop() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+    let token_client = token::Client::new(&env, &token);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    let admin = Address::generate(&env);
+    let token_a = Address::generate(&env);
+    client.initialize(
+        &admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env, token_a.clone()],
+    );
+
+    let unknown_token = Address::generate(&env);
+    // Should not panic
+    client.remove_allowed_token(&admin, &unknown_token);
+
+    assert_eq!(client.get_allowed_tokens().len(), 1);
+}
+
+/// Non-admin cannot remove a token; panics with "unauthorized".
+#[test]
+#[should_panic(expected = "unauthorized")]
+fn test_remove_allowed_token_non_admin_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let token_a = Address::generate(&env);
+    client.initialize(
+        &admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env, token_a.clone()],
+    );
+
+    client.remove_allowed_token(&attacker, &token_a);
+}
+
+/// A stream can be created with a token that is on the allowlist.
+#[test]
+fn test_create_stream_with_allowlisted_token_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_admin_addr = Address::generate(&env);
+    let token = create_token(&env, &token_admin_addr);
+    let token_mint = token::StellarAssetClient::new(&env, &token);
+    token_mint.mint(&sender, &1000);
+
+    client.initialize(
+        &admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env, token.clone()],
+    );
+
+    // Should succeed — token is on the allowlist
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.token, token);
+}
+
+/// A stream creation is rejected when the token is not on the allowlist.
+#[test]
+#[should_panic(expected = "ContractError::TokenNotAllowed")]
+fn test_create_stream_with_non_allowlisted_token_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_admin_addr = Address::generate(&env);
+    let allowed_token = create_token(&env, &token_admin_addr);
+    let other_token = create_token(&env, &token_admin_addr);
+
+    let token_mint = token::StellarAssetClient::new(&env, &other_token);
+    token_mint.mint(&sender, &1000);
+
+    // Only allowed_token is on the allowlist; other_token is not
+    client.initialize(
+        &admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env, allowed_token.clone()],
+    );
+
+    client.create_stream(
+        &sender,
+        &recipient,
+        &other_token,
+        &1000,
+        &0,
+        &1000,
+        &0,
+        &None,
+    );
+}
+
+/// After removing a token from the allowlist, creating a stream with it is rejected.
+#[test]
+#[should_panic(expected = "ContractError::TokenNotAllowed")]
+fn test_create_stream_rejected_after_token_removed_from_allowlist() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_admin_addr = Address::generate(&env);
+    let token = create_token(&env, &token_admin_addr);
+    let other_token = create_token(&env, &token_admin_addr);
+    let token_mint = token::StellarAssetClient::new(&env, &token);
+    token_mint.mint(&sender, &2000);
+
+    client.initialize(
+        &admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env, token.clone(), other_token.clone()],
+    );
+
+    // First creation succeeds
+    client.create_stream(&sender, &recipient, &token, &100, &0, &1000, &0, &None);
+
+    // Admin removes the token. The allowlist still contains other_token, so the
+    // lenient test-mode check still rejects the removed token.
+    client.remove_allowed_token(&admin, &token);
+
+    // Second creation must now fail
+    client.create_stream(&sender, &recipient, &token, &100, &0, &1000, &0, &None);
+}
+
+/// After adding a token to the allowlist, creating a stream with it succeeds.
+#[test]
+fn test_create_stream_succeeds_after_token_added_to_allowlist() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_admin_addr = Address::generate(&env);
+    let token = create_token(&env, &token_admin_addr);
+    let token_mint = token::StellarAssetClient::new(&env, &token);
+    token_mint.mint(&sender, &1000);
+
+    // Initialize with an empty allowlist
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    // Add token to allowlist
+    client.add_allowed_token(&admin, &token);
+
+    // Stream creation should now succeed
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    assert_eq!(client.get_stream(&stream_id).token, token);
+}
+
+// =============================================================================
+// #593 — set_admin tests
+// =============================================================================
+
+/// Admin can transfer the admin role to a new address.
+#[test]
+fn test_set_admin_transfers_admin_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    client.set_admin(&admin, &new_admin);
+
+    // new_admin can now manage the allowlist without panicking
+    let token_a = Address::generate(&env);
+    client.add_allowed_token(&new_admin, &token_a);
+    assert_eq!(client.get_allowed_tokens().len(), 1);
+}
+
+/// Old admin loses privileges after set_admin is called.
+#[test]
+#[should_panic(expected = "unauthorized")]
+fn test_set_admin_old_admin_loses_privileges() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    client.set_admin(&admin, &new_admin);
+
+    // Old admin can no longer add tokens
+    client.add_allowed_token(&admin, &Address::generate(&env));
+}
+
+/// Non-admin cannot call set_admin; panics with "unauthorized".
+#[test]
+#[should_panic(expected = "unauthorized")]
+fn test_set_admin_non_admin_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    client.set_admin(&attacker, &new_admin);
+}
+
+/// Calling set_admin before initialize panics with "contract not initialized".
+#[test]
+#[should_panic(expected = "contract not initialized")]
+fn test_set_admin_before_initialize_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    client.set_admin(&Address::generate(&env), &Address::generate(&env));
+}
+
+/// New admin can also transfer admin to yet another address (chain of transfers).
+#[test]
+fn test_set_admin_chain_transfer() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let admin3 = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    client.set_admin(&admin, &admin2);
+    client.set_admin(&admin2, &admin3);
+
+    // admin3 can add tokens
+    let token_a = Address::generate(&env);
+    client.add_allowed_token(&admin3, &token_a);
+    assert!(client.get_allowed_tokens().contains(&token_a));
 }
 
 // =============================================================================

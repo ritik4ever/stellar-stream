@@ -10,6 +10,7 @@ use soroban_sdk::{
     Map, String, Vec,
 };
 
+mod errors;
 // ---------------------------------------------------------------------------
 // Legacy escrow vesting contract
 //
@@ -310,6 +311,7 @@ impl StellarStreamContract {
     // Stream creation
     // -----------------------------------------------------------------------
 
+    // The argument count is fixed by the on-chain ABI (see CONTRACT_ABI.md).
     #[allow(clippy::too_many_arguments)]
     pub fn create_stream(
         env: Env,
@@ -419,6 +421,8 @@ impl StellarStreamContract {
         next_id
     }
 
+    // The argument count is fixed by the on-chain ABI (see CONTRACT_ABI.md).
+    #[allow(clippy::too_many_arguments)]
     pub fn create_split_stream(
         env: Env,
         sender: Address,
@@ -1032,3 +1036,8 @@ fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
 
 #[cfg(test)]
 mod test;
+
+// Property-based tests (proptest) live behind the `proptest` feature:
+//   cargo test --features proptest
+#[cfg(all(test, feature = "proptest"))]
+mod tests;
