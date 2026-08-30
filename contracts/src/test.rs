@@ -3782,3 +3782,205 @@ fn test_set_native_token_rejects_non_admin() {
     client.initialize(&admin, &native_token, &soroban_sdk::vec![&env]);
     client.set_native_token(&outsider, &replacement);
 }
+
+#[test]
+fn test_accelerate_stream_1_hour_to_30_min_at_15_min_mark() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    // 1-hour stream (3600 seconds) from time 0 to 3600 with total 1000
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &3600, &0, &None);
+
+    // At 15 min mark (900 seconds)
+    env.ledger().with_mut(|l| l.timestamp = 900);
+    assert_eq!(client.claimable(&stream_id, &900), 250);
+
+    // Accelerate to 30 min (1800 seconds remaining duration)
+    client.accelerate_stream(&stream_id, &sender, &1800);
+
+    // Vested amount at 900 is preserved
+    assert_eq!(client.claimable(&stream_id, &900), 250);
+
+    // Midpoint of remaining period: 900 + 900 = 1800
+    // Remaining unvested is 750. Half of 750 is 375. 250 + 375 = 625
+    assert_eq!(client.claimable(&stream_id, &1800), 625);
+
+    // End of accelerated stream: 900 + 1800 = 2700
+    assert_eq!(client.claimable(&stream_id, &2700), 1000);
+
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.end_time, 2700);
+}
+
+#[test]
+fn test_accelerate_stream_after_most_amount_vested() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    // 1000s stream from 0 to 1000
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    // Move to 900s (90% vested = 900)
+    env.ledger().with_mut(|l| l.timestamp = 900);
+    assert_eq!(client.claimable(&stream_id, &900), 900);
+
+    // Accelerate remaining 100s to 50s
+    client.accelerate_stream(&stream_id, &sender, &50);
+
+    assert_eq!(client.claimable(&stream_id, &900), 900);
+    assert_eq!(client.claimable(&stream_id, &925), 950);
+    assert_eq!(client.claimable(&stream_id, &950), 1000);
+
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.end_time, 950);
+}
+
+#[test]
+fn test_accelerate_scheduled_stream_before_start() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    // Scheduled stream from 1000 to 3000 (duration 2000)
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &1000, &3000, &0, &None);
+
+    // At time 500, accelerate to duration 1000
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.accelerate_stream(&stream_id, &sender, &1000);
+
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.start_time, 1000);
+    assert_eq!(stream.end_time, 2000);
+
+    assert_eq!(client.claimable(&stream_id, &500), 0);
+    assert_eq!(client.claimable(&stream_id, &1000), 0);
+    assert_eq!(client.claimable(&stream_id, &1500), 500);
+    assert_eq!(client.claimable(&stream_id, &2000), 1000);
+}
+
+#[test]
+#[should_panic(expected = "stream completed")]
+fn test_accelerate_completed_stream_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+
+    client.accelerate_stream(&stream_id, &sender, &100);
+}
+
+#[test]
+#[should_panic(expected = "stream canceled")]
+fn test_accelerate_canceled_stream_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.cancel(&stream_id, &sender);
+
+    client.accelerate_stream(&stream_id, &sender, &100);
+}
+
+#[test]
+#[should_panic(expected = "stream paused")]
+fn test_accelerate_paused_stream_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.pause_stream(&stream_id, &sender);
+
+    client.accelerate_stream(&stream_id, &sender, &100);
+}
+
+#[test]
+#[should_panic(expected = "new_duration must be less than remaining duration")]
+fn test_accelerate_duration_not_shortened_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 500); // remaining duration is 500
+
+    client.accelerate_stream(&stream_id, &sender, &500);
+}
+
+#[test]
+#[should_panic(expected = "sender mismatch")]
+fn test_accelerate_sender_mismatch_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 500);
+
+    client.accelerate_stream(&stream_id, &stranger, &200);
+}
+
