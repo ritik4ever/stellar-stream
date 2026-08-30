@@ -375,6 +375,10 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
             <span>Claimed (completed)</span>
             <strong>{Number(totalClaimed.toFixed(2))}</strong>
           </article>
+          <article className="metric-card">
+            <span>Total received</span>
+            <strong>{Number((totalClaimable + totalClaimed).toFixed(2))}</strong>
+          </article>
         </section>
 
         {activeStreams.length > 0 && (
