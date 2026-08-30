@@ -3434,6 +3434,8 @@ fn test_cliff_reached_event_emitted_once_after_cliff() {
     let cliff_data: CliffReached = cliff_events[0].2.clone().into_val(&env);
     assert_eq!(cliff_data.stream_id, stream_id);
     assert_eq!(cliff_data.cliff_time, 250);
+}
+
 // #695 — DAO governance scaffold
 // =============================================================================
 
