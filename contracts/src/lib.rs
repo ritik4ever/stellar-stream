@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod dao;
 mod errors;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
@@ -678,7 +679,7 @@ impl StellarStreamContract {
             panic!("too many stream ids");
         }
 
-        let mut canceled = Vec::new(&env);
+I        let mut canceled = Vec::new(&env);
         let mut failed = Vec::new(&env);
 
         for stream_id in stream_ids.iter() {
@@ -693,6 +694,36 @@ impl StellarStreamContract {
                     failed.push_back(stream_id);
                 }
             }
+        let now = env.ledger().timestamp();
+        stream.canceled = true;
+
+        let vested = vested_amount(&stream, now);
+        let sender_refund = stream.total_amount - vested;
+
+        let min_end = if now > stream.start_time {
+            now
+        } else {
+            stream.start_time
+        };
+        if min_end < stream.end_time {
+            stream.end_time = min_end;
+            stream.total_amount = vested;
+        }
+
+        if sender_refund > 0 {
+            let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
+            let actual_token = if is_native {
+                env.storage()
+                    .instance()
+                    .get(&DataKey::NativeToken)
+                    .unwrap_or_else(|| panic!("not initialized"))
+            } else {
+                stream.token.clone()
+            };
+            let token_client = TokenClient::new(&env, &actual_token);
+            let contract_address = env.current_contract_address();
+
+            token_client.transfer(&contract_address, &sender, &sender_refund);
         }
 
         CancelBatchResult { canceled, failed }
