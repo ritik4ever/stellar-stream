@@ -19,6 +19,7 @@ import {
 import { swaggerDocument } from "./swagger";
 import {
   countAllEvents,
+  getActivityFeed,
   getAllEvents,
   getGlobalEvents,
   getStreamHistory,
@@ -85,6 +86,7 @@ import {
 } from "./services/auth";
 import jwt from "jsonwebtoken";
 import {
+  activityFeedQuerySchema,
   bulkCancelStreamsSchema,
   createStreamPayloadWithAllowedAssetsSchema,
   listEventsQuerySchema,
@@ -677,6 +679,21 @@ app.get("/api/events", readLimiter, (req: Request, res: Response) => {
   );
 
   res.json({ data, total, page, pageSize, limit: pageSize });
+});
+
+app.get("/api/activity", readLimiter, (req: Request, res: Response) => {
+  const parsedQuery = activityFeedQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    sendValidationError(req, res, parsedQuery.error.issues);
+    return;
+  }
+
+  const query = parsedQuery.data;
+  const limit = query.limit ?? 50;
+
+  const data = getActivityFeed(query.sender, query.recipient, limit);
+
+  res.json({ data, limit });
 });
 
 app.get(

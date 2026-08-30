@@ -228,6 +228,38 @@ export function getStreamEventSummary(streamId: string): StreamEventSummary {
   };
 }
 
+export function getActivityFeed(
+  sender?: string,
+  recipient?: string,
+  limit = 50,
+): StreamEvent[] {
+  const db = getDb();
+  const conditions: string[] = [];
+  const params: any[] = [];
+
+  if (sender) {
+    conditions.push("s.sender = ?");
+    params.push(sender);
+  }
+
+  if (recipient) {
+    conditions.push("s.recipient = ?");
+    params.push(recipient);
+  }
+
+  const query = `
+    SELECT se.* FROM stream_events se
+    JOIN streams s ON s.id = se.stream_id
+    WHERE ${conditions.join(" OR ")}
+    ORDER BY se.timestamp DESC, se.id DESC
+    LIMIT ?
+  `;
+  params.push(limit);
+
+  const rows = db.prepare(query).all(...params) as EventRow[];
+  return rows.map(rowToEvent);
+}
+
 export function streamHasEvent(
   streamId: string,
   eventType: StreamEventType,

@@ -1707,6 +1707,70 @@ export const swaggerDocument = {
         },
       },
     },
+    "/api/activity": {
+      get: {
+        summary: "Get Activity Feed",
+        description:
+          "Retrieves recent stream events across all streams where the given account is the sender and/or recipient, sorted by timestamp descending.",
+        parameters: [
+          {
+            name: "sender",
+            in: "query",
+            required: false,
+            description: "Filter to streams where this account is the sender. At least one of sender or recipient is required.",
+            schema: { type: "string" },
+          },
+          {
+            name: "recipient",
+            in: "query",
+            required: false,
+            description: "Filter to streams where this account is the recipient. At least one of sender or recipient is required.",
+            schema: { type: "string" },
+          },
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            description: "Maximum number of events to return (default: 50, max: 100).",
+            schema: { type: "integer", minimum: 1, maximum: 100 },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Recent activity across the account's streams.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: {
+                        $ref: "#/components/schemas/StreamEvent",
+                      },
+                    },
+                    limit: {
+                      type: "integer",
+                      description: "Effective limit applied to the query.",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": {
+            description: "Validation error — sender/recipient missing or invalid query parameters.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     "/api/events": {
       get: {
         summary: "List All Events",
