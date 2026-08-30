@@ -5,6 +5,7 @@ use insta::assert_debug_snapshot as assert_snapshot;
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events, Ledger},
+    token, Env, IntoVal, Map, String, Symbol, Vec,
     token, Env, IntoVal, Map, String, Symbol, Val, Vec,
 };
 
@@ -634,7 +635,7 @@ fn test_event_emissions() {
             total_amount: 1000,
             start_time: 0,
             end_time: 1000,
-            cliff_seconds: 0,
+            min_claim_interval_seconds: 0,
             metadata: None,
         }
     );
@@ -702,7 +703,7 @@ fn test_stream_created_snapshot() {
         total_amount: 1000,
         start_time: 100,
         end_time: 200,
-        cliff_seconds: 0,
+        min_claim_interval_seconds: 0,
         metadata: None,
     };
 
@@ -852,7 +853,8 @@ fn test_vested_amount_fuzz_invariants() {
         claimed_amount: 0,
         start_time: 100,
         end_time: 10_100,
-        cliff_seconds: 0,
+        min_claim_interval_seconds: 0,
+        last_claim_time: 0,
         canceled: false,
         paused: false,
         pause_started_at: None,
@@ -1554,7 +1556,8 @@ fn test_resume_stream_panic_on_missing_timestamp() {
         claimed_amount: 0,
         start_time: 1000,
         end_time: 2000,
-        cliff_seconds: 0,
+        min_claim_interval_seconds: 0,
+        last_claim_time: 0,
         canceled: false,
         paused: true,
         pause_started_at: None,
@@ -1925,7 +1928,7 @@ fn test_stream_created_no_metadata_snapshot() {
         total_amount: 1000,
         start_time: 100,
         end_time: 200,
-        cliff_seconds: 0,
+        min_claim_interval_seconds: 0,
         metadata: None,
     };
 
@@ -3306,6 +3309,139 @@ fn test_set_admin_chain_transfer() {
     client.add_allowed_token(&admin3, &token_a);
     assert!(client.get_allowed_tokens().contains(&token_a));
 }
+
+// =============================================================================
+// #681 — Rate-limited claims (anti-spam)
+// =============================================================================
+
+/// Acceptance test: 3 rapid claims, only the 1st succeeds.
+#[test]
+fn test_claim_throttled_three_rapid_claims_only_first_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    // Max 1 claim per 100 seconds
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &100, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+
+    // 1st claim succeeds
+    let claimed = client.claim(&stream_id, &recipient, &100);
+    assert_eq!(claimed, 100);
+
+    // 2nd and 3rd claims in rapid succession are rejected with ClaimTooFrequent
+    let res2 = client.try_claim(&stream_id, &recipient, &100);
+    assert_eq!(res2, Err(Ok(ContractError::ClaimTooFrequent)));
+
+    let res3 = client.try_claim(&stream_id, &recipient, &100);
+    assert_eq!(res3, Err(Ok(ContractError::ClaimTooFrequent)));
+
+    // Nothing was transferred for the rejected attempts
+    let token_client = token::Client::new(&env, &token);
+    assert_eq!(token_client.balance(&recipient), 100);
+}
+
+/// No rate limit when min_claim_interval_seconds = 0.
+#[test]
+fn test_claim_no_throttle_when_interval_zero() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.claim(&stream_id, &recipient, &100);
+    // Second claim with no interval is allowed
+    let claimed = client.claim(&stream_id, &recipient, &100);
+    assert_eq!(claimed, 100);
+}
+
+/// A throttled claim attempt emits a ClaimThrottled event.
+#[test]
+fn test_claim_throttle_emits_claimthrottled_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &100, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.claim(&stream_id, &recipient, &100);
+
+    // Rejected attempt
+    let _ = client.try_claim(&stream_id, &recipient, &100);
+
+    let throttled: std::vec::Vec<ClaimThrottled> = env
+        .events()
+        .all()
+        .iter()
+        .filter(|(_, topics, _)| {
+            *topics == (symbol_short!("Stream"), symbol_short!("Throttled")).into_val(&env)
+        })
+        .map(|(_, _, data)| data.into_val(&env))
+        .collect();
+
+    assert_eq!(throttled.len(), 1);
+    assert_eq!(throttled[0].stream_id, stream_id);
+    assert_eq!(throttled[0].next_allowed_claim_time, 600);
+}
+
+/// After the minimum interval has elapsed, claiming works again.
+#[test]
+fn test_claim_allowed_after_interval_elapses() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &100, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.claim(&stream_id, &recipient, &100);
+
+    // Still inside the interval -> throttled
+    env.ledger().with_mut(|l| l.timestamp = 550);
+    assert_eq!(
+        client.try_claim(&stream_id, &recipient, &100),
+        Err(Ok(ContractError::ClaimTooFrequent))
+    );
+
+    // Interval elapsed -> claim succeeds
+    env.ledger().with_mut(|l| l.timestamp = 600);
+    let claimed = client.claim(&stream_id, &recipient, &100);
+    assert_eq!(claimed, 100);
 // #695 — DAO governance scaffold
 // =============================================================================
 
