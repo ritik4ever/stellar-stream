@@ -929,6 +929,68 @@ export const swaggerDocument = {
         },
       },
     },
+    "/api/streams/{id}/vesting-schedule": {
+      get: {
+        summary: "Get projected vesting schedule",
+        description: "Retrieves projected vesting schedule time series: [{timestamp, vested_amount, cumulative_pct}]. Interval is hourly for streams < 7 days, daily for longer.",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "The unique ID of the stream.",
+            schema: {
+              type: "string",
+            },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Projected vesting schedule time series.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          timestamp: { type: "number", example: 1716382000 },
+                          vested_amount: { type: "number", example: 100 },
+                          cumulative_pct: { type: "number", example: 10 },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": {
+            description: "Invalid stream ID format.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
+          "404": {
+            description: "Stream not found.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     "/api/recipients/{accountId}/streams": {
       get: {
         summary: "Get recipient streams",
@@ -1837,5 +1899,107 @@ export const swaggerDocument = {
         },
       },
     },
+    "/api/api-keys": {
+      post: {
+        summary: "Create API Key",
+        description: "Creates a new scoped API key (read-only or read-write).",
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  name: { type: "string", description: "Optional name or description for the key." },
+                  scope: { type: "string", enum: ["read-only", "read-write"], default: "read-write" },
+                  expiresInDays: { type: "integer", description: "Optional expiration duration in days." },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "API key created successfully.",
+          },
+          "400": {
+            description: "Invalid parameters.",
+          },
+        },
+      },
+      get: {
+        summary: "List Active API Keys",
+        description: "Retrieves a list of active API keys with masked key values.",
+        parameters: [
+          {
+            name: "include_revoked",
+            in: "query",
+            schema: { type: "boolean" },
+            description: "Include revoked keys in the list.",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "List of active API keys.",
+          },
+        },
+      },
+    },
+    "/api/api-keys/{id}": {
+      delete: {
+        summary: "Revoke API Key",
+        description: "Revokes an active API key by ID.",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "API key revoked.",
+          },
+          "404": {
+            description: "Key not found.",
+          },
+        },
+      },
+    },
+    "/api/api-keys/{id}/rotate": {
+      post: {
+        summary: "Rotate API Key",
+        description: "Rotates an API key creating a new one while granting a grace period to the old key.",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+        ],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  gracePeriodSeconds: { type: "integer", default: 86400 },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "API key rotated successfully.",
+          },
+          "404": {
+            description: "Key not found.",
+          },
+        },
+      },
+    },
   },
 };
+
