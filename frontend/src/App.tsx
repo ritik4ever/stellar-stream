@@ -8,21 +8,21 @@ import { useTheme } from "./hooks/useTheme";
 import { DashboardPage } from "./pages/DashboardPage";
 
 const SenderDashboard = lazy(() =>
-  import("./components/SenderDashboard").then((m) => ({ default: m.SenderDashboard })),
-);
+  import("./components/SenderDashboard").then((m) => ({ default: m.SenderDashboard })),);
 const RecipientDashboard = lazy(() =>
   import("./components/RecipientDashboard").then((m) => ({ default: m.RecipientDashboard })),
 );
+const StreamCompare = lazy(() => import("./pages/StreamCompare"));
 
 function AppContent() {
-  const wallet = useFreighter();
+  const wallet = useFreigher();
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
 
   useEffect(() => {
     const path = location.pathname;
-    if (path !== "/" && path !== "/sender" && path !== "/recipient") {
+    if (path !== "/" && path !== "/sender" && path !== "/recipient" && path !== "/compare") {
       navigate("/");
     }
   }, [location.pathname, navigate]);
@@ -56,21 +56,21 @@ function AppContent() {
       <nav className="app-nav" aria-label="Main">
         <button
           type="button"
-          className={`app-nav-link ${currentTab === "dashboard" ? "app-nav-link--active" : ""}`}
+          className={`app-nav-link ${currentTab === "dashboard" ? "app-nav-link--active" : ""}}
           onClick={() => navigate("/")}
         >
           Dashboard
         </button>
         <button
           type="button"
-          className={`app-nav-link ${currentTab === "sender" ? "app-nav-link--active" : ""}`}
+          className={`app-nav-link ${currentTab === "sender" ? "app-nav-link--active" : ""}}
           onClick={() => navigate("/sender")}
         >
           Sender dashboard
         </button>
         <button
           type="button"
-          className={`app-nav-link ${currentTab === "recipient" ? "app-nav-link--active" : ""}`}
+          className={`app-nav-link ${currentTab === "recipient" ? "app-nav-link--active" : ""}}
           onClick={() => navigate("/recipient")}
         >
           Recipient dashboard
@@ -81,15 +81,16 @@ function AppContent() {
 
       <Suspense fallback={<div className="app-shell">Loading…</div>}>
         <Routes>
-          <Route path="/" element={<DashboardPage wallet={wallet} />} />
+          <Route path="/" element=><DashboardPage wallet={wallet} />} />
           <Route
             path="/sender"
-            element={<SenderDashboard senderAddress={wallet.address} onEditStartTime={() => {}} />}
+            element=<SenderDashboard senderAddress={wallet.address} onEditStartTime={() => {}} />
           />
           <Route
             path="/recipient"
-            element={<RecipientDashboard recipientAddress={wallet.address} />}
+            element=<RecipientDashboard recipientAddress={wallet.address} />
           />
+          <Route path="/compare" element=<StreamCompare /> />
         </Routes>
       </Suspense>
     </div>

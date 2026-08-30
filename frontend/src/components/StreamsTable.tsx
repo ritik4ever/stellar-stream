@@ -51,6 +51,9 @@ const VIRTUALIZATION_THRESHOLD = 50;
 const ESTIMATE_ROW_HEIGHT_PX = 52;
 const TABLE_SCROLL_MAX_HEIGHT = "min(70vh, 720px)";
 const TABLE_SCROLL_VIEWPORT_HEIGHT = "480px";
+const COMPARE_STREAM_MIN = 2;
+const COMPARE_STREAM_MAX = 3;
+const COMPARE_URL_BASE = "/compare";
 
 function SkeletonRow({ colCount }: { colCount: number }) {
   return (
@@ -167,6 +170,12 @@ export function StreamsTable({
   const [bulkCancelProgress, setBulkCancelProgress] = useState({ current: 0, total: 0 });
 
   const exportUrl = useMemo(() => getExportCsvUrl(filters as Record<string, string>), [filters]);
+  const compareUrl = `${COMPARE_URL_BASE}?ids=${encodeURIComponent(
+    Array.from(selectedStreamIds).sort().join(","),
+  )}`;
+  const canCompare =
+    selectedStreamIds.size >= COMPARE_STREAM_MIN &&
+    selectedStreamIds.size <= COMPARE_STREAM_MAX;
 
   const sortedStreams = useMemo(
     () => [...streams].sort((a, b) => a.id.localeCompare(b.id)),
@@ -495,6 +504,19 @@ export function StreamsTable({
                 </div>
               )}
             </div>
+            <a
+              href={canCompare ? compareUrl : undefined}
+              className={`btn-ghost${canCompare ? "" : " disabled"}`}
+              aria-disabled={!canCompare}
+              tabIndex={canCompare ? 0 : -1}
+              onClick={(e) => {
+                if (!canCompare) {
+                  e.preventDefault();
+                }
+              }}
+            >
+              Compare
+            </a>
             <a href={exportUrl} className="btn-ghost" download>
               Export CSV
             </a>
