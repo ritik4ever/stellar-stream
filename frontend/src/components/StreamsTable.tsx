@@ -404,7 +404,7 @@ export function StreamsTable({
 
   return (
     <>
-      {!isWebSocketConnected && hasWebSocketUrl && (
+      {!isWebSocketConnected && (
         <div 
           className="ws-disconnected-banner" 
           role="status"

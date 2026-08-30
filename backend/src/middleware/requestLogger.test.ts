@@ -7,7 +7,7 @@ import type { Request, Response } from "express";
 describe("requestLogger", () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const loggerInfoSpy = vi.spyOn(logger, "info").mockImplementation(() => logger);
-  vi.spyOn(logger, "child").mockImplementation(() => logger);
+  vi.spyOn(logger, "child").mockImplementation(() => logger as any);
 
   beforeEach(() => {
     loggerInfoSpy.mockClear();

@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
-import { app } from "./index";
+import { app, mutationLimiter, claimableLimiter } from "./index";
 import { initDb, getDb } from "./services/db";
 import { initCache, getCache } from "./services/cache";
-import { Keypair } from "@stellar/stellar-sdk";
+import { initSoroban } from "./services/streamStore";
+import { Account, Keypair, StrKey } from "@stellar/stellar-sdk";
 import jwt from "jsonwebtoken";
 import { getJwtSecret } from "./services/auth";
 import path from "path";
@@ -11,17 +12,24 @@ import fs from "fs";
 
 const mockSimulateTransaction = vi.fn();
 const mockGetLatestLedger = vi.fn();
+const mockGetAccount = vi.fn().mockImplementation((accountId: string) =>
+  Promise.resolve(new Account(accountId, "0")),
+);
 
 vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@stellar/stellar-sdk")>();
   return {
     ...actual,
+    // Tests pass plain JS objects as simulation return values, not real
+    // XDR ScVal instances, so scValToNative must be an identity pass-through.
+    scValToNative: (v: any) => v,
     rpc: {
       ...actual.rpc,
       Server: vi.fn().mockImplementation(() => ({
         getLatestLedger: mockGetLatestLedger,
         simulateTransaction: mockSimulateTransaction,
         prepareTransaction: vi.fn().mockImplementation((tx) => tx),
+        getAccount: mockGetAccount,
       })),
       Api: {
         ...actual.rpc.Api,
@@ -36,13 +44,18 @@ vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
 const TEST_DB_PATH = path.join(__dirname, "..", "data", "test-streams.db");
 
 describe("Backend Integration Tests", () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     // Set test database path
     process.env.DB_PATH = TEST_DB_PATH;
+    // Reconcile / claimable endpoints require a configured Soroban contract;
+    // the mocked rpc.Server above makes on-chain calls deterministic.
+    process.env.CONTRACT_ID = StrKey.encodeContract(Buffer.alloc(32, 7));
 
-    // Initialize database and cache
-    initDb();
-    initCache();
+    // Initialize database and cache. initSoroban() already calls initDb()
+    // and initCache() internally — don't call them again here, since
+    // reopening the same on-disk DB mid-migration races runMigrations()
+    // against itself (UNIQUE constraint failures on schema_migrations).
+    await initSoroban();
   });
 
   beforeEach(async () => {
@@ -408,7 +421,7 @@ describe("Backend Integration Tests", () => {
         const recipientC = "G" + "C".repeat(55);
         const recipientD = "G" + "D".repeat(55);
 
-        function seedStreams() {
+        async function seedStreams() {
           const db = getDb();
           db.exec("DELETE FROM streams");
 
@@ -453,10 +466,16 @@ describe("Backend Integration Tests", () => {
               completedAt,
             });
           }
+
+          // GET /api/streams caches list responses by query string; this
+          // helper writes directly via getDb(), bypassing the streamStore
+          // mutation paths that normally invalidate that cache, so a stale
+          // cached list from a previous test can otherwise leak in here.
+          await getCache().clear();
         }
 
         it("should include pagination metadata for multi-page results", async () => {
-          seedStreams();
+          await seedStreams();
 
           const pageOne = await request(app)
             .get("/api/streams")
@@ -480,7 +499,7 @@ describe("Backend Integration Tests", () => {
         });
 
         it("should apply q filtering across id, sender, recipient, and asset", async () => {
-          seedStreams();
+          await seedStreams();
 
           const byId = await request(app)
             .get("/api/streams")
@@ -520,7 +539,7 @@ describe("Backend Integration Tests", () => {
         });
 
         it("should combine status and q filters", async () => {
-          seedStreams();
+          await seedStreams();
 
           const response = await request(app)
             .get("/api/streams")
@@ -537,7 +556,7 @@ describe("Backend Integration Tests", () => {
         });
 
         it("should return all matching rows when pagination params are omitted", async () => {
-          seedStreams();
+          await seedStreams();
 
           const response = await request(app)
             .get("/api/streams")
@@ -580,7 +599,7 @@ describe("Backend Integration Tests", () => {
         const senderAlpha = "G" + "A".repeat(55);
         const recipientAlpha = "G" + "B".repeat(55);
 
-        function seedSortableStreams() {
+        async function seedSortableStreams() {
           const db = getDb();
           db.exec("DELETE FROM streams");
           const now = Math.floor(Date.now() / 1000);
@@ -595,10 +614,16 @@ describe("Backend Integration Tests", () => {
           insert.run({ id: "2", sender: senderAlpha, recipient: recipientAlpha, assetCode: "USDC", totalAmount: 500, durationSeconds: 500, startAt: now - 200, createdAt: now - 200 });
           // Stream C: largest totalAmount, latest startAt, latest createdAt, longest duration
           insert.run({ id: "3", sender: senderAlpha, recipient: recipientAlpha, assetCode: "USDC", totalAmount: 1000, durationSeconds: 1000, startAt: now - 100, createdAt: now - 100 });
+
+          // GET /api/streams caches list responses by query string; this
+          // helper writes directly via getDb(), bypassing the streamStore
+          // mutation paths that normally invalidate that cache, so a stale
+          // cached list from a previous test can otherwise leak in here.
+          await getCache().clear();
         }
 
         it("should sort by totalAmount asc", async () => {
-          seedSortableStreams();
+          await seedSortableStreams();
           const response = await request(app)
             .get("/api/streams")
             .query({ sort: "totalAmount", order: "asc" });
@@ -608,7 +633,7 @@ describe("Backend Integration Tests", () => {
         });
 
         it("should sort by totalAmount desc", async () => {
-          seedSortableStreams();
+          await seedSortableStreams();
           const response = await request(app)
             .get("/api/streams")
             .query({ sort: "totalAmount", order: "desc" });
@@ -618,7 +643,7 @@ describe("Backend Integration Tests", () => {
         });
 
         it("should sort by startAt asc", async () => {
-          seedSortableStreams();
+          await seedSortableStreams();
           const response = await request(app)
             .get("/api/streams")
             .query({ sort: "startAt", order: "asc" });
@@ -630,7 +655,7 @@ describe("Backend Integration Tests", () => {
         });
 
         it("should sort by startAt desc", async () => {
-          seedSortableStreams();
+          await seedSortableStreams();
           const response = await request(app)
             .get("/api/streams")
             .query({ sort: "startAt", order: "desc" });
@@ -642,7 +667,7 @@ describe("Backend Integration Tests", () => {
         });
 
         it("should sort by createdAt asc", async () => {
-          seedSortableStreams();
+          await seedSortableStreams();
           const response = await request(app)
             .get("/api/streams")
             .query({ sort: "createdAt", order: "asc" });
@@ -654,7 +679,7 @@ describe("Backend Integration Tests", () => {
         });
 
         it("should sort by createdAt desc (default)", async () => {
-          seedSortableStreams();
+          await seedSortableStreams();
           const response = await request(app)
             .get("/api/streams")
             .query({ sort: "createdAt", order: "desc" });
@@ -666,7 +691,7 @@ describe("Backend Integration Tests", () => {
         });
 
         it("should sort by durationSeconds asc", async () => {
-          seedSortableStreams();
+          await seedSortableStreams();
           const response = await request(app)
             .get("/api/streams")
             .query({ sort: "durationSeconds", order: "asc" });
@@ -676,7 +701,7 @@ describe("Backend Integration Tests", () => {
         });
 
         it("should sort by durationSeconds desc", async () => {
-          seedSortableStreams();
+          await seedSortableStreams();
           const response = await request(app)
             .get("/api/streams")
             .query({ sort: "durationSeconds", order: "desc" });
@@ -686,7 +711,7 @@ describe("Backend Integration Tests", () => {
         });
 
         it("should default to createdAt desc when no sort/order specified", async () => {
-          seedSortableStreams();
+          await seedSortableStreams();
           const response = await request(app)
             .get("/api/streams");
           expect(response.status).toBe(200);
@@ -842,14 +867,32 @@ describe("Backend Integration Tests", () => {
           result: { retval: 10 },
         });
 
-        for (let i = 0; i < 31; i++) {
-          const response = await request(app).get(`/api/streams/${mockStream.id}/claimable`);
-          if (i < 30) {
-            expect(response.status).toBe(200);
-          } else {
-            expect(response.status).toBe(429);
-            expect(response.body.code).toBe("RATE_LIMIT_EXCEEDED");
+        // src/test-setup.ts raises CLAIMABLE_RATE_LIMIT globally so other
+        // integration test files aren't tripped up by 429s; this test
+        // specifically exercises the real limit. claimableLimiter reads
+        // this env var per-request, so overriding it here is safe.
+        const previousLimit = process.env.CLAIMABLE_RATE_LIMIT;
+        process.env.CLAIMABLE_RATE_LIMIT = "30";
+        // Earlier tests in this describe already hit /claimable under the
+        // (high) default limit, incrementing the shared in-memory counter —
+        // reset it so this test starts from a clean slate. The store only
+        // exposes resetKey (not resetAll) in this express-rate-limit version,
+        // so reset both loopback address forms Node's http server may report.
+        await claimableLimiter.resetKey("::ffff:127.0.0.1");
+        await claimableLimiter.resetKey("127.0.0.1");
+        await claimableLimiter.resetKey("::1");
+        try {
+          for (let i = 0; i < 31; i++) {
+            const response = await request(app).get(`/api/streams/${mockStream.id}/claimable`);
+            if (i < 30) {
+              expect(response.status).toBe(200);
+            } else {
+              expect(response.status).toBe(429);
+              expect(response.body.code).toBe("RATE_LIMIT_EXCEEDED");
+            }
           }
+        } finally {
+          process.env.CLAIMABLE_RATE_LIMIT = previousLimit;
         }
       });
     });
@@ -1315,7 +1358,7 @@ describe("Backend Integration Tests", () => {
       beforeEach(() => {
         senderKeypair = Keypair.random();
         const now = Math.floor(Date.now() / 1000);
-        reconcileStreamId = `200-${testCounter++}`;
+        reconcileStreamId = `${200 + testCounter++}`;
 
         const db = getDb();
         db.prepare(`
@@ -1483,7 +1526,7 @@ describe("Backend Integration Tests", () => {
 
         // Create a stream that has already completed
         const completedStream = {
-          id: "completed-test",
+          id: "999888",
           sender: "GC7Y4M77LNYKYF4K4V5A737W3G3L3T7XQWZJZL4R64Z43W3T7XZQK2L4",
           recipient: "GB4Z3ZK3X24Z3T7XZQK2L4R64Z43W3T7XZQK2L4R64Z43W3T7XZQK2L4",
           asset_code: "USDC",
@@ -1865,6 +1908,23 @@ describe("Backend Integration Tests", () => {
   });
 
   describe("Rate Limiting", () => {
+    beforeAll(async () => {
+      // src/test-setup.ts raises MUTATION_RATE_LIMIT globally so other
+      // integration test files aren't tripped up by 429s; these tests
+      // specifically exercise the real limit. mutationLimiter reads this
+      // env var per-request, so it's safe to override here (last describe
+      // block in the file — nothing after it needs the raised limit).
+      process.env.MUTATION_RATE_LIMIT = "10";
+      // Earlier tests in the file already hit mutation endpoints under the
+      // (high) default limit, incrementing the shared in-memory counter —
+      // reset it so these tests start from a clean slate. The store only
+      // exposes resetKey (not resetAll) in this express-rate-limit version,
+      // so reset both loopback address forms Node's http server may report.
+      await mutationLimiter.resetKey("::ffff:127.0.0.1");
+      await mutationLimiter.resetKey("127.0.0.1");
+      await mutationLimiter.resetKey("::1");
+    });
+
     it("should enforce mutation rate limit on POST /api/streams", async () => {
       const sender = Keypair.random().publicKey();
       const recipient = Keypair.random().publicKey();

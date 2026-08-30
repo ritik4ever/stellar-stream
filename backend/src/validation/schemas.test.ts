@@ -229,10 +229,17 @@ describe("Create Stream Payload Schema", () => {
         expect(result.error?.issues[0].path).toContain("durationSeconds");
     });
 
-    it("should accept durationSeconds = 1 (minimum valid)", () => {
-        const payload = { ...validBasePayload, durationSeconds: 1 };
+    it("should accept durationSeconds = 60 (minimum valid)", () => {
+        const payload = { ...validBasePayload, durationSeconds: 60 };
         const result = createStreamPayloadSchema.safeParse(payload);
         expect(result.success).toBe(true);
+    });
+
+    it("should reject durationSeconds = 59 (below minimum)", () => {
+        const payload = { ...validBasePayload, durationSeconds: 59 };
+        const result = createStreamPayloadSchema.safeParse(payload);
+        expect(result.success).toBe(false);
+        expect(result.error?.issues[0].path).toContain("durationSeconds");
     });
 
     it("should reject totalAmount with more than 7 decimal places", () => {

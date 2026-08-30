@@ -821,13 +821,6 @@ describe("createStream", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-describe("getStreamById", () => {
-  const frozenTime = Math.floor(Date.now() / 1000);
-
-  beforeEach(() => {
-    vi.resetModules();
-    vi.clearAllMocks();
-    vi.spyOn(Date, "now").mockReturnValue(frozenTime * 1000);
 
     mockState.nextId = 1;
     mockState.existingStreamIds = new Set<string>();
@@ -900,6 +893,14 @@ describe("getStreamById", () => {
     expect(stream.id).toBe("42");
   });
 });
+
+describe("getStreamById", () => {
+  const frozenTime = Math.floor(Date.now() / 1000);
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    vi.spyOn(Date, "now").mockReturnValue(frozenTime * 1000);
   });
 
   afterEach(() => {

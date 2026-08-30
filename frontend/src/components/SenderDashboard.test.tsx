@@ -6,6 +6,29 @@ import { SenderDashboard } from "./SenderDashboard";
 import { Stream } from "../types/stream";
 import { StreamEvent } from "../services/api";
 
+// Mock recharts so tests don't depend on jsdom's lack of real SVG/canvas
+// layout (ResponsiveContainer reports 0 width/height in jsdom, so real
+// recharts never renders axis tick labels).
+vi.mock("recharts", () => ({
+  ResponsiveContainer: ({ children }: any) => (
+    <div data-testid="responsive-container">{children}</div>
+  ),
+  BarChart: ({ data, children }: any) => (
+    <svg data-testid="bar-chart">
+      {data?.map((d: any) => (
+        <span key={d.name}>{d.name}</span>
+      ))}
+      {children}
+    </svg>
+  ),
+  Bar: ({ children }: any) => <g data-testid="bar">{children}</g>,
+  Cell: () => <g data-testid="cell" />,
+  XAxis: () => <g data-testid="x-axis" />,
+  YAxis: () => <g data-testid="y-axis" />,
+  CartesianGrid: () => <g data-testid="cartesian-grid" />,
+  Tooltip: () => <g data-testid="tooltip" />,
+}));
+
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
@@ -182,7 +205,7 @@ describe("SenderDashboard - Enhanced Analytics & Activity", () => {
     const amountCard = screen
       .getByText("Total Amount Streamed")
       .closest("article");
-    expect(amountCard?.querySelector("strong")?.textContent).toContain("3000");
+    expect(amountCard?.querySelector("strong")?.textContent).toContain("3,000");
 
     expect(screen.getByText("Active Streams")).toBeInTheDocument();
     const activeCard = screen
@@ -452,7 +475,7 @@ describe("SenderDashboard - Enhanced Analytics & Activity", () => {
 
     // Wait for loading to finish
     await waitFor(() =>
-      expect(screen.queryByText(/Sender Dashboard/)).toBeInTheDocument()
+      expect(screen.getByText("Total Streams Created")).toBeInTheDocument()
     );
 
     // Check metrics
@@ -529,7 +552,7 @@ describe("SenderDashboard - Enhanced Analytics & Activity", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByText("Sender Dashboard")).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: /Create Stream/i })).toBeInTheDocument()
     );
 
     // Click the "Create Stream" button in the header

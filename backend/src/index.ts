@@ -172,10 +172,10 @@ const listStreamsQuerySchema = z.object({
     )
     .optional(),
   sort: z
-    .enum(SORT_FIELDS)
+    .enum(SORT_FIELDS, { message: `sort must be one of: ${SORT_FIELDS.join(", ")}` })
     .optional(),
   order: z
-    .enum(SORT_ORDERS)
+    .enum(SORT_ORDERS, { message: `order must be one of: ${SORT_ORDERS.join(", ")}` })
     .optional(),
 });
 
@@ -200,13 +200,13 @@ const authChallengeLimiter = rateLimit({
   },
 });
 
-// Rate limiters for read and mutation endpoints
-const READ_RATE_LIMIT = Number(process.env.READ_RATE_LIMIT ?? 5000);
-const MUTATION_RATE_LIMIT = Number(process.env.MUTATION_RATE_LIMIT ?? 10);
-
+// Rate limiters for read and mutation endpoints.
+// `max` is a function (not a precomputed const) so tests can override the
+// env var per-file/per-test without needing it set before index.ts is
+// first imported (module-level consts would freeze the value at import time).
 const readLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: READ_RATE_LIMIT,
+  max: () => Number(process.env.READ_RATE_LIMIT ?? 5000),
   standardHeaders: true,
   legacyHeaders: false,
   handler: (req: Request, res: Response, next: NextFunction) => {
@@ -221,9 +221,9 @@ const readLimiter = rateLimit({
   },
 });
 
-const mutationLimiter = rateLimit({
+export const mutationLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: MUTATION_RATE_LIMIT,
+  max: () => Number(process.env.MUTATION_RATE_LIMIT ?? 10),
   standardHeaders: true,
   legacyHeaders: false,
   handler: (req: Request, res: Response, next: NextFunction) => {
@@ -238,11 +238,9 @@ const mutationLimiter = rateLimit({
   },
 });
 
-const CLAIMABLE_RATE_LIMIT = Number(process.env.CLAIMABLE_RATE_LIMIT ?? 30);
-
-const claimableLimiter = rateLimit({
+export const claimableLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: CLAIMABLE_RATE_LIMIT,
+  max: () => Number(process.env.CLAIMABLE_RATE_LIMIT ?? 30),
   standardHeaders: true,
   legacyHeaders: false,
   handler: (req: Request, res: Response, next: NextFunction) => {
@@ -545,10 +543,17 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
   const hasLimit = req.query.limit !== undefined;
 
   const now = nowInSeconds();
-  let data = listStreams(query.include_archived, query.sort ?? "createdAt", query.order ?? "desc").map((stream) => ({
-    ...stream,
-    progress: calculateProgress(stream, now),
-  }));
+  let data;
+  try {
+    data = listStreams(query.include_archived, query.sort ?? "createdAt", query.order ?? "desc").map((stream) => ({
+      ...stream,
+      progress: calculateProgress(stream, now),
+    }));
+  } catch (error) {
+    logger.error({ err: error }, "failed to list streams");
+    sendApiError(req, res, 500, "Failed to list streams.", { code: "INTERNAL_ERROR" });
+    return;
+  }
 
   if (query.status) {
     data = data.filter((stream) => stream.progress.status === query.status);
@@ -663,8 +668,14 @@ app.get("/api/events", readLimiter, (req: Request, res: Response) => {
 
   const total = countAllEvents(eventType, streamId, since);
 
+  const hasPage = req.query.page !== undefined;
+  const hasPageSize = req.query.pageSize !== undefined || req.query.limit !== undefined;
+
   const page = query.page ?? PAGINATION_DEFAULT_PAGE;
-  const pageSize = query.pageSize ?? query.limit ?? PAGINATION_DEFAULT_LIMIT;
+  const pageSize =
+    !hasPage && !hasPageSize
+      ? total
+      : (query.pageSize ?? query.limit ?? PAGINATION_DEFAULT_LIMIT);
 
   const offset = (page - 1) * pageSize;
   const data = getGlobalEvents(
@@ -1017,6 +1028,47 @@ app.get("/api/streams/:id", readLimiter, (req: Request, res: Response) => {
     },
   });
 });
+
+app.get(
+  "/api/streams/:id/claimable",
+  claimableLimiter,
+  async (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    try {
+      const { claimableAmount, at } = await getOnChainClaimableAmount(parsedId.value);
+      res.json({
+        streamId: stream.id,
+        claimableAmount,
+        assetCode: stream.assetCode,
+        at,
+      });
+    } catch (error: unknown) {
+      logger.error({ err: error, streamId: parsedId.value }, "failed to get claimable amount");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to get claimable amount.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        { code: normalizedError.code ?? "INTERNAL_ERROR" },
+      );
+    }
+  },
+);
 
 app.get(
   "/api/recipients/:accountId/streams",
@@ -1487,6 +1539,53 @@ app.post(
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to resume stream.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        {
+          code: normalizedError.code ?? "INTERNAL_ERROR",
+        },
+      );
+    }
+  },
+);
+
+// POST /api/streams/:id/mark-complete â€” sender marks a fully-vested stream as completed
+app.post(
+  "/api/streams/:id/mark-complete",
+  mutationLimiter,
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    const user = (req as any).user;
+    if (stream.sender !== user.accountId) {
+      sendApiError(req, res, 403, "Only the sender can mark this stream complete.", {
+        code: "FORBIDDEN",
+      });
+      return;
+    }
+
+    try {
+      const updated = markStreamComplete(parsedId.value);
+      res.json({ data: { ...updated, progress: calculateProgress(updated) } });
+    } catch (error: any) {
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to mark stream complete.",
       );
       sendApiError(
         req,

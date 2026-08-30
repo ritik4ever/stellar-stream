@@ -53,8 +53,11 @@ services:
     container_name: stellar-frontend
     ports:
       - "3000:3000"
-    environment:
-      - VITE_API_URL=http://backend:3001/api
+    # No VITE_API_URL here: Vite inlines import.meta.env.VITE_* at build
+    # time, so setting it as a runtime container env var has no effect on
+    # the already-built static bundle. The app falls back to a relative
+    # /api path, which nginx (see Dockerfile) proxies to the backend
+    # service.
     # Frontend waits for backend to pass its health check before starting
     depends_on:
       backend:

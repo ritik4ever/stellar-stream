@@ -138,7 +138,7 @@ export function broadcastStreamProgress(
 export function broadcastStreamEvent(
   streamId: string,
   eventType: string,
-  data?: Record<string, any>,
+  data?: Record<string, unknown>,
 ): void {
   if (!wss) {
     return;

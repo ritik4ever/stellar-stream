@@ -16,6 +16,10 @@ RUN npm install --ignore-scripts 2>/dev/null || true
 # Copy all source files
 COPY . .
 
+# CI=true skips the vite-plugin-pwa/workbox-build step (see vite.config.ts) —
+# that plugin crashes on validate-options in this environment.
+ENV CI=true
+
 # Build static assets
 RUN npm run build
 
@@ -48,6 +52,19 @@ server {
         expires 1y;
         add_header Cache-Control "public, immutable";
         try_files $uri =404;
+    }
+
+    # Proxy API calls to the backend service. The app calls a relative
+    # /api/... path by default (see frontend/src/services/api.ts), so
+    # without this the SPA fallback below would serve index.html for every
+    # API request instead of reaching the backend.
+    location /api/ {
+        proxy_pass http://backend:3001/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     # SPA fallback — all other paths serve index.html

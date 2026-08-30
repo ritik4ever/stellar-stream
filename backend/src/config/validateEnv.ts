@@ -1,12 +1,21 @@
 import { z } from "zod";
-import { logger } from "../logger";
 
 /**
  * Validates Soroban-related environment variables at startup.
  * Fails fast with helpful messages if config is invalid.
  * Distinguishes between required and optional config.
  * Allows local non-chain development to run intentionally.
+ *
+ * Uses console.* (not the structured logger) intentionally: this runs
+ * before the rest of the app is wired up, and messages here are meant to
+ * be read directly off the terminal by whoever is starting the server.
  */
+
+const DEFAULT_TESTNET_CONTRACT_ID =
+  "CCJW2RLIN4MQQ4DAJMMR3F5QPDA6QYTKXJMEVI3XOTDBTBCLBB553J74";
+const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
+const PUBLIC_PASSPHRASE = "Public Global Stellar Network ; October 2015";
+const DEFAULT_RPC_URL = "https://soroban-testnet.stellar.org:443";
 
 // Stellar account ID format: 56 chars, starts with G (public) or C (contract)
 const stellarAccountIdSchema = z
@@ -55,6 +64,14 @@ const archiveCronIntervalSchema = z
     message: "must be a valid number >= 60000 (minimum 1 minute)",
   });
 
+// Webhook dead-letter pruning job interval validation
+const webhookDeadLetterPruneIntervalSchema = z
+  .string()
+  .transform((val: string) => parseInt(val, 10))
+  .refine((val: number) => !isNaN(val) && val >= 60000, {
+    message: "must be a valid number >= 60000 (minimum 1 minute)",
+  });
+
 // Indexer fallback polling interval validation
 const fallbackPollIntervalSchema = z
   .string()
@@ -74,12 +91,9 @@ const envSchema = z.object({
   CONTRACT_ID: z.string().optional(),
   STELLAR_CONTRACT_ID: z.string().optional(),
   SERVER_PRIVATE_KEY: z.string().optional(),
-  RPC_URL: z.string().optional().default("https://soroban-testnet.stellar.org:443"),
+  RPC_URL: z.string().optional().default(DEFAULT_RPC_URL),
   SOROBAN_RPC_URL: z.string().optional(),
-  NETWORK_PASSPHRASE: z
-    .string()
-    .optional()
-    .default("Test SDF Network ; September 2015"),
+  NETWORK_PASSPHRASE: z.string().optional().default(TESTNET_PASSPHRASE),
   STELLAR_NETWORK: z.string().optional(),
   ALLOWED_ASSETS: z.string().optional().default("USDC,XLM"),
   DB_PATH: z.string().optional().default("backend/data/streams.db"),
@@ -92,6 +106,9 @@ const envSchema = z.object({
   INDEXER_POLL_INTERVAL_MS: indexerPollIntervalSchema.optional().default(10000),
   RECONCILIATION_INTERVAL_MS: reconciliationIntervalSchema.optional().default(60000),
   ARCHIVE_CRON_INTERVAL_MS: archiveCronIntervalSchema.optional().default(86400000),
+  WEBHOOK_DEAD_LETTER_PRUNE_INTERVAL_MS: webhookDeadLetterPruneIntervalSchema
+    .optional()
+    .default(86400000),
   INDEXER_FALLBACK_POLLING_ENABLED: z.string().optional().default("false"),
   INDEXER_FALLBACK_POLL_INTERVAL_MS: fallbackPollIntervalSchema.optional().default(10000),
   ALLOWED_ORIGINS: z.string().optional(),
@@ -114,6 +131,7 @@ export interface ValidatedConfig {
   indexerPollIntervalMs: number;
   reconciliationIntervalMs: number;
   archiveCronIntervalMs: number;
+  webhookDeadLetterPruneIntervalMs: number;
   indexerFallbackPollingEnabled: boolean;
   indexerFallbackPollIntervalMs: number;
   adminApiKey: string | null;
@@ -128,18 +146,15 @@ export function validateEnv(): ValidatedConfig {
   if (!process.env.SOROBAN_RPC_URL && process.env.RPC_URL) {
     process.env.SOROBAN_RPC_URL = process.env.RPC_URL;
   }
-  if (!process.env.STELLAR_NETWORK && process.env.NETWORK_PASSPHRASE) {
-    process.env.STELLAR_NETWORK = process.env.NETWORK_PASSPHRASE;
-  }
 
   // Parse environment variables
   const parsed = envSchema.safeParse(process.env);
 
   if (!parsed.success) {
-    logger.error({ issues: parsed.error.issues }, "environment validation failed");
+    console.error("❌ Environment validation failed:");
     parsed.error.issues.forEach((issue: z.ZodIssue) => {
       const envVar = issue.path.join(".");
-      logger.error({ envVar, issue: issue.message }, "environment variable validation issue");
+      console.error(`   ${envVar}: ${issue.message}`);
     });
     process.exit(1);
     throw new Error("Environment validation failed"); // Ensure execution stops in tests
@@ -147,59 +162,50 @@ export function validateEnv(): ValidatedConfig {
 
   const env = parsed.data;
   const isProduction = process.env.NODE_ENV === "production";
+  const isDevelopment = process.env.NODE_ENV === "development";
   const sorobanDisabled = process.env.SOROBAN_DISABLED?.toLowerCase() === "true";
 
   if (!sorobanDisabled) {
-    // CONTRACT_ID and SERVER_PRIVATE_KEY are required for Soroban operations
-    if (!env.CONTRACT_ID || !env.SERVER_PRIVATE_KEY) {
-      logger.error(
-        "❌ Soroban configuration incomplete. Either provide both CONTRACT_ID and SERVER_PRIVATE_KEY, or set SOROBAN_DISABLED=true for local development.\n"
+    // CONTRACT_ID and SERVER_PRIVATE_KEY are required unless the operator has
+    // explicitly opted into local, non-chain development (NODE_ENV=development).
+    if (!isDevelopment) {
+      const missingContractId = !process.env.STELLAR_CONTRACT_ID;
+      const missingPrivateKey = !process.env.SERVER_PRIVATE_KEY;
+
+      if (missingContractId) {
+        console.error(
+          "❌ STELLAR_CONTRACT_ID is required in production. Either provide it, or set SOROBAN_DISABLED=true / NODE_ENV=development for local development.",
+        );
+      }
+      if (missingPrivateKey) {
+        console.error(
+          "❌ SERVER_PRIVATE_KEY is required in production. Either provide it, or set SOROBAN_DISABLED=true / NODE_ENV=development for local development.",
+        );
+      }
+      if (missingContractId || missingPrivateKey) {
+        console.error("Required for on-chain operations:");
+        console.error("  CONTRACT_ID: Soroban contract ID (starts with C, 56 characters)");
+        console.error(
+          "  SERVER_PRIVATE_KEY: Signing key for on-chain transactions (starts with S, 56 characters)",
+        );
+        console.error("Optional Soroban config: RPC_URL and NETWORK_PASSPHRASE");
+        console.error("To run locally without on-chain operations, set SOROBAN_DISABLED=true");
+        process.exit(1);
+      }
+    } else if (!process.env.STELLAR_CONTRACT_ID) {
+      console.warn(
+        "⚠️  STELLAR_CONTRACT_ID is missing in development, using default testnet contract ID",
       );
-      logger.error("required for on-chain operations: CONTRACT_ID and SERVER_PRIVATE_KEY");
-      logger.error("optional Soroban config: RPC_URL and NETWORK_PASSPHRASE");
-      logger.error("to run locally without on-chain operations, set SOROBAN_DISABLED=true");
-      process.exit(1);
-      throw new Error("Environment validation failed");
+      process.env.STELLAR_CONTRACT_ID = DEFAULT_TESTNET_CONTRACT_ID;
     }
 
-    // Validate CONTRACT_ID format
-    const contractIdValidation = stellarAccountIdSchema.safeParse(env.CONTRACT_ID);
-    if (!contractIdValidation.success) {
-      logger.error("CONTRACT_ID validation failed");
-      contractIdValidation.error.issues.forEach((issue: z.ZodIssue) => {
-        logger.error({ issue: issue.message }, "CONTRACT_ID validation issue");
-      });
-      process.exit(1);
-      throw new Error("Environment validation failed");
-    }
-
-    // Validate SERVER_PRIVATE_KEY format
-    const keyValidation = stellarSecretKeySchema.safeParse(env.SERVER_PRIVATE_KEY);
-    if (!keyValidation.success) {
-      logger.error("SERVER_PRIVATE_KEY validation failed");
-      keyValidation.error.issues.forEach((issue: z.ZodIssue) => {
-        logger.error({ issue: issue.message }, "SERVER_PRIVATE_KEY validation issue");
-      });
-      process.exit(1);
-      throw new Error("Environment validation failed");
-    }
-
-    // Validate RPC_URL format
-    const rpcValidation = urlSchema.safeParse(env.RPC_URL);
-    if (!rpcValidation.success) {
-      logger.error({ rpcUrl: env.RPC_URL }, "RPC_URL validation failed");
-      rpcValidation.error.issues.forEach((issue: z.ZodIssue) => {
-        logger.error({ issue: issue.message }, "RPC_URL validation issue");
-      });
-      process.exit(1);
-      throw new Error("Environment validation failed");
-    }
-
-    // Now validate their formats if present
+    // Validate CONTRACT_ID format, if present
     if (process.env.STELLAR_CONTRACT_ID) {
-      const contractIdValidation = stellarAccountIdSchema.safeParse(process.env.STELLAR_CONTRACT_ID);
+      const contractIdValidation = stellarAccountIdSchema.safeParse(
+        process.env.STELLAR_CONTRACT_ID,
+      );
       if (!contractIdValidation.success) {
-        console.error("❌ STELLAR_CONTRACT_ID validation failed:");
+        console.error("STELLAR_CONTRACT_ID validation failed");
         contractIdValidation.error.issues.forEach((issue: z.ZodIssue) => {
           console.error(`   ${issue.message}`);
         });
@@ -207,33 +213,72 @@ export function validateEnv(): ValidatedConfig {
       }
     }
 
-    logger.info("Soroban configuration validated");
-  } else {
-    if (env.SERVER_PRIVATE_KEY) {
-      logger.warn(
-        "⚠️  SOROBAN_DISABLED=true is set and SERVER_PRIVATE_KEY is configured. The private key will not be used or logged in disabled mode."
+    // Validate SERVER_PRIVATE_KEY format, if present
+    if (process.env.SERVER_PRIVATE_KEY) {
+      const keyValidation = stellarSecretKeySchema.safeParse(process.env.SERVER_PRIVATE_KEY);
+      if (!keyValidation.success) {
+        console.error("SERVER_PRIVATE_KEY validation failed");
+        keyValidation.error.issues.forEach((issue: z.ZodIssue) => {
+          console.error(`   ${issue.message}`);
+        });
+        process.exit(1);
+      }
+    }
+
+    // Validate RPC_URL format
+    const rpcValidation = urlSchema.safeParse(env.RPC_URL);
+    if (!rpcValidation.success) {
+      console.error(`RPC_URL validation failed: ${env.RPC_URL}`);
+      process.exit(1);
+    }
+
+    // SOROBAN_RPC_URL: required in production, defaults with a warning otherwise
+    if (isProduction) {
+      if (!process.env.SOROBAN_RPC_URL) {
+        console.error("❌ SOROBAN_RPC_URL is required in production.");
+        process.exit(1);
+      }
+    } else if (!process.env.SOROBAN_RPC_URL) {
+      console.warn(
+        "⚠️  SOROBAN_RPC_URL is missing in development, using default testnet RPC URL",
       );
     }
-    logger.info("Soroban disabled (SOROBAN_DISABLED=true) — local development mode");
+
+    // STELLAR_NETWORK: required in production, defaults with a warning otherwise
+    if (isProduction) {
+      if (!process.env.STELLAR_NETWORK) {
+        console.error("❌ STELLAR_NETWORK is required in production.");
+        process.exit(1);
+      }
+    } else if (!process.env.STELLAR_NETWORK) {
+      console.warn(
+        "⚠️  STELLAR_NETWORK is missing in development, using default testnet network",
+      );
+    }
+
+    console.log("Soroban configuration validated");
+  } else {
+    if (process.env.SERVER_PRIVATE_KEY) {
+      console.warn(
+        "⚠️  SOROBAN_DISABLED=true is set and SERVER_PRIVATE_KEY is configured. The private key will not be used or logged in disabled mode.",
+      );
+    }
+    console.log("⚠️  Soroban disabled (SOROBAN_DISABLED=true) — local development mode");
   }
 
   // Validate optional webhook URL if provided
   if (env.WEBHOOK_DESTINATION_URL) {
     const webhookValidation = urlSchema.safeParse(env.WEBHOOK_DESTINATION_URL);
     if (!webhookValidation.success) {
-      logger.error({ webhookDestinationUrl: env.WEBHOOK_DESTINATION_URL }, "WEBHOOK_DESTINATION_URL validation failed");
-      webhookValidation.error.issues.forEach((issue: z.ZodIssue) => {
-        logger.error({ issue: issue.message }, "WEBHOOK_DESTINATION_URL validation issue");
-      });
+      console.error(`WEBHOOK_DESTINATION_URL validation failed: ${env.WEBHOOK_DESTINATION_URL}`);
       process.exit(1);
-      throw new Error("Environment validation failed");
     }
   }
 
   // Validate webhook signing secret if webhook URL is set
   if (env.WEBHOOK_DESTINATION_URL && !env.WEBHOOK_SIGNING_SECRET) {
-    logger.warn(
-      "⚠️  WEBHOOK_DESTINATION_URL is set but WEBHOOK_SIGNING_SECRET is not — webhooks will not be signed"
+    console.warn(
+      "⚠️  WEBHOOK_DESTINATION_URL is set but WEBHOOK_SIGNING_SECRET is not — webhooks will not be signed",
     );
   }
 
@@ -244,9 +289,8 @@ export function validateEnv(): ValidatedConfig {
     .filter((asset: string) => asset.length > 0);
 
   if (allowedAssets.length === 0) {
-    logger.error("ALLOWED_ASSETS must contain at least one asset code");
+    console.error("ALLOWED_ASSETS must contain at least one asset code");
     process.exit(1);
-    throw new Error("Environment validation failed");
   }
 
   // Validate ADMIN_API_KEY if provided
@@ -255,44 +299,43 @@ export function validateEnv(): ValidatedConfig {
   if (process.env.ADMIN_API_KEY) {
     const adminKeyValidation = adminApiKeySchema.safeParse(process.env.ADMIN_API_KEY);
     if (!adminKeyValidation.success) {
-      logger.error("ADMIN_API_KEY validation failed");
+      console.error("ADMIN_API_KEY validation failed");
       adminKeyValidation.error.issues.forEach((issue: z.ZodIssue) => {
-        logger.error({ issue: issue.message }, "ADMIN_API_KEY validation issue");
+        console.error(`   ${issue.message}`);
       });
       if (isProduction) {
-        logger.error("in production, ADMIN_API_KEY must be at least 32 characters");
+        console.error("In production, ADMIN_API_KEY must be at least 32 characters");
         process.exit(1);
-        throw new Error("Environment validation failed");
       } else {
-        logger.warn("in development, short ADMIN_API_KEY values are allowed but not recommended");
+        console.warn(
+          "In development, short keys are allowed but not recommended for ADMIN_API_KEY",
+        );
+        adminApiKey = process.env.ADMIN_API_KEY;
       }
     } else {
       adminApiKey = process.env.ADMIN_API_KEY;
     }
   } else if (isProduction) {
-    logger.warn("ADMIN_API_KEY is not set in production — admin endpoints will be inaccessible");
+    console.warn("ADMIN_API_KEY is not set in production — admin endpoints will be inaccessible");
   }
 
-  logger.info(
-    {
-      port: env.PORT,
-      allowedAssets,
-      indexerPollIntervalMs: env.INDEXER_POLL_INTERVAL_MS,
-      reconciliationIntervalMs: env.RECONCILIATION_INTERVAL_MS,
-      archiveCronIntervalMs: env.ARCHIVE_CRON_INTERVAL_MS,
-      indexerFallbackPollingEnabled: env.INDEXER_FALLBACK_POLLING_ENABLED,
-      indexerFallbackPollIntervalMs: env.INDEXER_FALLBACK_POLL_INTERVAL_MS,
-    },
-    "configuration validated",
-  );
+  // Network passphrase: explicit NETWORK_PASSPHRASE wins; otherwise derive from
+  // STELLAR_NETWORK ("public" -> public passphrase, anything else -> testnet).
+  let networkPassphrase = env.NETWORK_PASSPHRASE;
+  if (!process.env.NETWORK_PASSPHRASE) {
+    networkPassphrase =
+      process.env.STELLAR_NETWORK === "public" ? PUBLIC_PASSPHRASE : TESTNET_PASSPHRASE;
+  }
+
+  console.log("configuration validated");
 
   return {
     port: env.PORT || 3001,
     sorobanEnabled: !sorobanDisabled,
-    contractId: process.env.STELLAR_CONTRACT_ID || null,
-    serverPrivateKey: process.env.SERVER_PRIVATE_KEY || null,
-    rpcUrl: process.env.SOROBAN_RPC_URL || env.RPC_URL || "https://soroban-testnet.stellar.org:443",
-    networkPassphrase: process.env.NETWORK_PASSPHRASE || env.NETWORK_PASSPHRASE || "Test SDF Network ; September 2015",
+    contractId: sorobanDisabled ? null : process.env.STELLAR_CONTRACT_ID || null,
+    serverPrivateKey: sorobanDisabled ? null : process.env.SERVER_PRIVATE_KEY || null,
+    rpcUrl: process.env.SOROBAN_RPC_URL || env.RPC_URL || DEFAULT_RPC_URL,
+    networkPassphrase,
     allowedAssets,
     dbPath: env.DB_PATH || "backend/data/streams.db",
     webhookDestinationUrl: env.WEBHOOK_DESTINATION_URL || null,
@@ -303,6 +346,7 @@ export function validateEnv(): ValidatedConfig {
     indexerPollIntervalMs: env.INDEXER_POLL_INTERVAL_MS,
     reconciliationIntervalMs: env.RECONCILIATION_INTERVAL_MS,
     archiveCronIntervalMs: env.ARCHIVE_CRON_INTERVAL_MS,
+    webhookDeadLetterPruneIntervalMs: env.WEBHOOK_DEAD_LETTER_PRUNE_INTERVAL_MS,
     indexerFallbackPollingEnabled: process.env.INDEXER_FALLBACK_POLLING_ENABLED === "true",
     indexerFallbackPollIntervalMs: env.INDEXER_FALLBACK_POLL_INTERVAL_MS,
     adminApiKey,

@@ -30,7 +30,7 @@ describe("reconciliationJob – missing stream detection", () => {
   it("calls reconcileMissingStreams immediately when started", async () => {
     const { startReconciliationJob } = await import("./reconciliationJob");
     startReconciliationJob(60000);
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(0);
     expect(reconcileMock).toHaveBeenCalledTimes(1);
   });
 
@@ -38,7 +38,7 @@ describe("reconciliationJob – missing stream detection", () => {
     reconcileMock.mockResolvedValue(5);
     const { startReconciliationJob } = await import("./reconciliationJob");
     startReconciliationJob(60000);
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(0);
     expect(reconcileMock).toHaveBeenCalledTimes(1);
     const result = await reconcileMock.mock.results[0].value;
     expect(result).toBe(5);
@@ -111,7 +111,7 @@ describe("reconciliationJob – missing stream detection", () => {
     reconcileMock.mockRejectedValue(new Error("RPC timeout"));
     const { startReconciliationJob } = await import("./reconciliationJob");
     startReconciliationJob(60000);
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(0);
     expect(loggerMock.error).toHaveBeenCalled();
   });
 });

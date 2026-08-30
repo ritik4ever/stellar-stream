@@ -1,0 +1,152 @@
+name: Nightly Testnet Integration Tests
+
+on:
+  schedule:
+    # Run nightly at 02:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  integration-test:
+    name: Run contract integration tests against Stellar testnet
+    runs-on: ubuntu-latest
+    outputs:
+      conclusion: ${{ job.status }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+          key: ${{ runner.os }}-cargo-nightly-${{ hashFiles('contracts/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-nightly-
+            ${{ runner.os }}-cargo-
+
+      - name: Install Soroban CLI
+        run: cargo install --locked soroban-cli --version 21.0.0
+
+      - name: Run contract test suite
+        id: contract_tests
+        working-directory: contracts
+        run: |
+          set -o pipefail
+          cargo test --locked 2>&1 | tee ../nightly-test-output.log
+
+      - name: Create and fund testnet deployer account
+        if: success()
+        run: |
+          DEPLOYER_SECRET=$(soroban keys generate deployer --network testnet --format secret)
+          DEPLOYER_PUBLIC=$(soroban keys address deployer)
+
+          echo "DEPLOYER_PUBLIC=$DEPLOYER_PUBLIC" >> "$GITHUB_ENV"
+          echo "SECRET_KEY=$DEPLOYER_SECRET" >> "$GITHUB_ENV"
+
+          curl -sf -X GET "https://friendbot.stellar.org?addr=$DEPLOYER_PUBLIC" \
+            2>&1 | tee -a nightly-test-output.log
+
+      - name: Deploy contract to testnet
+        if: success()
+        run: |
+          set -o pipefail
+          chmod +x scripts/deploy.sh
+          ./scripts/deploy.sh 2>&1 | tee -a nightly-test-output.log
+
+          CONTRACT_ID=$(cat contracts/contract_id.txt)
+          echo "CONTRACT_ID=$CONTRACT_ID" >> "$GITHUB_ENV"
+
+      - name: Initialize contract on testnet
+        if: success()
+        run: |
+          set -o pipefail
+          soroban contract invoke \
+            --id "$CONTRACT_ID" \
+            --source-account deployer \
+            --network testnet \
+            -- \
+            initialize \
+            --admin "$DEPLOYER_PUBLIC" 2>&1 | tee -a nightly-test-output.log
+
+      - name: Integration test - create_stream against testnet
+        if: success()
+        run: |
+          set -o pipefail
+          NATIVE_XLM="CDLZFC3SYJYDZT7K67VZ75YJFCVQELQQSTR2XTS2YPN6YGL67VTWXBCM"
+          START_TIME=$(( $(date +%s) + 3600 ))
+          END_TIME=$(( START_TIME + 3600 ))
+
+          soroban contract invoke \
+            --id "$CONTRACT_ID" \
+            --source-account deployer \
+            --network testnet \
+            -- \
+            create_stream \
+            --sender "$DEPLOYER_PUBLIC" \
+            --recipient "$DEPLOYER_PUBLIC" \
+            --token "$NATIVE_XLM" \
+            --total_amount 10000000 \
+            --start_time "$START_TIME" \
+            --end_time "$END_TIME" 2>&1 | tee -a nightly-test-output.log
+
+      - name: Upload test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-test-output
+          path: nightly-test-output.log
+          retention-days: 14
+
+      - name: Create issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let output = '';
+            try {
+              output = fs.readFileSync('nightly-test-output.log', 'utf8');
+            } catch (e) {
+              output = '(no test output captured)';
+            }
+
+            const MAX_LEN = 60000;
+            if (output.length > MAX_LEN) {
+              output = `…(truncated)…\n${output.slice(-MAX_LEN)}`;
+            }
+
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const title = `Nightly testnet integration test failed (${new Date().toISOString().slice(0, 10)})`;
+            const body = [
+              `The [nightly testnet integration test run](${runUrl}) failed.`,
+              '',
+              '<details><summary>Test output</summary>',
+              '',
+              '```',
+              output,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['nightly-ci', 'testing', 'contracts'],
+            });

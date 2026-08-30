@@ -1,0 +1,1 @@
+ALTER TABLE streams ADD COLUMN cliff_seconds INTEGER NOT NULL DEFAULT 0;
