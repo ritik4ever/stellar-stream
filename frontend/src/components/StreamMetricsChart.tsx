@@ -200,7 +200,7 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
     pinchRef.current = null;
   };
 
-  if (loading || statsLoading) {
+  if (loading) {
     return (
       <div className="chart-empty-state" aria-live="polite" aria-busy="true">
         <div className="chart-empty-state__content">

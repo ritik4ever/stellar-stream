@@ -12,7 +12,7 @@ test.describe('StellarStream E2E', () => {
     expect(response.status()).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
-      service: 'stellar-stream',
+      service: 'stellar-stream-backend',
       status: 'ok',
     });
   });

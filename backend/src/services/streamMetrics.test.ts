@@ -5,7 +5,7 @@ import { vi } from "vitest";
 let db: InstanceType<typeof Database>;
 vi.mock("./db", () => ({ getDb: () => db }));
 
-const { getStreamMetrics, resetStreamMetricsCache } = await import("./streamMetrics");
+import { getStreamMetrics, resetStreamMetricsCache } from "./streamMetrics";
 
 function setupDb() {
   db = new Database(":memory:");
@@ -106,7 +106,10 @@ describe("getStreamMetrics", () => {
     insert({ id: "s3", asset_code: "usdc", total_amount: 200, start_at: NOW - 1800 }, 3);
 
     const metrics = getStreamMetrics();
-    expect(metrics.total_vested_usdc).toBe(1100);
+    // s3 is still actively vesting (start_at: NOW - 1800), so its contribution
+    // depends on real elapsed time between fixture setup and this assertion —
+    // allow a small tolerance rather than asserting exact equality.
+    expect(metrics.total_vested_usdc).toBeCloseTo(1100, 0);
     expect(metrics.total_vested_xlm).toBe(500);
   });
 

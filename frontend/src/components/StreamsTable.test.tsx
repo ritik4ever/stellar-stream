@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { StreamsTable, STREAMS_TABLE_VIRTUAL_OVERSCAN } from "./StreamsTable";
@@ -149,7 +149,7 @@ describe("StreamsTable infinite scroll", () => {
 
   afterEach(() => {
     cleanup();
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   it("renders sentinel element for infinite scroll", () => {
@@ -172,7 +172,7 @@ describe("StreamsTable infinite scroll", () => {
     let observerCallback: IntersectionObserverCallback = () => {};
 
     vi.spyOn(window, "IntersectionObserver").mockImplementation(
-      (callback) => {
+      function (callback) {
         observerCallback = callback;
         return { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn(), root: null, rootMargin: "", thresholds: [] };
       },
@@ -189,7 +189,9 @@ describe("StreamsTable infinite scroll", () => {
 
     // Simulate sentinel becoming visible
     const sentinel = screen.getByTestId("infinite-scroll-sentinel");
-    observerCallback([{ isIntersecting: true, target: sentinel } as unknown as IntersectionObserverEntry], null!);
+    act(() => {
+      observerCallback([{ isIntersecting: true, target: sentinel } as unknown as IntersectionObserverEntry], null!);
+    });
 
     expect(onLoadMore).toHaveBeenCalledTimes(1);
   });
@@ -199,7 +201,7 @@ describe("StreamsTable infinite scroll", () => {
     let observerCallback: IntersectionObserverCallback = () => {};
 
     vi.spyOn(window, "IntersectionObserver").mockImplementation(
-      (callback) => {
+      function (callback) {
         observerCallback = callback;
         return { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn(), root: null, rootMargin: "", thresholds: [] };
       },
@@ -215,7 +217,9 @@ describe("StreamsTable infinite scroll", () => {
     );
 
     const sentinel = screen.getByTestId("infinite-scroll-sentinel");
-    observerCallback([{ isIntersecting: true, target: sentinel } as unknown as IntersectionObserverEntry], null!);
+    act(() => {
+      observerCallback([{ isIntersecting: true, target: sentinel } as unknown as IntersectionObserverEntry], null!);
+    });
 
     expect(onLoadMore).not.toHaveBeenCalled();
   });
@@ -225,7 +229,7 @@ describe("StreamsTable infinite scroll", () => {
     let observerCallback: IntersectionObserverCallback = () => {};
 
     vi.spyOn(window, "IntersectionObserver").mockImplementation(
-      (callback) => {
+      function (callback) {
         observerCallback = callback;
         return { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn(), root: null, rootMargin: "", thresholds: [] };
       },
@@ -241,7 +245,9 @@ describe("StreamsTable infinite scroll", () => {
     );
 
     const sentinel = screen.getByTestId("infinite-scroll-sentinel");
-    observerCallback([{ isIntersecting: true, target: sentinel } as unknown as IntersectionObserverEntry], null!);
+    act(() => {
+      observerCallback([{ isIntersecting: true, target: sentinel } as unknown as IntersectionObserverEntry], null!);
+    });
 
     expect(onLoadMore).not.toHaveBeenCalled();
   });
@@ -273,7 +279,7 @@ describe("StreamsTable WebSocket progress updates", () => {
     render(<StreamsTable {...defaultProps} streams={streams} />);
     
     // Initial progress for stream 1
-    const initialProgress = screen.getByText("20%");
+    const initialProgress = screen.getAllByText("20.00%")[0];
     expect(initialProgress).toBeInTheDocument();
     
     // Full integration testing would require:

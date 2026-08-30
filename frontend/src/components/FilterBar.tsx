@@ -5,6 +5,10 @@ interface FilterBarProps {
   filters: ListStreamsFilters;
   onChange: (filters: ListStreamsFilters) => void;
   setUrlFilters?: (filters: ListStreamsFilters) => void;
+  /** When the consumer keeps filters synced to the URL, changing a filter
+   * should also reset pagination back to page 1 — pass true to include
+   * `page: 1` in the filters handed to `onChange`. */
+  useUrlFilters?: boolean;
 }
 
 const STATUS_OPTIONS = [
@@ -16,53 +20,44 @@ const STATUS_OPTIONS = [
   { label: "Canceled", value: "canceled" },
 ];
 
-export function FilterBar({ filters, onChange, setUrlFilters }: FilterBarProps) {
+export function FilterBar({ filters, onChange, setUrlFilters, useUrlFilters }: FilterBarProps) {
 
-  const handleTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    const newFilters = { ...filters, [name]: value };
-    onChange(newFilters);
+  const emitChange = (newFilters: ListStreamsFilters) => {
+    onChange(useUrlFilters ? { ...newFilters, page: 1 } : newFilters);
     if (setUrlFilters) {
       setUrlFilters({ ...newFilters, page: 1 });
     }
   };
 
+  const handleTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    emitChange({ ...filters, [name]: value });
+  };
+
   const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newFilters = { ...filters, status: e.target.value };
-    onChange(newFilters);
-    if (setUrlFilters) {
-      setUrlFilters({ ...newFilters, page: 1 });
-    }
+    emitChange({ ...filters, status: e.target.value });
   };
 
   const applyPreset = (preset: Partial<ListStreamsFilters>) => {
     // Presets clear other search/identity filters to focus on the monitoring view
-    const newFilters = {
+    emitChange({
       status: preset.status || "",
       q: "",
       asset: "",
       sender: "",
       recipient: "",
       ...preset,
-    };
-    onChange(newFilters);
-    if (setUrlFilters) {
-      setUrlFilters({ ...newFilters, page: 1 });
-    }
+    });
   };
 
   const handleReset = () => {
-    const newFilters = {
+    emitChange({
       status: "",
       q: "",
       asset: "",
       sender: "",
       recipient: "",
-    };
-    onChange(newFilters);
-    if (setUrlFilters) {
-      setUrlFilters({ ...newFilters, page: 1 });
-    }
+    });
   };
 
   return (

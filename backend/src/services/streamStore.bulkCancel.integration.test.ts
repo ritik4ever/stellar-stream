@@ -13,7 +13,7 @@ import request from "supertest";
 import jwt from "jsonwebtoken";
 import { app } from "../index";
 import { initDb, getDb } from "./db";
-import { initCache } from "./cache";
+import { initCache, getCache } from "./cache";
 import { getJwtSecret } from "./auth";
 
 describe("POST /api/streams/bulk-cancel Integration Tests", () => {
@@ -33,12 +33,17 @@ describe("POST /api/streams/bulk-cancel Integration Tests", () => {
     authToken = jwt.sign({ accountId: mockSender }, getJwtSecret(), { expiresIn: '1h' });
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     // Clean database before each test
     const db = getDb();
     db.exec("DELETE FROM stream_events");
     db.exec("DELETE FROM webhook_deliveries");
     db.exec("DELETE FROM streams");
+    // The GET /api/streams list endpoint caches responses by query string
+    // with a TTL; raw SQL cleanup here bypasses the service-layer mutation
+    // paths that normally invalidate that cache on write, so a stale
+    // cached list from a previous test can otherwise leak into this one.
+    await getCache().clear();
   });
 
   afterAll(() => {

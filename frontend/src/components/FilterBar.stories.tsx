@@ -18,26 +18,32 @@ const defaultFilters: ListStreamsFilters = {
   page: 1,
 };
 
+function DefaultFilterBarStory() {
+  const [filters, setFilters] = useState<ListStreamsFilters>(defaultFilters);
+  return <FilterBar filters={filters} onChange={setFilters} />;
+}
+
 export const Default: Story = {
-  render: () => {
-    const [filters, setFilters] = useState<ListStreamsFilters>(defaultFilters);
-    return <FilterBar filters={filters} onChange={setFilters} />;
-  },
+  render: DefaultFilterBarStory,
 };
+
+function StatusFilterBarStory() {
+  const [filters, setFilters] = useState<ListStreamsFilters>({ ...defaultFilters, status: 'active' });
+  return <FilterBar filters={filters} onChange={setFilters} />;
+}
 
 export const WithStatusFilter: Story = {
-  render: () => {
-    const [filters, setFilters] = useState<ListStreamsFilters>({ ...defaultFilters, status: 'active' });
-    return <FilterBar filters={filters} onChange={setFilters} />;
-  },
+  render: StatusFilterBarStory,
 };
 
+function SenderFilterBarStory() {
+  const [filters, setFilters] = useState<ListStreamsFilters>({
+    ...defaultFilters,
+    sender: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
+  });
+  return <FilterBar filters={filters} onChange={setFilters} />;
+}
+
 export const WithSenderFilter: Story = {
-  render: () => {
-    const [filters, setFilters] = useState<ListStreamsFilters>({
-      ...defaultFilters,
-      sender: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
-    });
-    return <FilterBar filters={filters} onChange={setFilters} />;
-  },
+  render: SenderFilterBarStory,
 };

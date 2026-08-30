@@ -44,6 +44,13 @@ RUN apk add --no-cache python3 make g++ \
 # ──────────────────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS runtime
 
+# src/logger.ts only loads the pino-pretty transport when NODE_ENV isn't
+# "production"/"test", and pino-pretty is a devDependency that this image
+# never installs (prod-deps stage runs `npm ci --omit=dev`). Set NODE_ENV
+# here so the very first pino() call at import time doesn't try to load a
+# transport module that doesn't exist in this image and crash on startup.
+ENV NODE_ENV=production
+
 # Create a data directory with proper ownership for SQLite volume mount
 RUN mkdir -p /app/data && chown -R node:node /app/data
 

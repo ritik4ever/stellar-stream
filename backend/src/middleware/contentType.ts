@@ -3,13 +3,11 @@ import { Request, Response, NextFunction } from "express";
 export function requireJsonContentType(req: Request, res: Response, next: NextFunction) {
   if (req.method === "POST" || req.method === "PATCH") {
     const contentLength = req.headers["content-length"];
-    const transferEncoding = req.headers["transfer-encoding"];
-    // Skip the check if there is no request body (no content-length or it is zero,
-    // and no chunked transfer encoding). This allows body-less POST endpoints
-    // such as /api/auth/refresh to work without requiring a Content-Type header.
-    const hasBody =
-      (contentLength !== undefined && contentLength !== "0") ||
-      transferEncoding !== undefined;
+    // Skip the check only when the request explicitly declares an empty body
+    // (Content-Length: 0). Real HTTP clients always send this header for a
+    // body-less POST (e.g. /api/auth/refresh); a missing header is otherwise
+    // treated as "has a body" so the Content-Type is still enforced.
+    const hasBody = contentLength !== "0";
 
     if (hasBody) {
       const contentType = req.headers["content-type"];

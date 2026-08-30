@@ -15,7 +15,6 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
   Cell,
 } from "recharts";
@@ -122,7 +121,7 @@ export function SenderDashboard({
   const [streams, setStreams] = useState<Stream[]>([]);
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [eventsLoading, setEventsLoading] = useState(false);
+  const [, setEventsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -207,9 +206,13 @@ export function SenderDashboard({
     streams.forEach((stream) => {
       statusCounts[stream.progress.status] =
         (statusCounts[stream.progress.status] || 0) + 1;
-      totalAmount += stream.totalAmount;
-      assetAmounts[stream.assetCode] =
-        (assetAmounts[stream.assetCode] || 0) + stream.totalAmount;
+      // "Total Amount Streamed" reflects streams that have actually started
+      // vesting — a scheduled stream hasn't streamed anything yet.
+      if (stream.progress.status !== "scheduled") {
+        totalAmount += stream.totalAmount;
+        assetAmounts[stream.assetCode] =
+          (assetAmounts[stream.assetCode] || 0) + stream.totalAmount;
+      }
     });
 
     return {
@@ -355,7 +358,7 @@ export function SenderDashboard({
     );
   }
 
-
+  if (stats.totalStreams === 0 && !showCreateForm) {
     return (
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Sender Dashboard</h2>

@@ -5,7 +5,8 @@ import { vi } from "vitest";
 let db: InstanceType<typeof Database>;
 vi.mock("./db", () => ({ getDb: () => db }));
 
-const { getStreamStats, getGlobalStats, resetStatsCache } = require("./stats");
+// @ts-expect-error: Top-level await is supported by Vitest
+const { getStreamStats, getGlobalStats, resetStatsCache } = await import("./stats");
 
 function setupDb() {
   db = new Database(":memory:");

@@ -31,6 +31,13 @@ function redactObject(obj: any): any {
 
 const logger = pino({
   level: process.env.LOG_LEVEL || "info",
+  // Serialize `err` fields (Error instances) to plain objects first: message
+  // and stack are non-enumerable on Error, so without this the formatters.log
+  // redaction pass below (which uses Object.entries) silently drops them,
+  // logging every error as `err: {}`.
+  serializers: {
+    err: pino.stdSerializers.err,
+  },
   // keep path-based redaction for structured fields
   redact: {
     paths: ["*.secretKey", "*.privateKey", "*.seed"],
