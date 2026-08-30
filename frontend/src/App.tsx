@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, useNavigate, useLocation } from "react-ro
 import { DarkModeToggle } from "./components/DarkModeToggle";
 import { OfflineBanner } from "./components/OfflineBanner";
 import { WalletButton } from "./components/WalletButton";
+import { GlobalSearch } from "./components/GlobalSearch";
 import { useFreighter } from "./hooks/useFreighter";
 import { useTheme } from "./hooks/useTheme";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -42,9 +43,8 @@ function AppContent() {
             <p className="eyebrow">Soroban-native MVP</p>
             <h1>StellarStream</h1>
           </div>
-
+          <GlobalSearch />
           <DarkModeToggle theme={theme} onToggle={toggleTheme} />
-
           <WalletButton wallet={wallet} />
         </div>
         <p className="hero-copy">
