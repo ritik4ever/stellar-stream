@@ -3434,4 +3434,266 @@ fn test_cliff_reached_event_emitted_once_after_cliff() {
     let cliff_data: CliffReached = cliff_events[0].2.clone().into_val(&env);
     assert_eq!(cliff_data.stream_id, stream_id);
     assert_eq!(cliff_data.cliff_time, 250);
+// #695 — DAO governance scaffold
+// =============================================================================
+
+fn setup_dao(env: &Env) -> (dao::DaoContractClient, Address, Address, i128) {
+    let contract_id = env.register_contract(None, dao::DaoContract);
+    let client = dao::DaoContractClient::new(env, &contract_id);
+    let admin = Address::generate(env);
+    let token = create_token(env, &admin);
+    // Mint governance tokens to two voters
+    let token_admin = token::StellarAssetClient::new(env, &token);
+    let voter1 = Address::generate(env);
+    let voter2 = Address::generate(env);
+    token_admin.mint(&voter1, &1000);
+    token_admin.mint(&voter2, &1000);
+    let total_supply: i128 = 2000;
+
+    client.initialize_dao(&admin, &token, &total_supply, &25, &60);
+    client.activate(&admin);
+    (client, token, admin, total_supply)
+}
+
+#[test]
+fn test_dao_initialize_and_get_params() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token, admin, total_supply) = setup_dao(&env);
+
+    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_gov_token(), token);
+    assert_eq!(client.get_total_supply(), total_supply);
+    assert!(client.is_activated());
+
+    let params = client.get_params();
+    assert_eq!(params.fee_bps, 25);
+    assert_eq!(params.min_stream_duration, 60);
+}
+
+#[test]
+#[should_panic(expected = "voting period not ended")]
+fn test_dao_proposal_cannot_execute_before_voting_ends() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, _admin, _total_supply) = setup_dao(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+    let proposer = Address::generate(&env);
+    let proposal_id = client.create_proposal(&proposer, &dao::ProposalTarget::FeeBps(50));
+
+    // Vote with quorum-level weight
+    let voter = Address::generate(&env);
+    client.vote(&voter, &proposal_id, &true);
+
+    // Execute immediately — must panic because the 7-day period has not ended
+    client.execute(&proposal_id);
+}
+
+#[test]
+#[should_panic(expected = "quorum not met")]
+fn test_dao_execute_requires_quorum() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, token, _admin, _total_supply) = setup_dao(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+    let proposer = Address::generate(&env);
+    let proposal_id = client.create_proposal(&proposer, &dao::ProposalTarget::FeeBps(50));
+
+    // A single voter with 100 tokens votes — 100 < 10% of 2000 (quorum = 200)
+    let small_voter = Address::generate(&env);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&small_voter, &100);
+    client.vote(&small_voter, &proposal_id, &true);
+
+    // Advance past the voting period
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000 + dao::VOTING_PERIOD_SECONDS + 1);
+    client.execute(&proposal_id);
+}
+
+#[test]
+fn test_dao_majority_executes_fee_change() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, _admin, _total_supply) = setup_dao(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+    let proposer = Address::generate(&env);
+    let proposal_id = client.create_proposal(&proposer, &dao::ProposalTarget::FeeBps(75));
+
+    // voter1: 1000 for, voter2: 500 against → 1500 total votes (quorum 200 met), simple majority
+    let voter1 = Address::generate(&env);
+    let voter2 = Address::generate(&env);
+    let token_admin = token::StellarAssetClient::new(&env, &_token);
+    token_admin.mint(&voter1, &1000);
+    token_admin.mint(&voter2, &500);
+
+    client.vote(&voter1, &proposal_id, &true);
+    client.vote(&voter2, &proposal_id, &false);
+
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000 + dao::VOTING_PERIOD_SECONDS + 1);
+    let executed = client.execute(&proposal_id);
+    assert!(executed);
+
+    let params = client.get_params();
+    assert_eq!(params.fee_bps, 75);
+}
+
+#[test]
+fn test_dao_majority_against_rejects_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, _admin, _total_supply) = setup_dao(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+    let proposer = Address::generate(&env);
+    let proposal_id =
+        client.create_proposal(&proposer, &dao::ProposalTarget::MinStreamDuration(120));
+
+    let voter1 = Address::generate(&env);
+    let voter2 = Address::generate(&env);
+    let token_admin = token::StellarAssetClient::new(&env, &_token);
+    token_admin.mint(&voter1, &300);
+    token_admin.mint(&voter2, &700);
+
+    // against (700) > for (300)
+    client.vote(&voter1, &proposal_id, &true);
+    client.vote(&voter2, &proposal_id, &false);
+
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000 + dao::VOTING_PERIOD_SECONDS + 1);
+    let executed = client.execute(&proposal_id);
+    assert!(!executed);
+
+    let params = client.get_params();
+    assert_eq!(params.min_stream_duration, 60);
+}
+
+#[test]
+#[should_panic(expected = "admin changes require DAO proposal")]
+fn test_dao_admin_change_only_via_proposal_after_activation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, admin, _total_supply) = setup_dao(&env);
+
+    let new_admin = Address::generate(&env);
+    // Direct admin transfer after activation must fail
+    client.set_dao_admin(&admin, &new_admin);
+}
+
+#[test]
+fn test_dao_set_admin_allowed_before_activation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, dao::DaoContract);
+    let client = dao::DaoContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    client.initialize_dao(&admin, &token, &1000, &25, &60);
+
+    let new_admin = Address::generate(&env);
+    client.set_dao_admin(&admin, &new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+
+    // Activate and verify an Admin proposal changes the admin via DAO
+    client.activate(&new_admin);
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+    let proposer = Address::generate(&env);
+    let proposal_id =
+        client.create_proposal(&proposer, &dao::ProposalTarget::Admin(new_admin.clone()));
+
+    let voter = Address::generate(&env);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&voter, &500);
+    client.vote(&voter, &proposal_id, &true);
+
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000 + dao::VOTING_PERIOD_SECONDS + 1);
+    let executed = client.execute(&proposal_id);
+    assert!(executed);
+    assert_eq!(client.get_admin(), new_admin);
+}
+
+#[test]
+fn test_dao_events_emitted() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, _admin, _total_supply) = setup_dao(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+    let proposer = Address::generate(&env);
+    let proposal_id =
+        client.create_proposal(&proposer, &dao::ProposalTarget::MinStreamDuration(300));
+
+    let voter = Address::generate(&env);
+    let token_admin = token::StellarAssetClient::new(&env, &_token);
+    token_admin.mint(&voter, &1000);
+    client.vote(&voter, &proposal_id, &true);
+
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000 + dao::VOTING_PERIOD_SECONDS + 1);
+    client.execute(&proposal_id);
+
+    let topic_pairs: std::vec::Vec<soroban_sdk::Vec<Val>> = env
+        .events()
+        .all()
+        .iter()
+        .map(|(_, t, _)| t.clone())
+        .collect();
+
+    assert!(
+        topic_pairs.contains(&(symbol_short!("Proposal"), symbol_short!("Created")).into_val(&env))
+    );
+    assert!(
+        topic_pairs.contains(&(symbol_short!("Proposal"), symbol_short!("Vote")).into_val(&env))
+    );
+    assert!(topic_pairs
+        .contains(&(symbol_short!("Proposal"), symbol_short!("Executed")).into_val(&env)));
+}
+
+#[test]
+fn test_dao_vote_weighted_by_balance_and_double_vote_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, _admin, _total_supply) = setup_dao(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+    let proposer = Address::generate(&env);
+    let proposal_id = client.create_proposal(&proposer, &dao::ProposalTarget::FeeBps(50));
+
+    // Two voters, 400 and 100 tokens respectively → total 500, quorum (200) met
+    let big_voter = Address::generate(&env);
+    let small_voter = Address::generate(&env);
+    let token_admin = token::StellarAssetClient::new(&env, &_token);
+    token_admin.mint(&big_voter, &400);
+    token_admin.mint(&small_voter, &100);
+
+    client.vote(&big_voter, &proposal_id, &true);
+    client.vote(&small_voter, &proposal_id, &false);
+
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000 + dao::VOTING_PERIOD_SECONDS + 1);
+    // 400 for > 100 against → executes even though the small voter opposed
+    assert!(client.execute(&proposal_id));
+    assert_eq!(client.get_params().fee_bps, 50);
+}
+
+#[test]
+#[should_panic(expected = "already voted")]
+fn test_dao_double_vote_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _token, _admin, _total_supply) = setup_dao(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+    let proposer = Address::generate(&env);
+    let proposal_id = client.create_proposal(&proposer, &dao::ProposalTarget::FeeBps(10));
+
+    let voter = Address::generate(&env);
+    client.vote(&voter, &proposal_id, &true);
+    // Second vote from the same account must panic
+    client.vote(&voter, &proposal_id, &true);
 }

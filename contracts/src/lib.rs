@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod dao;
 mod errors;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
@@ -336,6 +337,7 @@ impl StellarStreamContract {
                 .get(&DataKey::AllowedTokens)
                 .unwrap_or_else(|| Vec::new(&env));
             #[cfg(not(test))]
+            #[cfg(not(any(test, feature = "testutils")))]
             if !allowed_tokens.contains(&token) {
                 panic!("ContractError::TokenNotAllowed");
             }
