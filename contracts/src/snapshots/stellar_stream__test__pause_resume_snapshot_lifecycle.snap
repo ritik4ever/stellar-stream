@@ -10,7 +10,8 @@ Stream {
     claimed_amount: 0,
     start_time: 1000,
     end_time: 2000,
-    cliff_seconds: 0,
+    min_claim_interval_seconds: 0,
+    last_claim_time: 0,
     canceled: false,
     paused: true,
     pause_started_at: Some(

@@ -1,5 +1,8 @@
 #![no_std]
 
+mod errors;
+
+use errors::ContractError;
 pub mod dao;
 mod errors;
 use soroban_sdk::{
@@ -99,7 +102,10 @@ pub struct Stream {
     pub claimed_amount: i128,
     pub start_time: u64,
     pub end_time: u64,
-    pub cliff_seconds: u64,
+    /// Minimum seconds that must elapse between two claims (0 = no limit).
+    pub min_claim_interval_seconds: u64,
+    /// Ledger timestamp of the last successful claim (0 if never claimed).
+    pub last_claim_time: u64,
     pub canceled: bool,
     pub paused: bool,
     pub pause_started_at: Option<u64>,
@@ -153,7 +159,7 @@ pub struct StreamCreated {
     pub total_amount: i128,
     pub start_time: u64,
     pub end_time: u64,
-    pub cliff_seconds: u64,
+    pub min_claim_interval_seconds: u64,
     pub metadata: Option<Map<String, String>>,
 }
 
@@ -199,6 +205,21 @@ pub struct StreamCompleted {
     pub timestamp: u64,
     // --- event-specific fields ---
     pub total_amount: i128,
+}
+
+/// Emitted when a claim attempt is rejected because the stream's minimum claim
+/// interval has not elapsed since the last successful claim.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimThrottled {
+    // --- mandatory base fields ---
+    pub stream_id: u64,
+    /// The recipient whose claim attempt was rejected.
+    pub actor: Address,
+    pub timestamp: u64,
+    // --- event-specific fields ---
+    /// Earliest timestamp at which the next claim will be accepted.
+    pub next_allowed_claim_time: u64,
 }
 
 /// Emitted when a sender cancels an active stream before it ends.
@@ -314,7 +335,7 @@ impl StellarStreamContract {
         total_amount: i128,
         start_time: u64,
         end_time: u64,
-        cliff_seconds: u64,
+        min_claim_interval_seconds: u64,
         metadata: Option<Map<String, String>>,
     ) -> u64 {
         sender.require_auth();
@@ -379,7 +400,8 @@ impl StellarStreamContract {
             claimed_amount: 0,
             start_time,
             end_time,
-            cliff_seconds,
+            min_claim_interval_seconds,
+            last_claim_time: 0,
             canceled: false,
             paused: false,
             pause_started_at: None,
@@ -408,7 +430,7 @@ impl StellarStreamContract {
                 total_amount,
                 start_time,
                 end_time,
-                cliff_seconds,
+                min_claim_interval_seconds,
                 metadata,
             },
         );
@@ -483,7 +505,8 @@ impl StellarStreamContract {
                 claimed_amount: 0,
                 start_time,
                 end_time,
-                cliff_seconds: 0,
+                min_claim_interval_seconds: 0,
+                last_claim_time: 0,
                 canceled: false,
                 paused: false,
                 pause_started_at: None,
@@ -511,7 +534,7 @@ impl StellarStreamContract {
                     total_amount: allocation,
                     start_time,
                     end_time,
-                    cliff_seconds: 0,
+                    min_claim_interval_seconds: 0,
                     metadata: None,
                 },
             );
@@ -597,7 +620,18 @@ impl StellarStreamContract {
     // Claim
     // -----------------------------------------------------------------------
 
-    pub fn claim(env: Env, stream_id: u64, recipient: Address, amount: i128) -> i128 {
+    /// Claims vested tokens for the recipient.
+    ///
+    /// Rate limiting: when the stream has a `min_claim_interval_seconds > 0`, a
+    /// claim attempted before the interval has elapsed since the last successful
+    /// claim is rejected with [`ContractError::ClaimTooFrequent`] (a
+    /// `ClaimThrottled` event is emitted before the error is returned).
+    pub fn claim(
+        env: Env,
+        stream_id: u64,
+        recipient: Address,
+        amount: i128,
+    ) -> Result<i128, ContractError> {
         if amount <= 0 {
             panic!("amount must be positive");
         }
@@ -609,6 +643,31 @@ impl StellarStreamContract {
         recipient.require_auth();
 
         let now = env.ledger().timestamp();
+
+        // Rate-limited claims (anti-spam): reject claims that arrive before the
+        // minimum interval has elapsed since the last successful claim.
+        if stream.min_claim_interval_seconds > 0
+            && stream.claimed_amount > 0
+            && now
+                < stream
+                    .last_claim_time
+                    .saturating_add(stream.min_claim_interval_seconds)
+        {
+            let next_allowed_claim_time = stream
+                .last_claim_time
+                .saturating_add(stream.min_claim_interval_seconds);
+            env.events().publish(
+                (symbol_short!("Stream"), symbol_short!("Throttled")),
+                ClaimThrottled {
+                    stream_id,
+                    actor: recipient.clone(),
+                    timestamp: now,
+                    next_allowed_claim_time,
+                },
+            );
+            return Err(ContractError::ClaimTooFrequent);
+        }
+
         let claimable_now = Self::claimable(env.clone(), stream_id, now);
 
         if amount > claimable_now {
@@ -632,6 +691,7 @@ impl StellarStreamContract {
         token_client.transfer(&contract_address, &recipient, &amount);
 
         stream.claimed_amount += amount;
+        stream.last_claim_time = now;
         env.storage()
             .persistent()
             .set(&DataKey::Stream(stream_id), &stream);
@@ -663,7 +723,7 @@ impl StellarStreamContract {
             );
         }
 
-        amount
+        Ok(amount)
     }
 
     pub fn cancel(env: Env, stream_id: u64, sender: Address) {
