@@ -4,10 +4,10 @@
   "description": "Real-time payment streaming platform built on Stellar",
   "private": true,
   "scripts": {
-    "dev:backend": "cd backend && npm run dev",
-    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "node init && cd backend && npm run dev",
+    "dev:frontend": "node init && cd frontend && npm run dev",
     "install:all": "cd backend && npm install && cd ../frontend && npm install",
-    "build": "cd backend && npm run build && cd ../frontend && npm run build",
+    "build": "node init && cd backend && npm run build && cd ../frontend && npm run build",
     "deploy:contract": "./scripts/deploy.sh",
     "gen:bindings": "./scripts/generate-contract-bindings.sh",
     "changelog:update": "conventional-changelog -p angular -i CHANGELOG.md -s",

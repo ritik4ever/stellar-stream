@@ -1,0 +1,18 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "feature/696-integration-tests",
+    "main",
+    "origin"
+  ],
+  "parent": {
+    "feature/696-integration-tests": "main",
+    "main": null,
+    "origin": "main"
+  },
+  "order": [
+    "main",
+    "feature/696-integration-tests",
+    "origin"
+  ]
+}
