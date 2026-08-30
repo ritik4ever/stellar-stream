@@ -1502,6 +1502,7 @@ app.post(
 );
 
 // POST /api/streams/:id/claim â€” recipient claims vested tokens
+// POST /api/streams/:id/claim — recipient claims vested tokens
 app.post(
   "/api/streams/:id/claim",
   mutationLimiter,
@@ -1528,68 +1529,76 @@ app.post(
     }
 
     const progress = calculateProgress(stream);
-    if (progress.vestedAmount <= 0) {
-      sendApiError(req, res, 400, "No claimable amount available.", {
-        code: "NO_CLAIMABLE_AMOUNT",
-      });
+    if (
+      progress.status === "completed" ||
+      progress.status === "canceled"
+    ) {
+      sendApiError(
+        req,
+        res,
+        400,
+        `Cannot claim a ${progress.status} stream.`,
+        { code: "STREAM_NOT_CLAIMABLE" },
+      );
       return;
     }
 
     try {
-      // Record the claim event in the local DB.
-      // In a full on-chain implementation this would submit a `claim` Soroban tx.
-      const db = (await import("./services/db")).getDb();
-      const { recordEventWithDb } = await import("./services/eventHistory");
-      const now = Math.floor(Date.now() / 1000);
+      const { claimableAmount } =
+        await getOnChainClaimableAmount(parsedId.value);
 
-      // Guard against double-spend: check and write inside one atomic transaction.
-      let alreadyClaimed = false;
-      db.transaction(() => {
-        const existing = db
-          .prepare(
-            `SELECT 1 FROM stream_events WHERE stream_id = ? AND event_type = 'claimed' LIMIT 1`,
-          )
-          .get(stream.id);
-        if (existing) {
-          alreadyClaimed = true;
-          return;
-        }
-        recordEventWithDb(
-          db,
-          stream.id,
-          "claimed",
-          now,
-          stream.recipient,
-          progress.vestedAmount,
-          { assetCode: stream.assetCode },
-        );
-      })();
-
-      if (alreadyClaimed) {
-        sendApiError(req, res, 409, "Stream has already been claimed.", {
-          code: "ALREADY_CLAIMED",
+      if (!Number.isFinite(claimableAmount) || claimableAmount <= 0) {
+        sendApiError(req, res, 400, "No claimable amount available.", {
+          code: "NO_CLAIMABLE_AMOUNT",
         });
         return;
       }
 
-      const history = await import("./services/eventHistory").then((m) =>
-        m.getStreamHistory(stream.id),
+      const { submitClaimTransaction } =
+        await import("./services/claimService");
+
+      const submission = await submitClaimTransaction(
+        parsedId.value,
+        stream.recipient,
+        claimableAmount,
       );
+
+      const { recordEvent } = await import("./services/eventHistory");
+
+      recordEvent(
+        stream.id,
+        "claimed",
+        nowInSeconds(),
+        stream.recipient,
+        submission.amountClaimed,
+        {
+          assetCode: stream.assetCode,
+          txHash: submission.txHash,
+        },
+        submission.ledgerSequence,
+      );
+
+      const history = getStreamHistory(stream.id);
 
       res.json({
         result: {
-          claimedAmount: progress.vestedAmount,
+          claimedAmount: submission.amountClaimed,
           assetCode: stream.assetCode,
-          txHash: `local-${stream.id}-${now}`,
+          txHash: submission.txHash,
         },
         history,
       });
     } catch (error: any) {
-      logger.error({ err: error }, "failed to record claim");
+      logger.error(
+        { err: error, streamId: parsedId.value },
+        "failed to process claim",
+      );
+
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to process claim.",
       );
+
       sendApiError(
         req,
         res,
@@ -1602,7 +1611,6 @@ app.post(
     }
   },
 );
-
 // POST /api/streams/:id/reconcile — sync local state with on-chain state
 app.post(
   "/api/streams/:id/reconcile",
@@ -1741,27 +1749,88 @@ app.get(
       return;
     }
 
+    const rawAt = req.query.at;
+    if (typeof rawAt !== "string" || !/^\d+$/.test(rawAt)) {
+      sendApiError(req, res, 400, "at must be a valid Unix timestamp.", {
+        code: "VALIDATION_ERROR",
+      });
+      return;
+    }
+
+    const at = Number(rawAt);
+    if (!Number.isSafeInteger(at) || at < 0) {
+      sendApiError(req, res, 400, "at must be a valid Unix timestamp.", {
+        code: "VALIDATION_ERROR",
+      });
+      return;
+    }
+
     const stream = getStream(parsedId.value);
     if (!stream) {
       sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
       return;
     }
 
-    const progress = calculateProgress(stream);
-    const history = getStreamHistory(parsedId.value, 50, 0, 'asc');
+    const snapshotStream: StreamRecord = { ...stream };
+
+    if (
+      snapshotStream.canceledAt !== undefined &&
+      at < snapshotStream.canceledAt
+    ) {
+      delete snapshotStream.canceledAt;
+    }
+
+    if (
+      snapshotStream.completedAt !== undefined &&
+      at < snapshotStream.completedAt
+    ) {
+      delete snapshotStream.completedAt;
+    }
+
+    if (
+      snapshotStream.pausedAt !== undefined &&
+      at < snapshotStream.pausedAt
+    ) {
+      delete snapshotStream.pausedAt;
+    }
+
+    const calculationAt =
+      snapshotStream.canceledAt !== undefined
+        ? Math.min(at, snapshotStream.canceledAt)
+        : at;
+
+    const progress = calculateProgress(snapshotStream, calculationAt);
+
+    const historyCount = countStreamEvents(parsedId.value);
+    const history =
+      historyCount > 0
+        ? getStreamHistory(parsedId.value, historyCount, 0, "asc")
+        : [];
+
+    const claimedAtSnapshot = history
+      .filter(
+        (event) =>
+          event.eventType === "claimed" &&
+          event.timestamp <= at &&
+          typeof event.amount === "number",
+      )
+      .reduce((total, event) => total + (event.amount ?? 0), 0);
+
+    const claimable = Number(
+      Math.max(0, progress.vestedAmount - claimedAtSnapshot).toFixed(6),
+    );
 
     res.json({
       data: {
-        stream: {
-          ...stream,
-          progress,
-        },
-        history,
+        at,
+        status: progress.status,
+        vested: progress.vestedAmount,
+        claimable,
+        remaining: progress.remainingAmount,
       },
     });
   },
 );
-
 app.get("/api/open-issues", async (req: Request, res: Response) => {
   try {
     const data = await fetchOpenIssues();
