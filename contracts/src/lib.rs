@@ -277,6 +277,20 @@ pub struct StreamTransferred {
     pub new_recipient: Address,
 }
 
+/// Emitted when two streams are merged.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamsMerged {
+    // --- mandatory base fields ---
+    pub stream_id: u64,
+    /// The sender who merged the streams.
+    pub actor: Address,
+    pub timestamp: u64,
+    // --- event-specific fields ---
+    pub old_stream_id_a: u64,
+    pub old_stream_id_b: u64,
+}
+
 #[contract]
 pub struct StellarStreamContract;
 
@@ -856,6 +870,121 @@ impl StellarStreamContract {
                 resumed_at: now,
             },
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Merge
+    // -----------------------------------------------------------------------
+
+    pub fn merge_streams(
+        env: Env,
+        stream_id_a: u64,
+        stream_id_b: u64,
+        sender: Address,
+    ) -> u64 {
+        sender.require_auth();
+
+        let mut stream_a = read_stream(&env, stream_id_a);
+        let mut stream_b = read_stream(&env, stream_id_b);
+
+        if stream_a.sender != sender || stream_b.sender != sender {
+            panic!("sender mismatch");
+        }
+        if stream_a.recipient != stream_b.recipient {
+            panic!("recipient mismatch");
+        }
+        if stream_a.token != stream_b.token {
+            panic!("token mismatch");
+        }
+        if stream_a.canceled || stream_b.canceled {
+            panic!("stream canceled");
+        }
+
+        let now = env.ledger().timestamp();
+
+        let remaining_a = stream_a.total_amount - stream_a.claimed_amount;
+        let remaining_b = stream_b.total_amount - stream_b.claimed_amount;
+        let total_new = remaining_a + remaining_b;
+
+        let start_a = if now > stream_a.start_time { now } else { stream_a.start_time };
+        let duration_a = stream_a.end_time.saturating_sub(start_a);
+
+        let start_b = if now > stream_b.start_time { now } else { stream_b.start_time };
+        let duration_b = stream_b.end_time.saturating_sub(start_b);
+
+        let max_duration = if duration_a > duration_b { duration_a } else { duration_b };
+        let new_start_time = now;
+        let new_end_time = new_start_time + max_duration;
+
+        // Old streams closed
+        stream_a.canceled = true;
+        stream_a.total_amount = stream_a.claimed_amount;
+        stream_a.end_time = if now > stream_a.start_time { now } else { stream_a.start_time };
+        env.storage().persistent().set(&DataKey::Stream(stream_id_a), &stream_a);
+
+        stream_b.canceled = true;
+        stream_b.total_amount = stream_b.claimed_amount;
+        stream_b.end_time = if now > stream_b.start_time { now } else { stream_b.start_time };
+        env.storage().persistent().set(&DataKey::Stream(stream_id_b), &stream_b);
+
+        let mut next_id: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::NextStreamId)
+            .unwrap_or(0);
+        next_id += 1;
+
+        let new_stream = Stream {
+            sender: sender.clone(),
+            recipient: stream_a.recipient.clone(),
+            token: stream_a.token.clone(),
+            total_amount: total_new,
+            claimed_amount: 0,
+            start_time: new_start_time,
+            end_time: new_end_time,
+            cliff_seconds: 0,
+            canceled: false,
+            paused: false,
+            pause_started_at: None,
+            metadata: None,
+        };
+
+        env.storage().persistent().set(&DataKey::NextStreamId, &next_id);
+        env.storage().persistent().set(&DataKey::Stream(next_id), &new_stream);
+
+        let token_client = TokenClient::new(&env, &stream_a.token);
+
+        env.events().publish(
+            (symbol_short!("Stream"), symbol_short!("Merged")),
+            StreamsMerged {
+                stream_id: next_id,
+                actor: sender.clone(),
+                timestamp: now,
+                old_stream_id_a: stream_id_a,
+                old_stream_id_b: stream_id_b,
+            },
+        );
+
+        // Also emit StreamCreated for the new stream
+        env.events().publish(
+            (symbol_short!("Stream"), symbol_short!("Created")),
+            StreamCreated {
+                stream_id: next_id,
+                actor: sender,
+                timestamp: now,
+                sender: stream_a.sender,
+                recipient: stream_a.recipient,
+                token: stream_a.token,
+                token_symbol: token_client.symbol(),
+                total_amount: total_new,
+                start_time: new_start_time,
+                end_time: new_end_time,
+                cliff_seconds: 0,
+                metadata: None,
+            },
+        );
+
+        next_id
     }
 
     // -----------------------------------------------------------------------
