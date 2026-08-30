@@ -5,7 +5,6 @@ use insta::assert_debug_snapshot as assert_snapshot;
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events, Ledger},
-    token, Env, IntoVal, Map, String, Symbol, Vec,
     token, Env, IntoVal, Map, String, Symbol, Val, Vec,
 };
 
@@ -3331,12 +3330,6 @@ fn make_stream_with_balance(
 
 #[test]
 fn test_cancel_batch_cancels_multiple_streams() {
-// #681 — Rate-limited claims (anti-spam)
-// =============================================================================
-
-/// Acceptance test: 3 rapid claims, only the 1st succeeds.
-#[test]
-fn test_claim_throttled_three_rapid_claims_only_first_succeeds() {
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register_contract(None, StellarStreamContract);
@@ -3363,6 +3356,85 @@ fn test_claim_throttled_three_rapid_claims_only_first_succeeds() {
 
 #[test]
 fn test_cancel_batch_partial_failure_returns_failed_ids() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let other_sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+
+    let valid_id = make_stream_with_balance(&env, &client, &sender, &recipient, &token, 100, 100);
+    // Stream owned by a different sender -- must be skipped
+    let wrong_sender_id =
+        make_stream_with_balance(&env, &client, &other_sender, &recipient, &token, 100, 100);
+    // Already canceled stream -- must be skipped
+    let canceled_id =
+        make_stream_with_balance(&env, &client, &sender, &recipient, &token, 100, 100);
+    client.cancel(&canceled_id, &sender);
+    let missing_id = 999u64;
+
+    let ids = soroban_sdk::vec![&env, valid_id, wrong_sender_id, canceled_id, missing_id];
+    let result = client.cancel_batch(&ids, &sender);
+
+    // Only the valid stream was canceled
+    assert_eq!(result.canceled, soroban_sdk::vec![&env, valid_id]);
+    assert_eq!(result.failed.len(), 3);
+    assert!(result.failed.contains(wrong_sender_id));
+    assert!(result.failed.contains(canceled_id));
+    assert!(result.failed.contains(missing_id));
+
+    // Wrong-sender stream must remain untouched
+    assert!(!client.get_stream(&wrong_sender_id).canceled);
+}
+
+#[test]
+#[should_panic(expected = "too many stream ids")]
+fn test_cancel_batch_more_than_20_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+
+    let mut ids = soroban_sdk::Vec::new(&env);
+    for i in 0..21 {
+        ids.push_back(i);
+    }
+    client.cancel_batch(&ids, &sender);
+}
+
+#[test]
+fn test_cancel_batch_empty_returns_empty_result() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let sender = Address::generate(&env);
+
+    let result = client.cancel_batch(&soroban_sdk::vec![&env], &sender);
+    assert_eq!(result.canceled.len(), 0);
+    assert_eq!(result.failed.len(), 0);
+}
+
+// =============================================================================
+// #681 -- Rate-limited claims (anti-spam)
+// =============================================================================
+
+/// Acceptance test: 3 rapid claims, only the 1st succeeds.
+#[test]
+fn test_claim_throttled_three_rapid_claims_only_first_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
     let token_admin = token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&sender, &1000);
 
@@ -3397,37 +3469,6 @@ fn test_claim_no_throttle_when_interval_zero() {
     let client = StellarStreamContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
     let sender = Address::generate(&env);
-    let other_sender = Address::generate(&env);
-    let recipient = Address::generate(&env);
-    let token = create_token(&env, &admin);
-
-    let valid_id = make_stream_with_balance(&env, &client, &sender, &recipient, &token, 100, 100);
-    // Stream owned by a different sender — must be skipped
-    let wrong_sender_id =
-        make_stream_with_balance(&env, &client, &other_sender, &recipient, &token, 100, 100);
-    // Already canceled stream — must be skipped
-    let canceled_id =
-        make_stream_with_balance(&env, &client, &sender, &recipient, &token, 100, 100);
-    client.cancel(&canceled_id, &sender);
-    let missing_id = 999u64;
-
-    let ids = soroban_sdk::vec![&env, valid_id, wrong_sender_id, canceled_id, missing_id];
-    let result = client.cancel_batch(&ids, &sender);
-
-    // Only the valid stream was canceled
-    assert_eq!(result.canceled, soroban_sdk::vec![&env, valid_id]);
-    assert_eq!(result.failed.len(), 3);
-    assert!(result.failed.contains(wrong_sender_id));
-    assert!(result.failed.contains(canceled_id));
-    assert!(result.failed.contains(missing_id));
-
-    // Wrong-sender stream must remain untouched
-    assert!(!client.get_stream(&wrong_sender_id).canceled);
-}
-
-#[test]
-#[should_panic(expected = "too many stream ids")]
-fn test_cancel_batch_more_than_20_panics() {
     let recipient = Address::generate(&env);
     let token = create_token(&env, &admin);
     let token_admin = token::StellarAssetClient::new(&env, &token);
@@ -3449,17 +3490,6 @@ fn test_claim_throttle_emits_claimthrottled_event() {
     env.mock_all_auths();
     let contract_id = env.register_contract(None, StellarStreamContract);
     let client = StellarStreamContractClient::new(&env, &contract_id);
-    let sender = Address::generate(&env);
-
-    let mut ids = soroban_sdk::Vec::new(&env);
-    for i in 0..21 {
-        ids.push_back(i);
-    }
-    client.cancel_batch(&ids, &sender);
-}
-
-#[test]
-fn test_cancel_batch_empty_returns_empty_result() {
     let admin = Address::generate(&env);
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -3498,11 +3528,6 @@ fn test_claim_allowed_after_interval_elapses() {
     env.mock_all_auths();
     let contract_id = env.register_contract(None, StellarStreamContract);
     let client = StellarStreamContractClient::new(&env, &contract_id);
-    let sender = Address::generate(&env);
-
-    let result = client.cancel_batch(&soroban_sdk::vec![&env], &sender);
-    assert_eq!(result.canceled.len(), 0);
-    assert_eq!(result.failed.len(), 0);
     let admin = Address::generate(&env);
     let sender = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -3527,6 +3552,8 @@ fn test_claim_allowed_after_interval_elapses() {
     env.ledger().with_mut(|l| l.timestamp = 600);
     let claimed = client.claim(&stream_id, &recipient, &100);
     assert_eq!(claimed, 100);
+}
+
 // #695 — DAO governance scaffold
 // =============================================================================
 
