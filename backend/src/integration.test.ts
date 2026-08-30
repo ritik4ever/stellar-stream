@@ -536,6 +536,83 @@ describe("Backend Integration Tests", () => {
           expect(response.body.data.map((stream: any) => stream.id)).toEqual(["3"]);
         });
 
+        it("should apply both asset and q filters with AND logic (not ignore asset when q is present)", async () => {
+          seedStreams();
+
+          // asset=XLM keeps only streams whose assetCode is XLM.
+          // q=bbb matches streams whose sender contains "bbb" (senderB).
+          // AND of both: only XLM streams whose sender is senderB.
+          const response = await request(app)
+            .get("/api/streams")
+            .query({ asset: "XLM", q: "bbb" });
+
+          expect(response.status).toBe(200);
+          // Every result must satisfy BOTH filters
+          expect(response.body.data.length).toBeGreaterThan(0);
+          for (const stream of response.body.data) {
+            expect(stream.assetCode.toLowerCase()).toBe("xlm");
+            expect(stream.sender.toLowerCase()).toContain("bbb");
+          }
+        });
+
+        it("should return only q matches (no asset filter) — q alone regression", async () => {
+          seedStreams();
+
+          // q=bbb alone: should return all streams with sender containing "bbb"
+          // regardless of asset code.
+          const response = await request(app)
+            .get("/api/streams")
+            .query({ q: "bbb" });
+
+          expect(response.status).toBe(200);
+          expect(response.body.data.length).toBeGreaterThan(0);
+          for (const stream of response.body.data) {
+            expect(stream.sender.toLowerCase()).toContain("bbb");
+          }
+        });
+
+        it("should return only asset matches (no q filter) — asset alone regression", async () => {
+          seedStreams();
+
+          const response = await request(app)
+            .get("/api/streams")
+            .query({ asset: "XLM" });
+
+          expect(response.status).toBe(200);
+          expect(response.body.data.length).toBeGreaterThan(0);
+          for (const stream of response.body.data) {
+            expect(stream.assetCode.toLowerCase()).toBe("xlm");
+          }
+        });
+
+        it("should return intersection (AND), not union, when q matches asset-A streams and asset=B is set", async () => {
+          seedStreams();
+
+          // In seedStreams: ids 5,10,15,20,25 have assetCode "uSdC", rest have "XLM".
+          // q="sDc" matches streams whose assetCode contains "sdc" (i.e. the uSdC ones).
+          // asset=XLM keeps only XLM streams.
+          // AND: no stream can be both XLM and matched by "sDc" (which only hits uSdC) → 0 results.
+          // This proves asset is NOT ignored; if it were ignored, q="sDc" alone would return ~5 results.
+          const response = await request(app)
+            .get("/api/streams")
+            .query({ asset: "XLM", q: "sDc" });
+
+          expect(response.status).toBe(200);
+          // q="sDc" would match uSdC streams, but asset=XLM pins to XLM — intersection is empty.
+          expect(response.body.data).toHaveLength(0);
+
+          // Contrast: without the asset filter, q="sDc" returns the uSdC streams.
+          const qOnlyResponse = await request(app)
+            .get("/api/streams")
+            .query({ q: "sDc" });
+
+          expect(qOnlyResponse.status).toBe(200);
+          expect(qOnlyResponse.body.data.length).toBeGreaterThan(0);
+          for (const stream of qOnlyResponse.body.data) {
+            expect(stream.assetCode.toLowerCase()).toBe("usdc");
+          }
+        });
+
         it("should return all matching rows when pagination params are omitted", async () => {
           seedStreams();
 

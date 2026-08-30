@@ -576,12 +576,17 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
   }
   if (query.q && query.q.length > 0) {
     const searchTerm = query.q.toLowerCase();
+    // When an explicit asset filter is active (asset or assetCode), skip the
+    // assetCode arm so that `q` cannot override/nullify the asset constraint.
+    // Both filters combine with AND logic: results must satisfy asset AND q.
+    const assetAlreadyFiltered =
+      !!query.asset || (!!query.assetCode && query.assetCode.length > 0);
     data = data.filter((stream) => {
       return (
         stream.id.toLowerCase().includes(searchTerm) ||
         stream.sender.toLowerCase().includes(searchTerm) ||
         stream.recipient.toLowerCase().includes(searchTerm) ||
-        stream.assetCode.toLowerCase().includes(searchTerm)
+        (!assetAlreadyFiltered && stream.assetCode.toLowerCase().includes(searchTerm))
       );
     });
   }
@@ -883,12 +888,16 @@ app.get(
     }
     if (query.q && query.q.length > 0) {
       const searchTerm = query.q.toLowerCase();
+      // When an explicit asset filter is active, skip the assetCode arm so
+      // that `q` does not nullify the asset constraint (AND logic).
+      const assetAlreadyFiltered =
+        !!query.asset || (!!query.assetCode && query.assetCode.length > 0);
       data = data.filter(
         (stream) =>
           stream.id.toLowerCase().includes(searchTerm) ||
           stream.sender.toLowerCase().includes(searchTerm) ||
           stream.recipient.toLowerCase().includes(searchTerm) ||
-          stream.assetCode.toLowerCase().includes(searchTerm),
+          (!assetAlreadyFiltered && stream.assetCode.toLowerCase().includes(searchTerm)),
       );
     }
     if (query.minAmount !== undefined) {
@@ -967,12 +976,16 @@ app.get(
     }
     if (query.q && query.q.length > 0) {
       const searchTerm = query.q.toLowerCase();
+      // When an explicit asset filter is active, skip the assetCode arm so
+      // that `q` does not nullify the asset constraint (AND logic).
+      const assetAlreadyFiltered =
+        !!query.asset || (!!query.assetCode && query.assetCode.length > 0);
       data = data.filter(
         (stream) =>
           stream.id.toLowerCase().includes(searchTerm) ||
           stream.sender.toLowerCase().includes(searchTerm) ||
           stream.recipient.toLowerCase().includes(searchTerm) ||
-          stream.assetCode.toLowerCase().includes(searchTerm),
+          (!assetAlreadyFiltered && stream.assetCode.toLowerCase().includes(searchTerm)),
       );
     }
     if (query.minAmount !== undefined) {
