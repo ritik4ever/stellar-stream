@@ -6,6 +6,7 @@ import { useClaimStream, ClaimState } from "../hooks/useClaimStream";
 import { useClaimBatch, type BatchClaimInput } from "../hooks/useClaimBatch";
 import { ClaimBatchModal } from "./ClaimBatchModal";
 import { ClaimResult } from "../services/soroban";
+import { VestingBar } from "./VestingBar";
 
 interface RecipientDashboardProps {
   /** Connected wallet address (recipient account). When null, user must connect. */
@@ -458,13 +459,7 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
                         <div className="progress-copy">
                           <strong>{stream.progress.percentComplete}%</strong>
                         </div>
-                        <div className="progress-bar" aria-hidden>
-                          <div
-                            style={{
-                              width: `${Math.min(stream.progress.percentComplete, 100)}%`,
-                            }}
-                          />
-                        </div>
+                        <VestingBar stream={stream} />
                       </td>
                       <td>
                         <ClaimButton
