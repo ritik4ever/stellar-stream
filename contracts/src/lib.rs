@@ -4,7 +4,6 @@ mod errors;
 
 use errors::ContractError;
 pub mod dao;
-mod errors;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
     Map, String, Vec,
@@ -976,6 +975,44 @@ impl StellarStreamContract {
             .unwrap_or_else(|| Vec::new(&env))
     }
 
+    // -----------------------------------------------------------------------
+    // Native XLM stream support (#688)
+    // -----------------------------------------------------------------------
+    //
+    // `NativeToken` is the address of the SAC (Stellar Asset Contract) that
+    // wraps native XLM for this network — the only address a Soroban
+    // contract can present to the standard SEP-41 token interface to move
+    // native balances; there is no lower-level, SAC-free path for a contract
+    // to debit/credit XLM. Before this, that address could only be set once,
+    // at `initialize()`, with no way to view or correct it afterward: a
+    // wrong or stale address (e.g. after a network migration) permanently
+    // broke every native-token stream (`create_stream`/`clawback` both
+    // `panic!("not initialized")` on the missing key) with no recovery short
+    // of redeploying the whole contract. `get_native_token`/`set_native_token`
+    // give admins visibility and a correction path, matching the pattern
+    // already used for `AllowedTokens`.
+
+    /// Returns the configured native-XLM SAC address, if any.
+    pub fn get_native_token(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::NativeToken)
+    }
+
+    /// Sets (or corrects) the native-XLM SAC address. Admin-only.
+    pub fn set_native_token(env: Env, admin: Address, native_token: Address) {
+        let admin_stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("contract not initialized"));
+        if admin_stored != admin {
+            panic!("unauthorized");
+        }
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::NativeToken, &native_token);
+    }
+
     /// Transfers the admin role to a new address.
     /// Only the current admin can call this. Panics if the contract is not initialized.
     pub fn set_admin(env: Env, admin: Address, new_admin: Address) {
@@ -1010,7 +1047,7 @@ fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
         at_time
     };
 
-    if effective_now < stream.start_time.saturating_add(stream.cliff_seconds) {
+    if effective_now < stream.start_time {
         return 0;
     }
 
