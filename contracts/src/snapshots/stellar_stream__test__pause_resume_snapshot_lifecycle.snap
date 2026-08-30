@@ -1,5 +1,6 @@
 ---
 source: src/test.rs
+assertion_line: 1767
 expression: paused_stream
 ---
 Stream {
@@ -11,6 +12,9 @@ Stream {
     start_time: 1000,
     end_time: 2000,
     cliff_seconds: 0,
+    vesting_type: String(linear),
+    min_claim_interval_seconds: 0,
+    last_claim_time: 0,
     canceled: false,
     paused: true,
     pause_started_at: Some(

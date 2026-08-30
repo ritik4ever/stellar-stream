@@ -1,17 +1,30 @@
 #![no_std]
 
-use crate::errors::ContractError;
+mod errors;
+
 use crate::templates::{StreamTemplate, TemplateCreated};
+use errors::ContractError;
+pub mod dao;
+pub mod templates;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
-    Map, String, Symbol, Vec,
+    Map, String, Vec,
 };
 
-pub mod errors;
-pub mod templates;
+// ---------------------------------------------------------------------------
+// Legacy escrow vesting contract
+//
+// Kept as a standalone submodule so its `claim` entry point does not collide
+// with `StellarStreamContract::claim` in the generated contractimpl modules.
+// It is only compiled in test builds: the two contracts both export a `claim`
+// WASM symbol, which would collide in the release cdylib.
+// ---------------------------------------------------------------------------
 
-pub mod escrow_vesting {
+#[cfg(test)]
+pub mod escrow {
     use super::*;
+    use crate::errors::ContractError;
+    use soroban_sdk::Symbol;
 
     #[contract]
     pub struct EscrowVestingContract;
@@ -74,8 +87,6 @@ pub mod escrow_vesting {
     }
 }
 
-pub use escrow_vesting::*;
-
 const NATIVE_SENTINEL: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 const MAX_TEMPLATES_PER_SENDER: u32 = 10;
 
@@ -95,6 +106,10 @@ pub struct Stream {
     pub end_time: u64,
     pub cliff_seconds: u64,
     pub vesting_type: String,
+    /// Minimum seconds that must elapse between two claims (0 = no limit).
+    pub min_claim_interval_seconds: u64,
+    /// Ledger timestamp of the last successful claim (0 if never claimed).
+    pub last_claim_time: u64,
     pub canceled: bool,
     pub paused: bool,
     pub pause_started_at: Option<u64>,
@@ -151,6 +166,7 @@ pub struct StreamCreated {
     pub end_time: u64,
     pub cliff_seconds: u64,
     pub vesting_type: String,
+    pub min_claim_interval_seconds: u64,
     pub metadata: Option<Map<String, String>>,
 }
 
@@ -182,6 +198,21 @@ pub struct StreamCompleted {
     pub timestamp: u64,
     // --- event-specific fields ---
     pub total_amount: i128,
+}
+
+/// Emitted when a claim attempt is rejected because the stream's minimum claim
+/// interval has not elapsed since the last successful claim.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimThrottled {
+    // --- mandatory base fields ---
+    pub stream_id: u64,
+    /// The recipient whose claim attempt was rejected.
+    pub actor: Address,
+    pub timestamp: u64,
+    // --- event-specific fields ---
+    /// Earliest timestamp at which the next claim will be accepted.
+    pub next_allowed_claim_time: u64,
 }
 
 /// Emitted when a sender cancels an active stream before it ends.
@@ -396,10 +427,12 @@ impl StellarStreamContract {
             end_time,
             template.cliff_seconds,
             template.vesting_type,
+            0,
             None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_stream(
         env: Env,
         sender: Address,
@@ -408,7 +441,7 @@ impl StellarStreamContract {
         total_amount: i128,
         start_time: u64,
         end_time: u64,
-        cliff_seconds: u64,
+        min_claim_interval_seconds: u64,
         metadata: Option<Map<String, String>>,
     ) -> u64 {
         create_stream_with_config(
@@ -419,8 +452,9 @@ impl StellarStreamContract {
             total_amount,
             start_time,
             end_time,
-            cliff_seconds,
+            0,
             String::from_str(&env, "linear"),
+            min_claim_interval_seconds,
             metadata,
         )
     }
@@ -494,6 +528,8 @@ impl StellarStreamContract {
                 end_time,
                 cliff_seconds: 0,
                 vesting_type: String::from_str(&env, "linear"),
+                min_claim_interval_seconds: 0,
+                last_claim_time: 0,
                 canceled: false,
                 paused: false,
                 pause_started_at: None,
@@ -523,6 +559,7 @@ impl StellarStreamContract {
                     end_time,
                     cliff_seconds: 0,
                     vesting_type: String::from_str(&env, "linear"),
+                    min_claim_interval_seconds: 0,
                     metadata: None,
                 },
             );
@@ -608,7 +645,18 @@ impl StellarStreamContract {
     // Claim
     // -----------------------------------------------------------------------
 
-    pub fn claim(env: Env, stream_id: u64, recipient: Address, amount: i128) -> i128 {
+    /// Claims vested tokens for the recipient.
+    ///
+    /// Rate limiting: when the stream has a `min_claim_interval_seconds > 0`, a
+    /// claim attempted before the interval has elapsed since the last successful
+    /// claim is rejected with [`ContractError::ClaimTooFrequent`] (a
+    /// `ClaimThrottled` event is emitted before the error is returned).
+    pub fn claim(
+        env: Env,
+        stream_id: u64,
+        recipient: Address,
+        amount: i128,
+    ) -> Result<i128, ContractError> {
         if amount <= 0 {
             panic!("amount must be positive");
         }
@@ -620,6 +668,31 @@ impl StellarStreamContract {
         recipient.require_auth();
 
         let now = env.ledger().timestamp();
+
+        // Rate-limited claims (anti-spam): reject claims that arrive before the
+        // minimum interval has elapsed since the last successful claim.
+        if stream.min_claim_interval_seconds > 0
+            && stream.claimed_amount > 0
+            && now
+                < stream
+                    .last_claim_time
+                    .saturating_add(stream.min_claim_interval_seconds)
+        {
+            let next_allowed_claim_time = stream
+                .last_claim_time
+                .saturating_add(stream.min_claim_interval_seconds);
+            env.events().publish(
+                (symbol_short!("Stream"), symbol_short!("Throttled")),
+                ClaimThrottled {
+                    stream_id,
+                    actor: recipient.clone(),
+                    timestamp: now,
+                    next_allowed_claim_time,
+                },
+            );
+            return Err(ContractError::ClaimTooFrequent);
+        }
+
         let claimable_now = Self::claimable(env.clone(), stream_id, now);
 
         if amount > claimable_now {
@@ -641,11 +714,11 @@ impl StellarStreamContract {
         token_client.transfer(&contract_address, &recipient, &amount);
 
         stream.claimed_amount += amount;
+        stream.last_claim_time = now;
         env.storage()
             .persistent()
             .set(&DataKey::Stream(stream_id), &stream);
 
-        let now = env.ledger().timestamp();
         let new_claimed_total = stream.claimed_amount;
 
         env.events().publish(
@@ -673,7 +746,7 @@ impl StellarStreamContract {
             );
         }
 
-        amount
+        Ok(amount)
     }
 
     pub fn cancel(env: Env, stream_id: u64, sender: Address) {
@@ -947,6 +1020,44 @@ impl StellarStreamContract {
             .unwrap_or_else(|| Vec::new(&env))
     }
 
+    // -----------------------------------------------------------------------
+    // Native XLM stream support (#688)
+    // -----------------------------------------------------------------------
+    //
+    // `NativeToken` is the address of the SAC (Stellar Asset Contract) that
+    // wraps native XLM for this network — the only address a Soroban
+    // contract can present to the standard SEP-41 token interface to move
+    // native balances; there is no lower-level, SAC-free path for a contract
+    // to debit/credit XLM. Before this, that address could only be set once,
+    // at `initialize()`, with no way to view or correct it afterward: a
+    // wrong or stale address (e.g. after a network migration) permanently
+    // broke every native-token stream (`create_stream`/`clawback` both
+    // `panic!("not initialized")` on the missing key) with no recovery short
+    // of redeploying the whole contract. `get_native_token`/`set_native_token`
+    // give admins visibility and a correction path, matching the pattern
+    // already used for `AllowedTokens`.
+
+    /// Returns the configured native-XLM SAC address, if any.
+    pub fn get_native_token(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::NativeToken)
+    }
+
+    /// Sets (or corrects) the native-XLM SAC address. Admin-only.
+    pub fn set_native_token(env: Env, admin: Address, native_token: Address) {
+        let admin_stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("contract not initialized"));
+        if admin_stored != admin {
+            panic!("unauthorized");
+        }
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::NativeToken, &native_token);
+    }
+
     /// Transfers the admin role to a new address.
     /// Only the current admin can call this. Panics if the contract is not initialized.
     pub fn set_admin(env: Env, admin: Address, new_admin: Address) {
@@ -967,6 +1078,7 @@ impl StellarStreamContract {
 // Helpers
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn create_stream_with_config(
     env: &Env,
     sender: Address,
@@ -977,6 +1089,7 @@ fn create_stream_with_config(
     end_time: u64,
     cliff_seconds: u64,
     vesting_type: String,
+    min_claim_interval_seconds: u64,
     metadata: Option<Map<String, String>>,
 ) -> u64 {
     sender.require_auth();
@@ -1039,6 +1152,8 @@ fn create_stream_with_config(
         end_time,
         cliff_seconds,
         vesting_type: vesting_type.clone(),
+        min_claim_interval_seconds,
+        last_claim_time: 0,
         canceled: false,
         paused: false,
         pause_started_at: None,
@@ -1068,6 +1183,7 @@ fn create_stream_with_config(
             end_time,
             cliff_seconds,
             vesting_type,
+            min_claim_interval_seconds,
             metadata,
         },
     );

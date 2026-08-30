@@ -1,5 +1,6 @@
 ---
 source: src/test.rs
+assertion_line: 1789
 expression: post_claim_stream
 ---
 Stream {
@@ -11,6 +12,9 @@ Stream {
     start_time: 1100,
     end_time: 2100,
     cliff_seconds: 0,
+    vesting_type: String(linear),
+    min_claim_interval_seconds: 0,
+    last_claim_time: 1850,
     canceled: false,
     paused: false,
     pause_started_at: None,

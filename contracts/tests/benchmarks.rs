@@ -6,15 +6,15 @@ use soroban_sdk::{
     Address, Env, Vec,
 };
 
-use stellar_stream::{StellarStreamContract, StellarStreamContractClient}; 
 use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
+use stellar_stream::{StellarStreamContract, StellarStreamContractClient};
 
 fn measure_cost<F>(env: &Env, name: &str, mut f: F)
 where
     F: FnMut(),
 {
     env.budget().reset_unlimited();
-    
+
     let cpu_start = env.budget().cpu_instruction_cost();
     let mem_start = env.budget().memory_bytes_cost();
 
@@ -33,7 +33,7 @@ where
 fn run_all_benchmarks() {
     let env = Env::default();
     env.mock_all_auths();
-    env.budget().reset_unlimited(); 
+    env.budget().reset_unlimited();
 
     let contract_id = env.register_contract(None, StellarStreamContract);
     let client = StellarStreamContractClient::new(&env, &contract_id);
@@ -41,8 +41,8 @@ fn run_all_benchmarks() {
     let contract_admin = Address::generate(&env);
     let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
     let token_address = token_contract.address();
-    
-    let _token = TokenClient::new(&env, &token_address); 
+
+    let _token = TokenClient::new(&env, &token_address);
     let token_admin_client = StellarAssetClient::new(&env, &token_address);
 
     let sender = Address::generate(&env);
@@ -52,7 +52,11 @@ fn run_all_benchmarks() {
     let initial_balance = 1_000_000_000_000;
     token_admin_client.mint(&sender, &initial_balance);
 
-    client.initialize(&contract_admin, &token_address, &soroban_sdk::vec![&env, token_address.clone()]);
+    client.initialize(
+        &contract_admin,
+        &token_address,
+        &soroban_sdk::vec![&env, token_address.clone()],
+    );
 
     env.ledger().set_timestamp(100_000);
 

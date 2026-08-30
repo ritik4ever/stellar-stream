@@ -1,5 +1,6 @@
 ---
 source: src/test.rs
+assertion_line: 498
 expression: stream
 ---
 Stream {
@@ -11,6 +12,9 @@ Stream {
     start_time: 0,
     end_time: 700,
     cliff_seconds: 0,
+    vesting_type: String(linear),
+    min_claim_interval_seconds: 0,
+    last_claim_time: 500,
     canceled: true,
     paused: false,
     pause_started_at: None,
