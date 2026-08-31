@@ -690,21 +690,11 @@ app.get(
     }
 
     const query = parsedQuery.data;
-    const cacheKey = `streams:export:${JSON.stringify(query)}`;
     
-    try {
-      const cache = getCache();
-      const cached = await cache.get<string>(cacheKey);
-      if (cached) {
-        res.set("Cache-Control", "max-age=5");
-        res.setHeader("Content-Type", "text/csv");
-        res.setHeader("Content-Disposition", 'attachment; filename="export.csv"');
-        res.send(cached);
-        return;
-      }
-    } catch {
-      // If cache fails, just proceed without caching
-    }
+    // Set headers for CSV download
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="streams-export.csv"');
+    res.setHeader("Cache-Control", "max-age=5");
 
     const now = nowInSeconds();
     let data = listStreams(query.include_archived).map((stream) => ({
@@ -712,8 +702,20 @@ app.get(
       progress: calculateProgress(stream, now),
     }));
 
+    // Apply all filters from the list endpoint
     if (query.status) {
       data = data.filter((stream) => stream.progress.status === query.status);
+    }
+    if (query.recipient) {
+      data = data.filter(
+        (stream) =>
+          stream.recipient.toLowerCase() === query.recipient!.toLowerCase(),
+      );
+    }
+    if (query.sender) {
+      data = data.filter(
+        (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
+      );
     }
     if (query.asset) {
       data = data.filter(
@@ -726,37 +728,77 @@ app.get(
         query.assetCode!.includes(stream.assetCode.toUpperCase()),
       );
     }
-    if (query.sender) {
-      data = data.filter(
-        (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
-      );
+    if (query.q && query.q.length > 0) {
+      const searchTerm = query.q.toLowerCase();
+      data = data.filter((stream) => {
+        return (
+          stream.id.toLowerCase().includes(searchTerm) ||
+          stream.sender.toLowerCase().includes(searchTerm) ||
+          stream.recipient.toLowerCase().includes(searchTerm) ||
+          stream.assetCode.toLowerCase().includes(searchTerm)
+        );
+      });
     }
-    if (query.recipient) {
-      data = data.filter(
-        (stream) =>
-          stream.recipient.toLowerCase() === query.recipient!.toLowerCase(),
-      );
+    if (query.minAmount !== undefined) {
+      data = data.filter((stream) => stream.totalAmount >= query.minAmount!);
     }
-
-    const header = "id,sender,recipient,asset,total,status,startAt\n";
-    const rows = data
-      .map((stream) => {
-        return `${stream.id},${stream.sender},${stream.recipient},${stream.assetCode},${stream.totalAmount},${stream.progress.status},${stream.startAt}`;
-      })
-      .join("\n");
-    const csvContent = header + rows;
-
-    try {
-      const cache = getCache();
-      await cache.set(cacheKey, csvContent, 5);
-    } catch {
-      // If cache fails, just proceed
+    if (query.maxAmount !== undefined) {
+      data = data.filter((stream) => stream.totalAmount <= query.maxAmount!);
     }
 
-    res.set("Cache-Control", "max-age=5");
-    res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", 'attachment; filename="export.csv"');
-    res.send(csvContent);
+    // Helper function to escape CSV fields
+    const escapeCsvField = (value: any): string => {
+      if (value === null || value === undefined) return '';
+      const strValue = String(value);
+      // Escape quotes and wrap in quotes if contains comma, quote, or newline
+      if (strValue.includes(',') || strValue.includes('"') || strValue.includes('\n')) {
+        return `"${strValue.replace(/"/g, '""')}"`;
+      }
+      return strValue;
+    };
+
+    // Define CSV headers as per acceptance criteria
+    const headers = [
+      'id',
+      'sender', 
+      'recipient',
+      'asset',
+      'totalAmount',
+      'vestedAmount',
+      'claimedAmount',
+      'status',
+      'startAt',
+      'durationSeconds',
+      'createdAt'
+    ];
+
+    // Stream the CSV response
+    const writeRow = (row: string[]) => {
+      res.write(row.map(escapeCsvField).join(',') + '\n');
+    };
+
+    // Write header
+    writeRow(headers);
+
+    // Write data rows with streaming for large datasets
+    for (const stream of data) {
+      const row = [
+        stream.id,
+        stream.sender,
+        stream.recipient,
+        stream.assetCode,
+        stream.totalAmount.toString(),
+        stream.progress.vestedAmount.toString(),
+        stream.claimedAmount?.toString() || '0',
+        stream.progress.status,
+        stream.startAt?.toString() || '',
+        stream.durationSeconds?.toString() || '',
+        stream.createdAt?.toString() || ''
+      ];
+      writeRow(row);
+    }
+
+    res.end();
   },
 );
 
