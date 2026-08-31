@@ -1,10 +1,10 @@
 #![no_std]
 
 mod errors;
+pub mod dao;
+pub mod disputes;
 
 use errors::ContractError;
-pub mod dao;
-mod errors;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
     Map, String, Vec,
@@ -856,6 +856,31 @@ impl StellarStreamContract {
                 resumed_at: now,
             },
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Dispute resolution
+    // -----------------------------------------------------------------------
+
+    pub fn file_dispute(
+        env: Env,
+        stream_id: u64,
+        recipient: Address,
+    ) -> Result<(), ContractError> {
+        disputes::file_dispute(env, stream_id, recipient)
+    }
+
+    pub fn resolve_dispute(
+        env: Env,
+        stream_id: u64,
+        admin: Address,
+        resolution: disputes::DisputeResolution,
+    ) -> Result<(), ContractError> {
+        disputes::resolve_dispute(env, stream_id, admin, resolution)
+    }
+
+    pub fn get_dispute(env: Env, stream_id: u64) -> Option<disputes::Dispute> {
+        disputes::get_dispute(env, stream_id)
     }
 
     // -----------------------------------------------------------------------

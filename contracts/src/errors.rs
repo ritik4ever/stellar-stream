@@ -12,4 +12,8 @@ pub enum ContractError {
     EscrowInactive = 3,
     /// Claim rejected because the stream's minimum claim interval has not elapsed.
     ClaimTooFrequent = 4,
+    /// Dispute window (7 days after cancellation) has expired.
+    DisputeWindowExpired = 5,
+    /// A dispute has already been filed for this stream.
+    DisputeAlreadyFiled = 6,
 }
