@@ -1,5 +1,9 @@
 #![no_std]
 
+mod errors;
+
+use errors::ContractError;
+pub mod dao;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
     Map, String, Vec,
@@ -31,31 +35,79 @@ impl EscrowVestingContract {
         let total_vested: i128 = env.storage().instance().get(&Symbol::new(&env, "total_vested")).unwrap_or(0);
         let already_claimed: i128 = env.storage().instance().get(&Symbol::new(&env, "claimed_amount")).unwrap_or(0);
 
-        let claimable_amount = total_vested.checked_sub(already_claimed).unwrap_or(0);
+// ---------------------------------------------------------------------------
+// Legacy escrow vesting contract
+//
+// Kept as a standalone submodule so its `claim` entry point does not collide
+// with `StellarStreamContract::claim` in the generated contractimpl modules.
+// It is only compiled in test builds: the two contracts both export a `claim`
+// WASM symbol, which would collide in the release cdylib.
+// ---------------------------------------------------------------------------
 
-        // 3. Validate claimable amount - revert with InsufficientVested if 0 or negative
-        if claimable_amount <= 0 {
-            return Err(ContractError::InsufficientVested);
+#[cfg(test)]
+pub mod escrow {
+    use super::*;
+    use crate::errors::ContractError;
+    use soroban_sdk::Symbol;
+
+    #[contract]
+    pub struct EscrowVestingContract;
+
+    #[contractimpl]
+    impl EscrowVestingContract {
+        /// Claims available vested tokens for the recipient and transfers real tokens.
+        ///
+        /// # Parameters
+        /// * `env` - The execution environment.
+        /// * `recipient` - The account receiving the vested tokens (must authenticate).
+        /// * `token` - The SEP-41 token contract address.
+        ///
+        /// # Returns
+        /// * `Result<i128, ContractError>` - The actual amount of tokens transferred.
+        pub fn claim(env: Env, recipient: Address, token: Address) -> Result<i128, ContractError> {
+            // 1. Authenticate recipient
+            recipient.require_auth();
+
+            // 2. Calculate vested and already-claimed amounts from storage
+            let total_vested: i128 = env
+                .storage()
+                .instance()
+                .get(&Symbol::new(&env, "total_vested"))
+                .unwrap_or(0);
+            let already_claimed: i128 = env
+                .storage()
+                .instance()
+                .get(&Symbol::new(&env, "claimed_amount"))
+                .unwrap_or(0);
+
+            let claimable_amount = total_vested.checked_sub(already_claimed).unwrap_or(0);
+
+            // 3. Validate claimable amount - revert with InsufficientVested if 0 or negative
+            if claimable_amount <= 0 {
+                return Err(ContractError::InsufficientVested);
+            }
+
+            // 4. Update contract storage accounting
+            let new_claimed_total = already_claimed.checked_add(claimable_amount).unwrap();
+            env.storage()
+                .instance()
+                .set(&Symbol::new(&env, "claimed_amount"), &new_claimed_total);
+
+            // 5. Transfer tokens via Soroban SEP-41 token client
+            let token_client = soroban_sdk::token::Client::new(&env, &token);
+            let contract_address = env.current_contract_address();
+
+            token_client.transfer(&contract_address, &recipient, &claimable_amount);
+
+            // 6. Emit Claimed event
+            env.events().publish(
+                (symbol_short!("Claimed"), recipient.clone()),
+                claimable_amount,
+            );
+
+            // 7. Return actual transferred amount
+            Ok(claimable_amount)
         }
-
-        // 4. Update contract storage accounting
-        let new_claimed_total = already_claimed.checked_add(claimable_amount).unwrap();
-        env.storage().instance().set(&Symbol::new(&env, "claimed_amount"), &new_claimed_total);
-
-        // 5. Transfer tokens via Soroban SEP-41 token client
-        let token_client = soroban_sdk::token::Client::new(&env, &token);
-        let contract_address = env.current_contract_address();
-
-        token_client.transfer(&contract_address, &recipient, &claimable_amount);
-
-        // 6. Emit Claimed event
-        env.events().publish(
-            (symbol_short!("Claimed"), recipient.clone()),
-            claimable_amount,
-        );
-
-        // 7. Return actual transferred amount
-        Ok(claimable_amount)
     }
 }
 
@@ -75,7 +127,10 @@ pub struct Stream {
     pub claimed_amount: i128,
     pub start_time: u64,
     pub end_time: u64,
-    pub cliff_seconds: u64,
+    /// Minimum seconds that must elapse between two claims (0 = no limit).
+    pub min_claim_interval_seconds: u64,
+    /// Ledger timestamp of the last successful claim (0 if never claimed).
+    pub last_claim_time: u64,
     pub canceled: bool,
     pub paused: bool,
     pub pause_started_at: Option<u64>,
@@ -127,7 +182,7 @@ pub struct StreamCreated {
     pub total_amount: i128,
     pub start_time: u64,
     pub end_time: u64,
-    pub cliff_seconds: u64,
+    pub min_claim_interval_seconds: u64,
     pub metadata: Option<Map<String, String>>,
 }
 
@@ -159,6 +214,21 @@ pub struct StreamCompleted {
     pub timestamp: u64,
     // --- event-specific fields ---
     pub total_amount: i128,
+}
+
+/// Emitted when a claim attempt is rejected because the stream's minimum claim
+/// interval has not elapsed since the last successful claim.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimThrottled {
+    // --- mandatory base fields ---
+    pub stream_id: u64,
+    /// The recipient whose claim attempt was rejected.
+    pub actor: Address,
+    pub timestamp: u64,
+    // --- event-specific fields ---
+    /// Earliest timestamp at which the next claim will be accepted.
+    pub next_allowed_claim_time: u64,
 }
 
 /// Emitted when a sender cancels an active stream before it ends.
@@ -258,6 +328,7 @@ impl StellarStreamContract {
     // Stream creation
     // -----------------------------------------------------------------------
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_stream(
         env: Env,
         sender: Address,
@@ -266,7 +337,7 @@ impl StellarStreamContract {
         total_amount: i128,
         start_time: u64,
         end_time: u64,
-        cliff_seconds: u64,
+        min_claim_interval_seconds: u64,
         metadata: Option<Map<String, String>>,
     ) -> u64 {
         sender.require_auth();
@@ -280,19 +351,27 @@ impl StellarStreamContract {
 
         let is_native = token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
         if !is_native {
-            let allowed_tokens: Vec<Address> = env.storage().instance().get(&DataKey::AllowedTokens).unwrap_or_else(|| Vec::new(&env));
+            let allowed_tokens: Vec<Address> = env
+                .storage()
+                .instance()
+                .get(&DataKey::AllowedTokens)
+                .unwrap_or_else(|| Vec::new(&env));
+            #[cfg(not(test))]
             #[cfg(not(any(test, feature = "testutils")))]
             if !allowed_tokens.contains(&token) {
                 panic!("ContractError::TokenNotAllowed");
             }
-            #[cfg(any(test, feature = "testutils"))]
+            #[cfg(test)]
             if !allowed_tokens.is_empty() && !allowed_tokens.contains(&token) {
                 panic!("ContractError::TokenNotAllowed");
             }
         }
-        
+
         let actual_token = if is_native {
-            env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+            env.storage()
+                .instance()
+                .get(&DataKey::NativeToken)
+                .unwrap_or_else(|| panic!("not initialized"))
         } else {
             token.clone()
         };
@@ -320,7 +399,8 @@ impl StellarStreamContract {
             claimed_amount: 0,
             start_time,
             end_time,
-            cliff_seconds,
+            min_claim_interval_seconds,
+            last_claim_time: 0,
             canceled: false,
             paused: false,
             pause_started_at: None,
@@ -354,7 +434,7 @@ impl StellarStreamContract {
                 total_amount,
                 start_time,
                 end_time,
-                cliff_seconds,
+                min_claim_interval_seconds,
                 metadata,
             },
         );
@@ -384,7 +464,10 @@ impl StellarStreamContract {
 
         let is_native = token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
         let actual_token = if is_native {
-            env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+            env.storage()
+                .instance()
+                .get(&DataKey::NativeToken)
+                .unwrap_or_else(|| panic!("not initialized"))
         } else {
             token.clone()
         };
@@ -406,11 +489,11 @@ impl StellarStreamContract {
 
         let mut allocated_total = 0_i128;
         let mut child_ids = Vec::<u64>::new(&env);
-        
+
         for recipient_allocation in recipients.iter() {
             let recipient = recipient_allocation.0.clone();
             let allocation = recipient_allocation.1;
-            
+
             if allocation <= 0 {
                 panic!("allocation must be positive");
             }
@@ -426,13 +509,14 @@ impl StellarStreamContract {
                 claimed_amount: 0,
                 start_time,
                 end_time,
-                cliff_seconds: 0,
+                min_claim_interval_seconds: 0,
+                last_claim_time: 0,
                 canceled: false,
                 paused: false,
                 pause_started_at: None,
                 metadata: None,
             };
-            
+
             env.storage()
                 .persistent()
                 .set(&DataKey::Stream(child_stream_id), &child_stream);
@@ -454,7 +538,7 @@ impl StellarStreamContract {
                     total_amount: allocation,
                     start_time,
                     end_time,
-                    cliff_seconds: 0,
+                    min_claim_interval_seconds: 0,
                     metadata: None,
                 },
             );
@@ -470,7 +554,7 @@ impl StellarStreamContract {
         env.storage()
             .persistent()
             .set(&DataKey::NextStreamId, &next_id);
-            
+
         parent_stream_id
     }
 
@@ -504,7 +588,11 @@ impl StellarStreamContract {
         let stream = read_stream(&env, stream_id);
         let vested = vested_amount(&stream, at_time);
         let claimable = vested - stream.claimed_amount;
-        if claimable < 0 { 0 } else { claimable }
+        if claimable < 0 {
+            0
+        } else {
+            claimable
+        }
     }
 
     pub fn get_claimable_batch(env: Env, stream_ids: Vec<u64>, at_time: u64) -> Map<u64, i128> {
@@ -513,7 +601,8 @@ impl StellarStreamContract {
         }
         let mut result = Map::new(&env);
         for stream_id in stream_ids.iter() {
-            let stream_opt: Option<Stream> = env.storage().persistent().get(&DataKey::Stream(stream_id));
+            let stream_opt: Option<Stream> =
+                env.storage().persistent().get(&DataKey::Stream(stream_id));
             let amount = match stream_opt {
                 Some(stream) => {
                     let vested = vested_amount(&stream, at_time);
@@ -535,7 +624,18 @@ impl StellarStreamContract {
     // Claim
     // -----------------------------------------------------------------------
 
-    pub fn claim(env: Env, stream_id: u64, recipient: Address, amount: i128) -> i128 {
+    /// Claims vested tokens for the recipient.
+    ///
+    /// Rate limiting: when the stream has a `min_claim_interval_seconds > 0`, a
+    /// claim attempted before the interval has elapsed since the last successful
+    /// claim is rejected with [`ContractError::ClaimTooFrequent`] (a
+    /// `ClaimThrottled` event is emitted before the error is returned).
+    pub fn claim(
+        env: Env,
+        stream_id: u64,
+        recipient: Address,
+        amount: i128,
+    ) -> Result<i128, ContractError> {
         if amount <= 0 {
             panic!("amount must be positive");
         }
@@ -547,6 +647,31 @@ impl StellarStreamContract {
         recipient.require_auth();
 
         let now = env.ledger().timestamp();
+
+        // Rate-limited claims (anti-spam): reject claims that arrive before the
+        // minimum interval has elapsed since the last successful claim.
+        if stream.min_claim_interval_seconds > 0
+            && stream.claimed_amount > 0
+            && now
+                < stream
+                    .last_claim_time
+                    .saturating_add(stream.min_claim_interval_seconds)
+        {
+            let next_allowed_claim_time = stream
+                .last_claim_time
+                .saturating_add(stream.min_claim_interval_seconds);
+            env.events().publish(
+                (symbol_short!("Stream"), symbol_short!("Throttled")),
+                ClaimThrottled {
+                    stream_id,
+                    actor: recipient.clone(),
+                    timestamp: now,
+                    next_allowed_claim_time,
+                },
+            );
+            return Err(ContractError::ClaimTooFrequent);
+        }
+
         let claimable_now = Self::claimable(env.clone(), stream_id, now);
 
         if amount > claimable_now {
@@ -555,21 +680,24 @@ impl StellarStreamContract {
 
         let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
         let actual_token = if is_native {
-            env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+            env.storage()
+                .instance()
+                .get(&DataKey::NativeToken)
+                .unwrap_or_else(|| panic!("not initialized"))
         } else {
             stream.token.clone()
         };
         let token_client = TokenClient::new(&env, &actual_token);
         let contract_address = env.current_contract_address();
-        
+
         token_client.transfer(&contract_address, &recipient, &amount);
 
         stream.claimed_amount += amount;
+        stream.last_claim_time = now;
         env.storage()
             .persistent()
             .set(&DataKey::Stream(stream_id), &stream);
 
-        let now = env.ledger().timestamp();
         let new_claimed_total = stream.claimed_amount;
 
         // Record vested amount in analytics
@@ -607,7 +735,7 @@ impl StellarStreamContract {
             );
         }
 
-        amount
+        Ok(amount)
     }
 
     pub fn cancel(env: Env, stream_id: u64, sender: Address) {
@@ -627,7 +755,11 @@ impl StellarStreamContract {
         let vested = vested_amount(&stream, now);
         let sender_refund = stream.total_amount - vested;
 
-        let min_end = if now > stream.start_time { now } else { stream.start_time };
+        let min_end = if now > stream.start_time {
+            now
+        } else {
+            stream.start_time
+        };
         if min_end < stream.end_time {
             stream.end_time = min_end;
             stream.total_amount = vested;
@@ -636,13 +768,16 @@ impl StellarStreamContract {
         if sender_refund > 0 {
             let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
             let actual_token = if is_native {
-                env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+                env.storage()
+                    .instance()
+                    .get(&DataKey::NativeToken)
+                    .unwrap_or_else(|| panic!("not initialized"))
             } else {
                 stream.token.clone()
             };
             let token_client = TokenClient::new(&env, &actual_token);
             let contract_address = env.current_contract_address();
-            
+
             token_client.transfer(&contract_address, &sender, &sender_refund);
         }
 
@@ -704,7 +839,7 @@ impl StellarStreamContract {
         let now = env.ledger().timestamp();
         stream.paused = true;
         stream.pause_started_at = Some(now);
-        
+
         env.storage()
             .persistent()
             .set(&DataKey::Stream(stream_id), &stream);
@@ -736,7 +871,7 @@ impl StellarStreamContract {
             .unwrap_or_else(|| panic!("pause timestamp missing"));
         let now = env.ledger().timestamp();
         let paused_duration = now.saturating_sub(pause_started_at);
-        
+
         stream.start_time = stream.start_time.saturating_add(paused_duration);
         stream.end_time = stream.end_time.saturating_add(paused_duration);
         stream.paused = false;
@@ -791,7 +926,10 @@ impl StellarStreamContract {
         if actual_clawback > 0 {
             let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
             let actual_token = if is_native {
-                env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+                env.storage()
+                    .instance()
+                    .get(&DataKey::NativeToken)
+                    .unwrap_or_else(|| panic!("not initialized"))
             } else {
                 stream.token.clone()
             };
@@ -820,24 +958,48 @@ impl StellarStreamContract {
     }
 
     pub fn add_allowed_token(env: Env, admin: Address, token: Address) {
-        let admin_stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap_or_else(|| panic!("contract not initialized"));
-        if admin_stored != admin { panic!("unauthorized"); }
+        let admin_stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("contract not initialized"));
+        if admin_stored != admin {
+            panic!("unauthorized");
+        }
         admin.require_auth();
-        let mut allowed: Vec<Address> = env.storage().instance().get(&DataKey::AllowedTokens).unwrap_or_else(|| Vec::new(&env));
+        let mut allowed: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or_else(|| Vec::new(&env));
         if !allowed.contains(&token) {
             allowed.push_back(token);
-            env.storage().instance().set(&DataKey::AllowedTokens, &allowed);
+            env.storage()
+                .instance()
+                .set(&DataKey::AllowedTokens, &allowed);
         }
     }
 
     pub fn remove_allowed_token(env: Env, admin: Address, token: Address) {
-        let admin_stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap_or_else(|| panic!("contract not initialized"));
-        if admin_stored != admin { panic!("unauthorized"); }
+        let admin_stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("contract not initialized"));
+        if admin_stored != admin {
+            panic!("unauthorized");
+        }
         admin.require_auth();
-        let mut allowed: Vec<Address> = env.storage().instance().get(&DataKey::AllowedTokens).unwrap_or_else(|| Vec::new(&env));
+        let mut allowed: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or_else(|| Vec::new(&env));
         if let Some(i) = allowed.first_index_of(&token) {
             allowed.remove(i);
-            env.storage().instance().set(&DataKey::AllowedTokens, &allowed);
+            env.storage()
+                .instance()
+                .set(&DataKey::AllowedTokens, &allowed);
         }
     }
 
@@ -901,10 +1063,9 @@ fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
         at_time
     };
 
-    if effective_now < stream.start_time.saturating_add(stream.cliff_seconds) {
+    if effective_now < stream.start_time {
         return 0;
     }
-
 
     let effective_time = if effective_now >= stream.end_time {
         stream.end_time

@@ -100,6 +100,25 @@ Additional fields are event-specific and documented in each section below.
 
 ---
 
+### ClaimThrottled *(new — emitted by `claim`, #681)*
+
+**Topic:** `("Stream", "Throttled")`  
+**Triggered by:** `claim()` — emitted when a claim is rejected because the
+stream's `min_claim_interval_seconds` has not elapsed since the last claim.
+The claim reverts with `ClaimTooFrequent`.  
+**Actor:** The recipient whose claim attempt was rejected.
+
+| Field                     | Type      | Description                                                  |
+|---------------------------|-----------|--------------------------------------------------------------|
+| `stream_id`               | `u64`     | Stream identifier.                                           |
+| `actor`                   | `Address` | Recipient whose claim was rejected.                          |
+| `timestamp`               | `u64`     | Ledger close time of the rejected attempt.                   |
+| `next_allowed_claim_time` | `u64`     | Earliest timestamp at which the next claim will be accepted. |
+
+**Indexer mapping:** no DB row (failed transactions are not indexed).
+
+---
+
 ### StreamCanceled
 
 **Topic:** `("Stream", "Canceled")`  
@@ -187,6 +206,45 @@ Additional fields are event-specific and documented in each section below.
 | `recipient` | `Address` | Admin account that received the clawed-back tokens.           |
 
 **Indexer mapping:** event type `"clawback"`, amount = `amount`, metadata includes `recipient`.
+
+---
+
+### ProposalCreated *(new — DAO governance, #695)*
+
+**Topic:** `("Proposal", "Created")`  
+**Triggered by:** `create_proposal()`
+
+| Field         | Type             | Description                                         |
+|---------------|------------------|-----------------------------------------------------|
+| `proposal_id` | `u64`            | Unique proposal identifier.                         |
+| `proposer`    | `Address`        | Account that created the proposal.                  |
+| `target`      | `ProposalTarget` | What the proposal changes when executed.            |
+| `voting_end`  | `u64`            | Ledger timestamp when voting closes (created + 7d). |
+| `timestamp`   | `u64`            | Ledger close time when the proposal was created.    |
+
+### VoteCast *(new — DAO governance, #695)*
+
+**Topic:** `("Proposal", "Vote")`  
+**Triggered by:** `vote()`
+
+| Field         | Type      | Description                                    |
+|---------------|-----------|------------------------------------------------|
+| `proposal_id` | `u64`     | Proposal being voted on.                       |
+| `voter`       | `Address` | Account that voted.                            |
+| `support`     | `bool`    | `true` = for, `false` = against.               |
+| `weight`      | `i128`    | Voter's governance token balance at vote time. |
+| `timestamp`   | `u64`     | Ledger close time of the vote.                 |
+
+### ProposalExecuted *(new — DAO governance, #695)*
+
+**Topic:** `("Proposal", "Executed")`  
+**Triggered by:** `execute()` (only when the proposal passes)
+
+| Field         | Type             | Description                  |
+|---------------|------------------|------------------------------|
+| `proposal_id` | `u64`            | Executed proposal.           |
+| `target`      | `ProposalTarget` | The change that was applied. |
+| `timestamp`   | `u64`            | Ledger close time of the execution. |
 
 ---
 
