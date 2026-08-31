@@ -1,0 +1,262 @@
+/* ── Settings page ─────────────────────────────────────────────────────── */
+
+.settings-page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.settings-title {
+  margin: 0 0 1rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #111827;
+}
+
+.settings-section {
+  margin-bottom: 1.25rem;
+}
+
+.settings-section__title {
+  margin: 0 0 0.25rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+.settings-section__desc {
+  margin: 0 0 1rem;
+  font-size: 0.88rem;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+/* ── Channel status cards ────────────────────────────────────────────── */
+
+.channel-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.75rem;
+}
+
+.channel-status-card {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.75rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+
+.channel-status-card__header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.channel-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.channel-dot--active {
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.25);
+}
+
+.channel-dot--inactive {
+  background: #d1d5db;
+}
+
+/* ── Preferences table ───────────────────────────────────────────────── */
+
+.pref-table-wrap {
+  overflow-x: auto;
+}
+
+.pref-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.pref-table th {
+  text-align: left;
+  padding: 0.65rem 0.5rem;
+  border-bottom: 2px solid #e5e7eb;
+  font-weight: 600;
+  color: #374151;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.pref-table td {
+  padding: 0.6rem 0.5rem;
+  border-bottom: 1px solid #f3f4f6;
+  vertical-align: middle;
+}
+
+.pref-table__event-col {
+  min-width: 160px;
+}
+
+.pref-table__channel-col {
+  text-align: center;
+  min-width: 100px;
+}
+
+.pref-table__preview-col {
+  text-align: center;
+  min-width: 130px;
+}
+
+.pref-table__event-label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.pref-event-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: #f3f4f6;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.pref-table__toggle-cell {
+  text-align: center;
+}
+
+.pref-table__preview-cell {
+  text-align: center;
+}
+
+/* ── Toggle switch ────────────────────────────────────────────────────── */
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  cursor: pointer;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.toggle-switch__slider {
+  position: absolute;
+  inset: 0;
+  background: #d1d5db;
+  border-radius: 999px;
+  transition: background 0.2s;
+}
+
+.toggle-switch__slider::before {
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  left: 3px;
+  bottom: 3px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.toggle-switch input:checked + .toggle-switch__slider {
+  background: #0ea5a5;
+}
+
+.toggle-switch input:checked + .toggle-switch__slider::before {
+  transform: translateX(18px);
+}
+
+.toggle-switch input:focus-visible + .toggle-switch__slider {
+  box-shadow: 0 0 0 3px rgba(14, 165, 165, 0.25);
+}
+
+.toggle-switch input:disabled + .toggle-switch__slider {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Preview buttons ──────────────────────────────────────────────────── */
+
+.preview-btn-group {
+  display: flex;
+  gap: 0.3rem;
+  justify-content: center;
+}
+
+.btn-preview {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  min-height: 0;
+}
+
+.btn-preview:hover:not(:disabled) {
+  background: #e0f2fe;
+  border-color: #bae6fd;
+}
+
+/* ── Dark mode overrides for settings ─────────────────────────────────── */
+
+.dark .settings-title {
+  color: var(--color-text);
+}
+
+.dark .settings-section__title {
+  color: var(--color-text);
+}
+
+.dark .settings-section__desc {
+  color: var(--color-text-muted);
+}
+
+.dark .channel-status-card {
+  background: var(--bg-muted);
+  border-color: var(--border);
+}
+
+.dark .pref-table th {
+  border-bottom-color: var(--border);
+  color: var(--color-text-label);
+}
+
+.dark .pref-table td {
+  border-bottom-color: var(--border);
+}
+
+.dark .pref-event-icon {
+  background: var(--bg-muted);
+}
+
+.dark .toggle-switch__slider {
+  background: #4b5563;
+}
+
+.dark .btn-preview:hover:not(:disabled) {
+  background: #1e3a5f;
+  border-color: #2563eb;
+}
