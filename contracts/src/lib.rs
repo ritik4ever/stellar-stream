@@ -108,6 +108,7 @@ pub struct Stream {
     pub canceled: bool,
     pub paused: bool,
     pub pause_started_at: Option<u64>,
+    pub expired: bool,
 
     pub metadata: Option<Map<String, String>>,
 }
@@ -125,6 +126,7 @@ pub enum DataKey {
     ChildToParent(u64),
     NativeToken,
     AllowedTokens,
+    GracePeriod,
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +278,15 @@ pub struct StreamTransferred {
     pub new_recipient: Address,
 }
 
+/// Emitted when a stream reaches its grace period without being fully claimed
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamExpired {
+    pub stream_id: u64,
+    pub actor: Address,
+    pub timestamp: u64,
+}
+
 #[contract]
 pub struct StellarStreamContract;
 
@@ -385,6 +396,7 @@ impl StellarStreamContract {
             canceled: false,
             paused: false,
             pause_started_at: None,
+            expired: false,
 
             metadata: metadata.clone(),
         };
@@ -490,6 +502,7 @@ impl StellarStreamContract {
                 canceled: false,
                 paused: false,
                 pause_started_at: None,
+                expired: false,
                 metadata: None,
             };
 
@@ -542,7 +555,7 @@ impl StellarStreamContract {
     }
 
     pub fn get_stream(env: Env, stream_id: u64) -> Stream {
-        read_stream(&env, stream_id)
+        check_and_expire(&env, stream_id, &env.current_contract_address())
     }
 
     pub fn get_next_stream_id(env: Env) -> u64 {
@@ -561,7 +574,10 @@ impl StellarStreamContract {
     }
 
     pub fn claimable(env: Env, stream_id: u64, at_time: u64) -> i128 {
-        let stream = read_stream(&env, stream_id);
+        let stream = check_and_expire(&env, stream_id, &env.current_contract_address());
+        if stream.expired {
+            return 0;
+        }
         let vested = vested_amount(&stream, at_time);
         let claimable = vested - stream.claimed_amount;
         if claimable < 0 {
@@ -580,13 +596,18 @@ impl StellarStreamContract {
             let stream_opt: Option<Stream> =
                 env.storage().persistent().get(&DataKey::Stream(stream_id));
             let amount = match stream_opt {
-                Some(stream) => {
-                    let vested = vested_amount(&stream, at_time);
-                    let claimable = vested - stream.claimed_amount;
-                    if claimable < 0 {
+                Some(_) => {
+                    let stream = check_and_expire(&env, stream_id, &env.current_contract_address());
+                    if stream.expired {
                         0
                     } else {
-                        claimable
+                        let vested = vested_amount(&stream, at_time);
+                        let claimable = vested - stream.claimed_amount;
+                        if claimable < 0 {
+                            0
+                        } else {
+                            claimable
+                        }
                     }
                 }
                 None => 0,
@@ -616,11 +637,14 @@ impl StellarStreamContract {
             panic!("amount must be positive");
         }
 
-        let mut stream = read_stream(&env, stream_id);
+        let mut stream = check_and_expire(&env, stream_id, &recipient);
         if stream.recipient != recipient {
             panic!("recipient mismatch");
         }
         recipient.require_auth();
+        if stream.expired {
+            panic!("stream expired");
+        }
 
         let now = env.ledger().timestamp();
 
@@ -1027,6 +1051,56 @@ impl StellarStreamContract {
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &new_admin);
     }
+
+    pub fn set_grace_period(env: Env, admin: Address, grace_period: u64) {
+        let admin_stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap_or_else(|| panic!("contract not initialized"));
+        if admin_stored != admin { panic!("unauthorized"); }
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::GracePeriod, &grace_period);
+    }
+
+    pub fn get_grace_period(env: Env) -> u64 {
+        env.storage().instance().get(&DataKey::GracePeriod).unwrap_or(2592000)
+    }
+
+    pub fn reclaim_expired(env: Env, stream_id: u64, sender: Address) -> i128 {
+        let mut stream = check_and_expire(&env, stream_id, &sender);
+        if stream.sender != sender {
+            panic!("sender mismatch");
+        }
+        sender.require_auth();
+
+        if !stream.expired {
+            panic!("stream not expired");
+        }
+
+        let now = env.ledger().timestamp();
+        let vested = vested_amount(&stream, now);
+        let unclaimed = vested - stream.claimed_amount;
+
+        if unclaimed <= 0 {
+            panic!("no unclaimed balance");
+        }
+
+        let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
+        let actual_token = if is_native {
+            env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+        } else {
+            stream.token.clone()
+        };
+        let token_client = TokenClient::new(&env, &actual_token);
+        let contract_address = env.current_contract_address();
+        
+        token_client.transfer(&contract_address, &sender, &unclaimed);
+
+        stream.claimed_amount += unclaimed;
+        
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(stream_id), &stream);
+
+        unclaimed
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1038,6 +1112,28 @@ fn read_stream(env: &Env, stream_id: u64) -> Stream {
         .persistent()
         .get(&DataKey::Stream(stream_id))
         .unwrap_or_else(|| panic!("stream not found"))
+}
+
+fn check_and_expire(env: &Env, stream_id: u64, actor: &Address) -> Stream {
+    let mut stream = read_stream(env, stream_id);
+    if stream.expired {
+        return stream;
+    }
+    let grace_period: u64 = env.storage().instance().get(&DataKey::GracePeriod).unwrap_or(2592000); // 30 days
+    let now = env.ledger().timestamp();
+    if now > stream.end_time.saturating_add(grace_period) {
+        stream.expired = true;
+        env.events().publish(
+            (symbol_short!("Stream"), symbol_short!("Expired")),
+            StreamExpired {
+                stream_id,
+                actor: actor.clone(),
+                timestamp: now,
+            },
+        );
+        env.storage().persistent().set(&DataKey::Stream(stream_id), &stream);
+    }
+    stream
 }
 
 fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
