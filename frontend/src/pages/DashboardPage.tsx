@@ -43,6 +43,7 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
     stream: Stream;
     triggerRef: RefObject<HTMLButtonElement | null>;
   } | null>(null);
+  const [cloneData, setCloneData] = useState<Partial<FormValues> | null>(null);
   const [loadingDashboard, setLoadingDashboard] = useState(true);
   const [initialLoading, setInitialLoading] = useState(true);
   const [totalUnfilteredCount, setTotalUnfilteredCount] = useState<number>(0);
@@ -283,6 +284,19 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
     }
   }
 
+  function handleClone(stream: Stream) {
+    setCloneData({
+      assetCode: stream.assetCode,
+      totalAmount: stream.totalAmount.toString(),
+      durationMinutes: Math.floor(stream.durationSeconds / 60).toString(),
+      cliffDays: stream.cliffSeconds ? (stream.cliffSeconds / 86400).toString() : "0",
+      startInMinutes: "0",
+      recipient: "", // Leave recipient empty as requested
+    });
+    setDetailStreamId(null);
+    scrollToCreateStream();
+  }
+
   if (initialLoading) {
     return <div className="app-shell">Loading dashboard…</div>;
   }
@@ -323,6 +337,7 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
             onCreate={handleCreate}
             apiError={formError}
             walletAddress={wallet.address}
+            initialData={cloneData || undefined}
           />
         </div>
         <StreamsTable
@@ -376,6 +391,7 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
           onResume={handleResume}
           signAction={wallet.signAction}
           walletAddress={wallet.address}
+          onClone={handleClone}
         />
       )}
     </>
