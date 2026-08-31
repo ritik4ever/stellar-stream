@@ -7,10 +7,10 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-soroban-sdk = "21.0.0"
+soroban-sdk = "27.0.6"
 
 [dev-dependencies]
-soroban-sdk = { version = "21.0.0", features = ["testutils"] }
+soroban-sdk = { version = "27.0.6", features = ["testutils"] }
 insta = { version = "1.34.0", features = ["yaml"] }
 
 # `testutils` is a soroban-sdk feature, not a feature of this crate; declare it
