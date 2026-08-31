@@ -125,6 +125,8 @@ pub enum DataKey {
     ChildToParent(u64),
     NativeToken,
     AllowedTokens,
+    /// Flag (bool) recording that the stream's cliff has already been reported.
+    CliffReached(u64),
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +160,20 @@ pub struct StreamCreated {
     pub end_time: u64,
     pub min_claim_interval_seconds: u64,
     pub metadata: Option<Map<String, String>>,
+}
+
+/// Emitted the first time the ledger time crosses a stream's cliff (`start_time + cliff_seconds`).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CliffReached {
+    // --- mandatory base fields ---
+    pub stream_id: u64,
+    /// The recipient whose claim observed the cliff passing.
+    pub actor: Address,
+    pub timestamp: u64,
+    // --- event-specific fields ---
+    /// The cliff timestamp (`start_time + cliff_seconds`) that was crossed.
+    pub cliff_time: u64,
 }
 
 /// Emitted each time a recipient successfully claims vested tokens.
@@ -328,6 +344,9 @@ impl StellarStreamContract {
         }
         if end_time <= start_time {
             panic!("end_time must be greater than start_time");
+        }
+        if cliff_seconds >= end_time.saturating_sub(start_time) {
+            panic!("cliff_seconds must be less than stream duration");
         }
 
         let is_native = token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
@@ -654,6 +673,8 @@ impl StellarStreamContract {
             panic!("amount exceeds claimable");
         }
 
+        maybe_emit_cliff_reached(&env, stream_id, &stream, &recipient, now);
+
         let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
         let actual_token = if is_native {
             env.storage()
@@ -717,6 +738,8 @@ impl StellarStreamContract {
 
         let now = env.ledger().timestamp();
         stream.canceled = true;
+
+        maybe_emit_cliff_reached(&env, stream_id, &stream, &sender, now);
 
         let vested = vested_amount(&stream, now);
         let sender_refund = stream.total_amount - vested;
@@ -1065,6 +1088,40 @@ fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
     }
 
     stream.total_amount * (elapsed as i128) / (total_duration as i128)
+}
+
+/// Emits a one-time `CliffReached` event when the ledger time has passed the
+/// stream's cliff and it has not been reported yet. Emitting is recorded under
+/// `DataKey::CliffReached(stream_id)` so the event fires at most once.
+fn maybe_emit_cliff_reached(env: &Env, stream_id: u64, stream: &Stream, actor: &Address, now: u64) {
+    if stream.cliff_seconds == 0 {
+        return;
+    }
+    let cliff_time = stream.start_time.saturating_add(stream.cliff_seconds);
+    if now < cliff_time {
+        return;
+    }
+    let reported: bool = env
+        .storage()
+        .persistent()
+        .get(&DataKey::CliffReached(stream_id))
+        .unwrap_or(false);
+    if reported {
+        return;
+    }
+
+    env.storage()
+        .persistent()
+        .set(&DataKey::CliffReached(stream_id), &true);
+    env.events().publish(
+        (symbol_short!("Stream"), symbol_short!("Cliff")),
+        CliffReached {
+            stream_id,
+            actor: actor.clone(),
+            timestamp: now,
+            cliff_time,
+        },
+    );
 }
 
 #[cfg(test)]

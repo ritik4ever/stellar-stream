@@ -349,14 +349,11 @@ export function SenderDashboard({
             ⚠️
           </span>
           <h3>Dashboard Load Failed</h3>
-          <p className="muted">{error}</p>
-        </div>
-      </div>
-    );
-  }
+          <p className="muted">{error}</p>      </div>
+    </div>
+  );
 
-
-    return (
+  return (
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Sender Dashboard</h2>
         <div className="activity-empty">

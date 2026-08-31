@@ -3315,6 +3315,12 @@ fn test_set_admin_chain_transfer() {
 }
 
 // =============================================================================
+// #676 — Cliff period: no vesting before the cliff
+// =============================================================================
+
+#[test]
+#[should_panic(expected = "cliff_seconds must be less than stream duration")]
+fn test_create_stream_cliff_equal_to_duration_panics() {
 // #681 — Rate-limited claims (anti-spam)
 // =============================================================================
 
@@ -3331,6 +3337,13 @@ fn test_claim_throttled_three_rapid_claims_only_first_succeeds() {
     let token = create_token(&env, &admin);
     let token_admin = token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&sender, &1000);
+    // cliff == duration (1000) is invalid
+    client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &1000, &None);
+}
+
+#[test]
+#[should_panic(expected = "cliff_seconds must be less than stream duration")]
+fn test_create_stream_cliff_longer_than_duration_panics() {
 
     // Max 1 claim per 100 seconds
     let stream_id =
@@ -3367,6 +3380,14 @@ fn test_claim_no_throttle_when_interval_zero() {
     let token = create_token(&env, &admin);
     let token_admin = token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&sender, &1000);
+    // cliff > duration is invalid
+    client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &1500, &None);
+}
+
+/// Acceptance test: 12-month stream with a 3-month cliff.
+/// Nothing vests before the cliff; after the cliff, linear vesting resumes.
+#[test]
+fn test_twelve_month_stream_three_month_cliff() {
 
     let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
 
@@ -3389,6 +3410,35 @@ fn test_claim_throttle_emits_claimthrottled_event() {
     let recipient = Address::generate(&env);
     let token = create_token(&env, &admin);
     let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &12_000);
+
+    // 12 months ≈ 31,104,000 s; 3 months ≈ 7,776,000 s
+    let month: u64 = 2_592_000;
+    let duration = 12 * month;
+    let cliff = 3 * month;
+    let stream_id = client.create_stream(
+        &sender, &recipient, &token, &12_000, &0, &duration, &cliff, &None,
+    );
+
+    // Claimable is 0 before the cliff
+    assert_eq!(client.claimable(&stream_id, &(cliff - 1)), 0);
+    // Exactly at the cliff: 3/12 = 25% vested
+    assert_eq!(client.claimable(&stream_id, &cliff), 3000);
+    // Halfway through (6 months): 50% vested
+    assert_eq!(client.claimable(&stream_id, &(6 * month)), 6000);
+    // At the end: fully vested
+    assert_eq!(client.claimable(&stream_id, &duration), 12_000);
+    assert_eq!(client.claimable(&stream_id, &(duration + 1000)), 12_000);
+
+    // Claiming is only possible after the cliff
+    env.ledger().with_mut(|l| l.timestamp = cliff);
+    let claimed = client.claim(&stream_id, &recipient, &3000);
+    assert_eq!(claimed, 3000);
+}
+
+/// The CliffReached event fires once when the ledger time crosses the cliff.
+#[test]
+fn test_cliff_reached_event_emitted_once_after_cliff() {
     token_admin.mint(&sender, &1000);
 
     let stream_id =
@@ -3430,6 +3480,43 @@ fn test_claim_allowed_after_interval_elapses() {
     token_admin.mint(&sender, &1000);
 
     let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &250, &None);
+
+    // Claim before the cliff — no CliffReached event
+    assert_eq!(client.claimable(&stream_id, &100), 0);
+
+    // Claim exactly at the cliff — CliffReached fires once
+    env.ledger().with_mut(|l| l.timestamp = 250);
+    client.claim(&stream_id, &recipient, &250);
+
+    let cliff_events: std::vec::Vec<(Address, soroban_sdk::Vec<Val>, Val)> = env
+        .events()
+        .all()
+        .iter()
+        .filter(|(_, topics, _)| {
+            *topics == (symbol_short!("Stream"), symbol_short!("Cliff")).into_val(&env)
+        })
+        .collect();
+    assert_eq!(cliff_events.len(), 1);
+
+    // A later claim must not emit a second CliffReached event
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.claim(&stream_id, &recipient, &250);
+    let cliff_events_after: std::vec::Vec<(Address, soroban_sdk::Vec<Val>, Val)> = env
+        .events()
+        .all()
+        .iter()
+        .filter(|(_, topics, _)| {
+            *topics == (symbol_short!("Stream"), symbol_short!("Cliff")).into_val(&env)
+        })
+        .collect();
+    assert_eq!(cliff_events_after.len(), 1);
+
+    let cliff_data: CliffReached = cliff_events[0].2.clone().into_val(&env);
+    assert_eq!(cliff_data.stream_id, stream_id);
+    assert_eq!(cliff_data.cliff_time, 250);
+}
+
         client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &100, &None);
 
     env.ledger().with_mut(|l| l.timestamp = 500);

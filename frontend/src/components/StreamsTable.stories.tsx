@@ -14,19 +14,24 @@ const meta: Meta<typeof StreamsTable> = {
 export default meta;
 type Story = StoryObj<typeof StreamsTable>;
 
+const now = Math.floor(Date.now() / 1000);
 const mockStream: Stream = {
   id: 'stream-001',
   sender: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
   recipient: 'GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGUE2DSNHKX4OEUZMPGQK24',
-  amount: '1000.0000000',
-  token: 'XLM',
-  startTime: Math.floor(Date.now() / 1000) - 3600,
-  endTime: Math.floor(Date.now() / 1000) + 3600,
-  cliffTime: null,
-  status: 'active',
-  canceledAt: null,
-  createdAt: new Date().toISOString(),
-  withdrawnAmount: '250.0000000',
+  assetCode: 'XLM',
+  totalAmount: 1000,
+  durationSeconds: 7200,
+  startAt: now - 3600,
+  createdAt: now - 7200,
+  progress: {
+    status: 'active',
+    ratePerSecond: 1000 / 7200,
+    elapsedSeconds: 3600,
+    vestedAmount: 500,
+    remainingAmount: 500,
+    percentComplete: 0.5,
+  },
 };
 
 const defaultFilters = { status: '', sender: '', recipient: '', page: 1 };
@@ -61,9 +66,9 @@ export const WithStreams: Story = {
   args: {
     streams: [
       mockStream,
-      { ...mockStream, id: 'stream-002', status: 'paused' },
-      { ...mockStream, id: 'stream-003', status: 'completed' },
-      { ...mockStream, id: 'stream-004', status: 'canceled', canceledAt: new Date().toISOString() },
+      { ...mockStream, id: 'stream-002', progress: { ...mockStream.progress, status: 'paused' } },
+      { ...mockStream, id: 'stream-003', progress: { ...mockStream.progress, status: 'completed', percentComplete: 1 } },
+      { ...mockStream, id: 'stream-004', progress: { ...mockStream.progress, status: 'canceled' }, canceledAt: now },
     ],
     loading: false,
     filters: defaultFilters,
