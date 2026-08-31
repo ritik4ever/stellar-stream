@@ -1792,8 +1792,8 @@ describe("Backend Integration Tests", () => {
 
         expect(response.status).toBe(200);
         expect(response.headers["content-type"]).toContain("text/csv");
-        expect(response.headers["content-disposition"]).toContain("export.csv");
-        expect(response.text).toContain("id,sender,recipient,asset,total,status,startAt");
+        expect(response.headers["content-disposition"]).toContain("streams-export.csv");
+        expect(response.text).toContain("id,sender,recipient,asset,totalAmount,vestedAmount,claimedAmount,status,startAt,durationSeconds,createdAt");
         expect(response.text).toContain("USDC");
         expect(response.text).toContain("XLM");
       });
@@ -1827,6 +1827,34 @@ describe("Backend Integration Tests", () => {
 
         expect(response.status).toBe(200);
         expect(response.text).toContain("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF");
+      });
+
+      it("should filter CSV export by search term", async () => {
+        const response = await request(app)
+          .get("/api/streams/export.csv")
+          .query({ q: "USDC" });
+
+        expect(response.status).toBe(200);
+        expect(response.text).toContain("USDC");
+      });
+
+      it("should filter CSV export by amount range", async () => {
+        const response = await request(app)
+          .get("/api/streams/export.csv")
+          .query({ minAmount: "50", maxAmount: "150" });
+
+        expect(response.status).toBe(200);
+        expect(response.text).toContain("USDC");
+      });
+
+      it("should include all required columns", async () => {
+        const response = await request(app)
+          .get("/api/streams/export.csv");
+
+        expect(response.status).toBe(200);
+        const lines = response.text.split("\n");
+        const header = lines[0];
+        expect(header).toBe("id,sender,recipient,asset,totalAmount,vestedAmount,claimedAmount,status,startAt,durationSeconds,createdAt");
       });
     });
   });
