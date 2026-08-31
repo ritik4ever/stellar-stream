@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { ToastProvider } from "./hooks/useToast";
+import "./i18n";
 import "./index.css";
 
 // Register service worker for PWA functionality

@@ -3,6 +3,7 @@ import { Stream } from "../types/stream";
 import { StreamEvent, getStream, getStreamHistory } from "../services/api";
 import { CopyableAddress } from "./CopyableAddress";
 import { CliffMarker } from "./CliffMarker";
+import { useLiveVesting } from "../hooks/useLiveVesting";
 
 const STELLAR_EXPERT_BASE = "https://stellar.expert/explorer/testnet/tx";
 
@@ -24,6 +25,12 @@ export function TxHashLink({ txHash }: { txHash: string }) {
       <code>{truncated}</code>
     </a>
   );
+}
+
+function formatLiveAmount(n: number, live: boolean): string {
+  // Fractional precision only while the clock is actively ticking; a frozen
+  // (paused/completed/canceled) value is shown as-is, matching the server number.
+  return live ? n.toFixed(4) : String(n);
 }
 
 interface StreamDetailDrawerProps {
@@ -114,6 +121,8 @@ export function StreamDetailDrawer({
   const [pausing, setPausing] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  const liveVesting = useLiveVesting(stream);
 
   // Abort controller to avoid race conditions on rapid open/close
   const abortRef = useRef<AbortController | null>(null);
@@ -388,7 +397,7 @@ export function StreamDetailDrawer({
                 <div className="drawer-progress-header">
                   <span className="drawer-progress-pct">{stream.progress.percentComplete}%</span>
                   <span className="muted">
-                    {stream.progress.vestedAmount} / {stream.totalAmount} {stream.assetCode} vested
+                    {formatLiveAmount(liveVesting.totalVested, liveVesting.isLive)} / {stream.totalAmount} {stream.assetCode} vested
                   </span>
                 </div>
                 <div style={{ position: "relative", padding: "0.5rem 0" }}>
@@ -411,6 +420,37 @@ export function StreamDetailDrawer({
                     <div style={{ width: `${Math.min(stream.progress.percentComplete, 100)}%` }} />
                   </div>
                 </div>
+
+                {/* Live vesting clock — ticks every ~100ms while the stream is active,
+                    freezes on the last snapshot when paused/scheduled/completed/canceled. */}
+                <dl
+                  className="drawer-dl live-vesting-clock"
+                  style={{ marginTop: "0.75rem" }}
+                  aria-live={liveVesting.isLive ? "off" : undefined}
+                  data-live={liveVesting.isLive}
+                >
+                  <div className="drawer-dl__row">
+                    <dt>Vesting per second</dt>
+                    <dd>
+                      {liveVesting.isLive
+                        ? `${liveVesting.ratePerSecond} ${stream.assetCode}/s`
+                        : "Paused"}
+                    </dd>
+                  </div>
+                  <div className="drawer-dl__row">
+                    <dt>Total vested (live)</dt>
+                    <dd className="live-vesting-clock__value">
+                      {formatLiveAmount(liveVesting.totalVested, liveVesting.isLive)} {stream.assetCode}
+                    </dd>
+                  </div>
+                  <div className="drawer-dl__row">
+                    <dt>Claimable</dt>
+                    <dd className="live-vesting-clock__value">
+                      {formatLiveAmount(liveVesting.claimable, liveVesting.isLive)} {stream.assetCode}
+                    </dd>
+                  </div>
+                </dl>
+
                 <dl className="drawer-dl" style={{ marginTop: "0.75rem" }}>
                   <div className="drawer-dl__row">
                     <dt>Rate</dt>

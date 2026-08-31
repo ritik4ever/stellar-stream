@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, type RefObject } from "react";
+import { useTranslation } from "react-i18next";
 import { CreateStreamForm } from "../components/CreateStreamForm";
 import { EditStartTimeModal } from "../components/EditStartTimeModal";
 import { IssueBacklog } from "../components/IssueBacklog";
@@ -31,6 +32,7 @@ export interface DashboardPageProps {
 }
 
 export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
+  const { t } = useTranslation();
   const walletFromHook = useFreighter();
   const wallet = propWallet || walletFromHook;
   const { showToast } = useToast();
@@ -284,32 +286,32 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
   }
 
   if (initialLoading) {
-    return <div className="app-shell">Loading dashboard…</div>;
+    return <div className="app-shell">{t("dashboard.loading")}</div>;
   }
 
   return (
     <>
       <section className="metric-grid">
         <article className="metric-card">
-          <span>Total Streams</span>
+          <span>{t("dashboard.metrics.totalStreams")}</span>
           <strong>{metrics.total}</strong>
         </article>
         <article className="metric-card">
-          <span>Active</span>
+          <span>{t("dashboard.metrics.active")}</span>
           <strong>{metrics.active}</strong>
         </article>
         <article className="metric-card">
-          <span>Completed</span>
+          <span>{t("dashboard.metrics.completed")}</span>
           <strong>{metrics.completed}</strong>
         </article>
         <article className="metric-card">
-          <span>Total Vested</span>
+          <span>{t("dashboard.metrics.totalVested")}</span>
           <strong>{metrics.vested}</strong>
         </article>
       </section>
 
       <section className="chart-section">
-        <h2 className="chart-section__title">Stream Metrics Trends</h2>
+        <h2 className="chart-section__title">{t("dashboard.chartTitle")}</h2>
         <StreamMetricsChart
           data={metricsHistory.data}
           loading={metricsHistory.loading}
@@ -354,7 +356,7 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
       <IssueBacklog issues={issues} loading={loadingDashboard} />
 
       <section className="card" style={{ marginTop: "1rem" }}>
-        <h2 style={{ marginBottom: "1rem" }}>Recent Activity</h2>
+        <h2 style={{ marginBottom: "1rem" }}>{t("dashboard.recentActivity")}</h2>
         <StreamTimeline />
       </section>
 

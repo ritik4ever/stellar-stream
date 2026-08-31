@@ -5,40 +5,34 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 5
+    # Routine version bumps are handled by Renovate (see /renovate.json).
+    # This file is kept only so Dependabot's automatic *security-update*
+    # PRs (a separate, always-on GitHub feature) get labeled/assigned.
+    open-pull-requests-limit: 0
     assignees:
       - "ritik4ever"
     labels:
       - "dependencies"
-    groups:
-      all-dependencies:
-        patterns:
-          - "*"
+      - "security"
   - package-ecosystem: "npm"
     directory: "/frontend"
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     assignees:
       - "ritik4ever"
     labels:
       - "dependencies"
-    groups:
-      all-dependencies:
-        patterns:
-          - "*"
+      - "security"
   - package-ecosystem: "cargo"
     directory: "/contracts"
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     assignees:
       - "ritik4ever"
     labels:
       - "dependencies"
-    groups:
-      all-dependencies:
-        patterns:
-          - "*"
+      - "security"

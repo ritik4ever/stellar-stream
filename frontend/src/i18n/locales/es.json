@@ -1,0 +1,26 @@
+{
+  "app": {
+    "eyebrow": "MVP nativo de Soroban",
+    "title": "StellarStream",
+    "heroCopy": "Pagos continuos en cadena para salarios, suscripciones y pagos a freelancers en Stellar."
+  },
+  "nav": {
+    "dashboard": "Panel",
+    "sender": "Panel del remitente",
+    "recipient": "Panel del destinatario"
+  },
+  "footer": {
+    "language": "Idioma"
+  },
+  "dashboard": {
+    "loading": "Cargando panel…",
+    "metrics": {
+      "totalStreams": "Flujos totales",
+      "active": "Activos",
+      "completed": "Completados",
+      "totalVested": "Total consolidado"
+    },
+    "chartTitle": "Tendencias de métricas de flujo",
+    "recentActivity": "Actividad reciente"
+  }
+}

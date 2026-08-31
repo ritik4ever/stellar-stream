@@ -1,0 +1,69 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "UTC",
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 10,
+  "packageRules": [
+    {
+      "description": "npm (frontend) - patch/minor: weekly batched PR, auto-merge after CI passes",
+      "matchManagers": ["npm"],
+      "matchFileNames": ["frontend/package.json"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "groupName": "frontend patch/minor dependencies",
+      "schedule": ["before 6am on monday"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "npm (frontend) - major: individual PR, assigned to maintainer, never auto-merged",
+      "matchManagers": ["npm"],
+      "matchFileNames": ["frontend/package.json"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "assignees": ["ritik4ever"],
+      "labels": ["dependencies", "major-update"]
+    },
+    {
+      "description": "npm (backend) - patch/minor: weekly batched PR, auto-merge after CI passes",
+      "matchManagers": ["npm"],
+      "matchFileNames": ["backend/package.json"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "groupName": "backend patch/minor dependencies",
+      "schedule": ["before 6am on monday"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "npm (backend) - major: individual PR, assigned to maintainer, never auto-merged",
+      "matchManagers": ["npm"],
+      "matchFileNames": ["backend/package.json"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "assignees": ["ritik4ever"],
+      "labels": ["dependencies", "major-update"]
+    },
+    {
+      "description": "Cargo (contracts) - patch/minor: weekly batched PR, auto-merge after CI passes",
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["contracts/Cargo.toml"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "groupName": "contracts patch/minor dependencies",
+      "schedule": ["before 6am on monday"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Cargo (contracts) - major: individual PR, assigned to maintainer, never auto-merged",
+      "matchManagers": ["cargo"],
+      "matchFileNames": ["contracts/Cargo.toml"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "assignees": ["ritik4ever"],
+      "labels": ["dependencies", "major-update"]
+    }
+  ]
+}

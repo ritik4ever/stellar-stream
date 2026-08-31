@@ -1,0 +1,26 @@
+{
+  "app": {
+    "eyebrow": "Soroban-native MVP",
+    "title": "StellarStream",
+    "heroCopy": "Continuous on-chain style payments for salaries, subscriptions, and freelancer payouts on Stellar."
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "sender": "Sender dashboard",
+    "recipient": "Recipient dashboard"
+  },
+  "footer": {
+    "language": "Language"
+  },
+  "dashboard": {
+    "loading": "Loading dashboard…",
+    "metrics": {
+      "totalStreams": "Total Streams",
+      "active": "Active",
+      "completed": "Completed",
+      "totalVested": "Total Vested"
+    },
+    "chartTitle": "Stream Metrics Trends",
+    "recentActivity": "Recent Activity"
+  }
+}

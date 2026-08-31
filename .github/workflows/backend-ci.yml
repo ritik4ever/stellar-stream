@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Dependency audit (npm audit)
+        run: npm audit --audit-level=high
+
       - name: Type-check
         run: npx tsc --noEmit
 

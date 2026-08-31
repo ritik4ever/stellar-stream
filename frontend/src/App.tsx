@@ -1,6 +1,8 @@
 ﻿import { lazy, Suspense, useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { DarkModeToggle } from "./components/DarkModeToggle";
+import { LanguageSelector } from "./components/LanguageSelector";
 import { OfflineBanner } from "./components/OfflineBanner";
 import { WalletButton } from "./components/WalletButton";
 import { useFreighter } from "./hooks/useFreighter";
@@ -15,6 +17,7 @@ const RecipientDashboard = lazy(() =>
 );
 
 function AppContent() {
+  const { t } = useTranslation();
   const wallet = useFreighter();
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
@@ -39,18 +42,15 @@ function AppContent() {
       <header className="hero">
         <div className="hero-top">
           <div>
-            <p className="eyebrow">Soroban-native MVP</p>
-            <h1>StellarStream</h1>
+            <p className="eyebrow">{t("app.eyebrow")}</p>
+            <h1>{t("app.title")}</h1>
           </div>
 
           <DarkModeToggle theme={theme} onToggle={toggleTheme} />
 
           <WalletButton wallet={wallet} />
         </div>
-        <p className="hero-copy">
-          Continuous on-chain style payments for salaries, subscriptions, and
-          freelancer payouts on Stellar.
-        </p>
+        <p className="hero-copy">{t("app.heroCopy")}</p>
       </header>
 
       <nav className="app-nav" aria-label="Main">
@@ -59,27 +59,27 @@ function AppContent() {
           className={`app-nav-link ${currentTab === "dashboard" ? "app-nav-link--active" : ""}`}
           onClick={() => navigate("/")}
         >
-          Dashboard
+          {t("nav.dashboard")}
         </button>
         <button
           type="button"
           className={`app-nav-link ${currentTab === "sender" ? "app-nav-link--active" : ""}`}
           onClick={() => navigate("/sender")}
         >
-          Sender dashboard
+          {t("nav.sender")}
         </button>
         <button
           type="button"
           className={`app-nav-link ${currentTab === "recipient" ? "app-nav-link--active" : ""}`}
           onClick={() => navigate("/recipient")}
         >
-          Recipient dashboard
+          {t("nav.recipient")}
         </button>
       </nav>
 
       <OfflineBanner />
 
-      <Suspense fallback={<div className="app-shell">Loading…</div>}>
+      <Suspense fallback={<div className="app-shell">Loading...</div>}>
         <Routes>
           <Route path="/" element={<DashboardPage wallet={wallet} />} />
           <Route
@@ -92,6 +92,10 @@ function AppContent() {
           />
         </Routes>
       </Suspense>
+
+      <footer className="app-footer">
+        <LanguageSelector />
+      </footer>
     </div>
   );
 }
