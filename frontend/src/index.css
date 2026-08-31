@@ -720,6 +720,53 @@ td {
 }
 
 
+/* ── Sender analytics ───────────────────────────────────── */
+
+.analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+}
+
+.analytics-recipients {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1rem;
+}
+
+.analytics-recipient__top {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.analytics-recipient__rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: #e6fffb;
+  color: #0f766e;
+  font-size: 0.8rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.analytics-recipient__amount {
+  margin-left: auto;
+  white-space: nowrap;
+  font-size: 0.9rem;
+}
+
+.dark .analytics-recipient__rank {
+  background: #0d2b1d;
+  color: #86efac;
+}
+
 /* ── Hero top bar (title + wallet button) ──────────────── */
 
 .hero-top {
