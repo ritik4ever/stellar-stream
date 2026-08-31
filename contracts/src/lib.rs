@@ -276,6 +276,25 @@ pub struct StreamTransferred {
     pub new_recipient: Address,
 }
 
+/// Emitted when an existing stream is split into two new streams at the
+/// current vested point.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamSplit {
+    // --- mandatory base fields ---
+    pub stream_id: u64,
+    /// The sender who initiated the split.
+    pub actor: Address,
+    pub timestamp: u64,
+    // --- event-specific fields ---
+    /// The id of the original stream that was closed.
+    pub original_id: u64,
+    /// The two new stream ids created by the split.
+    pub new_ids: Vec<u64>,
+    /// Split ratios in basis points for each new stream (sums to 10000).
+    pub split_ratios_bps: Vec<u64>,
+}
+
 #[contract]
 pub struct StellarStreamContract;
 
@@ -785,6 +804,178 @@ impl StellarStreamContract {
                 new_recipient,
             },
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Split stream (#671)
+    // -----------------------------------------------------------------------
+
+    /// Splits an existing stream into two new streams at the current vested point.
+    ///
+    /// The original stream is closed (marked as canceled) and its unvested tokens
+    /// that haven't been claimed are redistributed into two new streams. Both new
+    /// streams inherit the remaining duration from the split point to the original
+    /// end time.
+    ///
+    /// Already-claimed amounts are excluded from the split — they stay with the
+    /// original recipient. The unvested remainder is divided according to
+    /// `split_ratio_bps` (two entries that must sum to 10000 basis points).
+    ///
+    /// Returns `(id_a, id_b)` — the ids of the two newly created streams.
+    pub fn split_stream(
+        env: Env,
+        stream_id: u64,
+        sender: Address,
+        split_ratio_bps: Vec<u64>,
+    ) -> (u64, u64) {
+        sender.require_auth();
+
+        if split_ratio_bps.len() != 2 {
+            panic!("split_ratio_bps must have exactly 2 entries");
+        }
+        let ratio_a = split_ratio_bps.get(0).unwrap_or_else(|| panic!("missing ratio a"));
+        let ratio_b = split_ratio_bps.get(1).unwrap_or_else(|| panic!("missing ratio b"));
+        if ratio_a + ratio_b != 10000 {
+            panic!("split ratios must sum to 10000 bps");
+        }
+        if ratio_a == 0 || ratio_b == 0 {
+            panic!("split ratios must be non-zero");
+        }
+
+        let mut stream = read_stream(&env, stream_id);
+        if stream.sender != sender {
+            panic!("sender mismatch");
+        }
+        if stream.canceled {
+            panic!("stream already canceled");
+        }
+        if stream.paused {
+            panic!("cannot split a paused stream");
+        }
+
+        let now = env.ledger().timestamp();
+
+        // Calculate the vested amount at the current time.
+        let vested = vested_amount(&stream, now);
+        let unvested = stream.total_amount - vested;
+
+        // Close the original stream: set end_time to now, total_amount to vested,
+        // and mark it canceled.
+        let min_end = if now > stream.start_time {
+            now
+        } else {
+            stream.start_time
+        };
+        stream.end_time = min_end;
+        stream.total_amount = vested;
+        stream.canceled = true;
+
+        // The remaining amount to distribute across the two new streams is the
+        // unvested portion. No tokens need to be transferred since they're already
+        // escrowed in the contract.
+        let remaining_amount = unvested;
+
+        if remaining_amount <= 0 {
+            panic!("nothing to split");
+        }
+
+        // Calculate the split amounts using basis-point arithmetic.
+        let amount_a = remaining_amount * (ratio_a as i128) / 10000;
+        let amount_b = remaining_amount - amount_a;
+
+        // Both new streams start now and end at the original end_time.
+        let new_start = now;
+        let new_end = stream.end_time;
+
+        // Ensure we're within the original stream's time bounds.
+        // The new streams should not extend past the original end_time.
+        if new_end <= new_start {
+            panic!("stream has no remaining duration to split");
+        }
+
+        // Get token info for the child streams.
+        let token_client = TokenClient::new(&env, &stream.token);
+        let token_symbol = token_client.symbol();
+
+        let mut next_id: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::NextStreamId)
+            .unwrap_or(0);
+        next_id += 1;
+        let child_a_id = next_id;
+        next_id += 1;
+        let child_b_id = next_id;
+
+        // Create stream A (inheriting original recipient).
+        let child_a = Stream {
+            sender: sender.clone(),
+            recipient: stream.recipient.clone(),
+            token: stream.token.clone(),
+            total_amount: amount_a,
+            claimed_amount: 0,
+            start_time: new_start,
+            end_time: new_end,
+            min_claim_interval_seconds: stream.min_claim_interval_seconds,
+            last_claim_time: 0,
+            canceled: false,
+            paused: false,
+            pause_started_at: None,
+            metadata: stream.metadata.clone(),
+        };
+
+        // Create stream B (inheriting original sender, recipient from original).
+        let child_b = Stream {
+            sender: sender.clone(),
+            recipient: stream.recipient.clone(),
+            token: stream.token.clone(),
+            total_amount: amount_b,
+            claimed_amount: 0,
+            start_time: new_start,
+            end_time: new_end,
+            min_claim_interval_seconds: stream.min_claim_interval_seconds,
+            last_claim_time: 0,
+            canceled: false,
+            paused: false,
+            pause_started_at: None,
+            metadata: stream.metadata.clone(),
+        };
+
+        // Persist everything.
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(stream_id), &stream);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(child_a_id), &child_a);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(child_b_id), &child_b);
+        env.storage()
+            .persistent()
+            .set(&DataKey::NextStreamId, &next_id);
+
+        // Emit StreamSplit event.
+        let mut new_ids = Vec::<u64>::new(&env);
+        new_ids.push_back(child_a_id);
+        new_ids.push_back(child_b_id);
+        let mut ratios = Vec::<u64>::new(&env);
+        ratios.push_back(ratio_a);
+        ratios.push_back(ratio_b);
+
+        env.events().publish(
+            (symbol_short!("Stream"), symbol_short!("Split")),
+            StreamSplit {
+                stream_id,
+                actor: sender.clone(),
+                timestamp: now,
+                original_id: stream_id,
+                new_ids,
+                split_ratios_bps: ratios,
+            },
+        );
+
+        (child_a_id, child_b_id)
     }
 
     pub fn pause_stream(env: Env, stream_id: u64, sender: Address) {
