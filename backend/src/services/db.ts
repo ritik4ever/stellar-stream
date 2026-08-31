@@ -308,6 +308,26 @@ class PostgresDatabase {
   }
 }
 
+function ensureSupportingTables(db: any): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS allowed_assets (
+      code TEXT PRIMARY KEY
+    );
+  `);
+
+  // Full-text search index is SQLite-only; Postgres skips virtual tables in translateDdl().
+  if (!isPostgres()) {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS streams_fts USING fts5(
+        id UNINDEXED,
+        sender,
+        recipient,
+        asset_code
+      );
+    `);
+  }
+}
+
 export function initDb(): void {
   if (isPostgres()) {
     db = new PostgresDatabase(process.env.DATABASE_URL!);
@@ -327,4 +347,65 @@ export function initDb(): void {
   }
 
   runMigrations(db);
+  ensureSupportingTables(db);
+}
+
+export function getAllowedAssets(): string[] {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT code FROM allowed_assets")
+    .all() as Array<{ code: string }>;
+
+  if (rows.length === 0) {
+    const seeded = (process.env.ALLOWED_ASSETS || "USDC,XLM")
+      .split(",")
+      .map((asset) => asset.trim().toUpperCase())
+      .filter(Boolean);
+    const insert = db.prepare(
+      "INSERT OR IGNORE INTO allowed_assets (code) VALUES (@code)",
+    );
+    for (const code of seeded) {
+      insert.run({ code });
+    }
+    return seeded;
+  }
+
+  return rows.map((row) => row.code);
+}
+
+export function addAllowedAsset(code: string): void {
+  const db = getDb();
+  db.prepare("INSERT OR IGNORE INTO allowed_assets (code) VALUES (@code)").run({
+    code,
+  });
+}
+
+export function removeAllowedAsset(code: string): void {
+  const db = getDb();
+  db.prepare("DELETE FROM allowed_assets WHERE code = @code").run({ code });
+}
+
+export function syncFtsIndex(
+  id: string,
+  sender: string,
+  recipient: string,
+  assetCode: string,
+): void {
+  if (isPostgres()) return;
+  const db = getDb();
+  db.prepare(
+    "INSERT OR REPLACE INTO streams_fts (id, sender, recipient, asset_code) VALUES (@id, @sender, @recipient, @assetCode)",
+  ).run({ id, sender, recipient, assetCode });
+}
+
+export function searchStreamsFts(query: string): string[] {
+  if (isPostgres()) return [];
+  const db = getDb();
+  const escapedQuery = '"' + query.replace(/"/g, '""') + '"';
+  const rows = db
+    .prepare(
+      "SELECT id FROM streams_fts WHERE streams_fts MATCH @query ORDER BY rowid DESC",
+    )
+    .all({ query: escapedQuery }) as Array<{ id: string }>;
+  return rows.map((row) => row.id);
 }

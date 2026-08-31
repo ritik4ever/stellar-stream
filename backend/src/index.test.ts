@@ -14,10 +14,12 @@ const streamStoreMocks = vi.hoisted(() => ({
   calculateProgress: vi.fn(),
   cancelStream: vi.fn(),
   createStream: vi.fn(),
+  findRecentDuplicate: vi.fn(),
   getStream: vi.fn(),
   initSoroban: vi.fn(),
   listStreams: vi.fn(),
   listStreamsBySender: vi.fn(),
+  nowInSeconds: vi.fn(),
   syncStreams: vi.fn(),
   updateStreamStartAt: vi.fn(),
 }));
@@ -36,9 +38,19 @@ vi.mock("./services/streamStore", () => streamStoreMocks);
 vi.mock("./services/eventHistory", () => eventHistoryMocks);
 vi.mock("./services/auth", () => ({
   authMiddleware: vi.fn((req: any, res: any, next: any) => next()),
+  adminJwtAuth: vi.fn((req: any, res: any, next: any) => next()),
   generateChallenge: vi.fn(),
   refreshToken: vi.fn(),
   verifyChallengeAndIssueToken: vi.fn(),
+  getJwtSecret: vi.fn(() => "test_secret_for_integration"),
+}));
+
+vi.mock("./services/db", () => ({
+  getAllowedAssets: vi.fn(() => ["USDC", "XLM"]),
+  addAllowedAsset: vi.fn(),
+  removeAllowedAsset: vi.fn(),
+  searchStreamsFts: vi.fn(() => []),
+  getDb: vi.fn(),
 }));
 
 const TEST_JWT_SECRET = "test_secret_for_integration";
@@ -163,7 +175,7 @@ function invokeListStreamsRoute(
     throw new Error("GET /api/streams route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (req: any, res: any) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -176,6 +188,9 @@ function invokeListStreamsRoute(
     },
     json(payload: any) {
       jsonBody = payload;
+      return this;
+    },
+    set() {
       return this;
     },
   };
@@ -197,7 +212,7 @@ function invokeSenderStreamsRoute(
     throw new Error("GET /api/senders/:accountId/streams route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (req: any, res: any) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -212,6 +227,9 @@ function invokeSenderStreamsRoute(
       jsonBody = payload;
       return this;
     },
+    set() {
+      return this;
+    },
   };
 
   handler(req, res);
@@ -224,8 +242,11 @@ beforeEach(() => {
   streamStoreMocks.calculateProgress.mockReset();
   streamStoreMocks.createStream.mockReset();
   streamStoreMocks.getStream.mockReset();
+  streamStoreMocks.findRecentDuplicate.mockReset();
+  streamStoreMocks.findRecentDuplicate.mockReturnValue(undefined);
   streamStoreMocks.listStreams.mockReturnValue(streams);
   streamStoreMocks.calculateProgress.mockImplementation((stream: TestStream) => progressById[stream.id]);
+  streamStoreMocks.nowInSeconds.mockReturnValue(500);
 
   streamStoreMocks.listStreamsBySender.mockReset();
   streamStoreMocks.listStreamsBySender.mockImplementation((sender: string) => streams.filter(s => s.sender === sender));
@@ -612,6 +633,62 @@ it("returns 400 when durationSeconds is below the 60-second minimum", async () =
       ]),
     );
   });
+
+  it("returns 409 with existing stream ID when a near-duplicate stream exists", async () => {
+    const duplicate = { ...createdStream, id: "existing-5" };
+    streamStoreMocks.findRecentDuplicate.mockReturnValue(duplicate);
+
+    const response = await request(app)
+      .post("/api/streams")
+      .set("Authorization", "Bearer mock_token")
+      .send(validPayload);
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe("DUPLICATE_STREAM");
+    expect(response.body.existingStreamId).toBe("existing-5");
+    expect(response.body.statusCode).toBe(409);
+    expect(streamStoreMocks.createStream).not.toHaveBeenCalled();
+  });
+
+  it("checks for near-duplicates only when X-Allow-Duplicate is not exactly true", async () => {
+    const response = await request(app)
+      .post("/api/streams")
+      .set("Authorization", "Bearer mock_token")
+      .set("X-Allow-Duplicate", "false")
+      .send(validPayload);
+
+    expect(response.status).toBe(201);
+    expect(streamStoreMocks.findRecentDuplicate).toHaveBeenCalledWith(validPayload);
+    expect(streamStoreMocks.findRecentDuplicate).toHaveBeenCalledTimes(1);
+  });
+
+  it("bypasses the near-duplicate check when X-Allow-Duplicate is true", async () => {
+    const response = await request(app)
+      .post("/api/streams")
+      .set("Authorization", "Bearer mock_token")
+      .set("X-Allow-Duplicate", "true")
+      .send(validPayload);
+
+    expect(response.status).toBe(201);
+    expect(streamStoreMocks.findRecentDuplicate).not.toHaveBeenCalled();
+    expect(streamStoreMocks.createStream).toHaveBeenCalledWith(validPayload);
+  });
+
+  it("allows a stream with a different recipient even within the same window", async () => {
+    const differentPayload = { ...validPayload, recipient: RECIPIENT_2 };
+    const differentStream = { ...createdStream, recipient: RECIPIENT_2 };
+    streamStoreMocks.createStream.mockResolvedValue(differentStream);
+
+    const response = await request(app)
+      .post("/api/streams")
+      .set("Authorization", "Bearer mock_token")
+      .send(differentPayload);
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.recipient).toBe(RECIPIENT_2);
+    expect(streamStoreMocks.findRecentDuplicate).toHaveBeenCalledWith(differentPayload);
+    expect(streamStoreMocks.createStream).toHaveBeenCalledWith(differentPayload);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -645,7 +722,7 @@ function invokeGlobalEventsRoute(
     throw new Error("GET /api/events route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  const handler = layer.route.stack[layer.route.stack.length - 1].handle as (req: any, res: any) => void;
 
   let statusCode = 200;
   let jsonBody: any;
@@ -654,6 +731,7 @@ function invokeGlobalEventsRoute(
   const res = {
     status(code: number) { statusCode = code; return this; },
     json(payload: any) { jsonBody = payload; return this; },
+    set() { return this; },
   };
 
   handler(req, res);
@@ -686,7 +764,7 @@ describe("GET /api/events", () => {
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
-    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith("created");
+    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith("created", undefined, undefined);
 
   });
 

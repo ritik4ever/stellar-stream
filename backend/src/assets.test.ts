@@ -7,6 +7,19 @@ import { Keypair } from "@stellar/stellar-sdk";
 
 const TEST_DB_PATH = path.join(__dirname, "..", "data", "test-assets.db");
 
+function removeTestDbFiles() {
+  for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+    const filePath = TEST_DB_PATH + suffix;
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch (err) {
+        // Ignore
+      }
+    }
+  }
+}
+
 describe("Assets API Configuration", () => {
   beforeAll(() => {
     process.env.DB_PATH = TEST_DB_PATH;
@@ -16,27 +29,22 @@ describe("Assets API Configuration", () => {
 
   beforeEach(() => {
     vi.resetModules();
-    if (fs.existsSync(TEST_DB_PATH)) {
-      try {
-        fs.unlinkSync(TEST_DB_PATH);
-      } catch (err) {
-        // Ignore
-      }
-    }
+    removeTestDbFiles();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.unstubAllEnvs();
+
+    try {
+      const { getDb } = await import("./services/db");
+      getDb().close();
+    } catch (err) {
+      // Database was not initialized in this test
+    }
   });
 
   afterAll(() => {
-    if (fs.existsSync(TEST_DB_PATH)) {
-      try {
-        fs.unlinkSync(TEST_DB_PATH);
-      } catch (err) {
-        // Ignore
-      }
-    }
+    removeTestDbFiles();
   });
 
   it("should respect ALLOWED_ASSETS environment variable override and normalize", async () => {
