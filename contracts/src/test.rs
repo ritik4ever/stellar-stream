@@ -3782,3 +3782,379 @@ fn test_set_native_token_rejects_non_admin() {
     client.initialize(&admin, &native_token, &soroban_sdk::vec![&env]);
     client.set_native_token(&outsider, &replacement);
 }
+
+
+// =============================================================================
+// #680 — ON-CHAIN ANALYTICS TESTS
+// =============================================================================
+
+/// Test get_platform_stats returns a valid PlatformStats structure on first call.
+#[test]
+fn test_get_platform_stats_returns_initialized_stats() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    let stats = client.get_platform_stats();
+    assert_eq!(stats.total_streams, 0);
+    assert_eq!(stats.active_streams, 0);
+    assert_eq!(stats.total_vested_usdc, 0);
+    assert_eq!(stats.total_vested_xlm, 0);
+    assert_eq!(stats.unique_senders, 0);
+    assert_eq!(stats.unique_recipients, 0);
+}
+
+/// After creating one stream, total_streams increments to 1 and active_streams = 1.
+#[test]
+fn test_get_platform_stats_increments_total_streams_on_create() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stats_before = client.get_platform_stats();
+    assert_eq!(stats_before.total_streams, 0);
+
+    client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    let stats_after = client.get_platform_stats();
+    assert_eq!(stats_after.total_streams, 1);
+    assert_eq!(stats_after.active_streams, 1);
+}
+
+/// unique_senders and unique_recipients track distinct addresses.
+#[test]
+fn test_get_platform_stats_tracks_unique_senders_and_recipients() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender1 = Address::generate(&env);
+    let sender2 = Address::generate(&env);
+    let recipient1 = Address::generate(&env);
+    let recipient2 = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender1, &5000);
+    token_admin.mint(&sender2, &5000);
+
+    // Stream 1: sender1 → recipient1
+    client.create_stream(&sender1, &recipient1, &token, &1000, &0, &1000, &0, &None);
+
+    let stats1 = client.get_platform_stats();
+    assert_eq!(stats1.unique_senders, 1);
+    assert_eq!(stats1.unique_recipients, 1);
+
+    // Stream 2: sender1 → recipient2 (same sender, new recipient)
+    client.create_stream(&sender1, &recipient2, &token, &1000, &0, &1000, &0, &None);
+
+    let stats2 = client.get_platform_stats();
+    assert_eq!(stats2.unique_senders, 1); // Still 1 sender
+    assert_eq!(stats2.unique_recipients, 2); // 2 recipients now
+
+    // Stream 3: sender2 → recipient1 (new sender, recipient already exists)
+    client.create_stream(&sender2, &recipient1, &token, &1000, &0, &1000, &0, &None);
+
+    let stats3 = client.get_platform_stats();
+    assert_eq!(stats3.unique_senders, 2); // 2 senders now
+    assert_eq!(stats3.unique_recipients, 2); // Still 2 recipients
+}
+
+/// After 1000 streams are created, stats reflect accurate counts.
+#[test]
+fn test_get_platform_stats_accuracy_after_1000_streams() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+
+    // Create 1000 streams from a single sender to many recipients
+    let sender = Address::generate(&env);
+    token_admin.mint(&sender, &1_000_000_000); // Large balance
+
+    for i in 0..1000 {
+        let recipient = Address::generate(&env);
+        client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    }
+
+    let stats = client.get_platform_stats();
+    assert_eq!(stats.total_streams, 1000);
+    assert_eq!(stats.active_streams, 1000);
+    assert_eq!(stats.unique_senders, 1);
+    assert_eq!(stats.unique_recipients, 1000);
+}
+
+/// total_vested_xlm accumulates when XLM streams are claimed.
+#[test]
+fn test_get_platform_stats_tracks_total_vested_xlm() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &5000);
+
+    let stats_before = client.get_platform_stats();
+    assert_eq!(stats_before.total_vested_xlm, 0);
+
+    // Create stream for 1000 XLM
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    // Advance to 50% vesting and claim 500
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.claim(&stream_id, &recipient, &500);
+
+    let stats_after = client.get_platform_stats();
+    assert_eq!(stats_after.total_vested_xlm, 500);
+}
+
+/// total_vested_usdc accumulates separately from total_vested_xlm.
+#[test]
+fn test_get_platform_stats_tracks_total_vested_usdc_and_xlm_separately() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    let token_admin_addr = Address::generate(&env);
+    let token = create_token(&env, &token_admin_addr);
+    let token_mint = token::StellarAssetClient::new(&env, &token);
+    token_mint.mint(&sender, &10000);
+
+    // Create XLM stream (via default create_stream with native token symbol)
+    let xlm_stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    
+    // Create USDC stream (simulated by using same token but assuming "USDC" symbol in analytics)
+    // In reality, USDC token would be a different contract with symbol "USDC"
+    // For this test, we'll just verify that both can be tracked independently
+
+    let stats_before = client.get_platform_stats();
+    assert_eq!(stats_before.total_vested_xlm, 0);
+    assert_eq!(stats_before.total_vested_usdc, 0);
+
+    // Claim from XLM stream
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.claim(&xlm_stream_id, &recipient, &500);
+
+    let stats_after = client.get_platform_stats();
+    assert_eq!(stats_after.total_vested_xlm, 500);
+    // USDC remains 0 because we only claimed from XLM stream
+    assert_eq!(stats_after.total_vested_usdc, 0);
+}
+
+/// After claiming full amount, active_streams decrements when stream is completed.
+#[test]
+fn test_get_platform_stats_active_streams_decrements_on_complete() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    let stats_active = client.get_platform_stats();
+    assert_eq!(stats_active.active_streams, 1);
+
+    // Complete the stream by claiming full amount
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    client.claim(&stream_id, &recipient, &1000);
+
+    let stats_completed = client.get_platform_stats();
+    assert_eq!(stats_completed.active_streams, 0);
+    assert_eq!(stats_completed.total_streams, 1); // Still counted in total
+}
+
+/// After canceling a stream, active_streams decrements.
+#[test]
+fn test_get_platform_stats_active_streams_decrements_on_cancel() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    let stats_active = client.get_platform_stats();
+    assert_eq!(stats_active.active_streams, 1);
+
+    client.cancel(&stream_id, &sender);
+
+    let stats_canceled = client.get_platform_stats();
+    assert_eq!(stats_canceled.active_streams, 0);
+    assert_eq!(stats_canceled.total_streams, 1); // Still counted in total
+}
+
+/// Split streams with multiple children all increment total_streams and active_streams correctly.
+#[test]
+fn test_get_platform_stats_tracks_split_stream_children() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &5000);
+
+    let stats_before = client.get_platform_stats();
+    assert_eq!(stats_before.total_streams, 0);
+
+    let mut recipients = Vec::new(&env);
+    for _ in 0..3 {
+        recipients.push_back((Address::generate(&env), 300_i128));
+    }
+
+    client.create_split_stream(&sender, &token, &900, &0, &1000, &recipients);
+
+    let stats_after = client.get_platform_stats();
+    // Split stream creates 1 parent + 3 children = 4 total streams
+    assert_eq!(stats_after.total_streams, 4);
+    assert_eq!(stats_after.active_streams, 4);
+}
+
+/// get_platform_stats is read-only and does not require authentication.
+#[test]
+fn test_get_platform_stats_requires_no_auth() {
+    let env = Env::default();
+    // NOTE: NOT calling env.mock_all_auths() — testing without auth
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    // Should not panic even without auth
+    let stats = client.get_platform_stats();
+    assert_eq!(stats.total_streams, 0);
+}
+
+/// Multiple claims from different recipients all accumulate in total_vested_xlm.
+#[test]
+fn test_get_platform_stats_aggregates_claims_from_multiple_recipients() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &5000);
+
+    let recipient1 = Address::generate(&env);
+    let recipient2 = Address::generate(&env);
+
+    let stream1 = client.create_stream(&sender, &recipient1, &token, &1000, &0, &1000, &0, &None);
+    let stream2 = client.create_stream(&sender, &recipient2, &token, &2000, &0, &1000, &0, &None);
+
+    let stats_before = client.get_platform_stats();
+    assert_eq!(stats_before.total_vested_xlm, 0);
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.claim(&stream1, &recipient1, &500);
+    client.claim(&stream2, &recipient2, &1000);
+
+    let stats_after = client.get_platform_stats();
+    assert_eq!(stats_after.total_vested_xlm, 1500); // 500 + 1000
+}
+
+/// Test snapshot of analytics state after various operations.
+#[test]
+fn test_get_platform_stats_snapshot_after_mixed_operations() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env), &soroban_sdk::vec![&env]);
+
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &10000);
+
+    // Create 5 streams
+    let mut stream_ids = Vec::new(&env);
+    for i in 0..5 {
+        let recipient = Address::generate(&env);
+        let sid = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+        stream_ids.push_back((sid, recipient));
+    }
+
+    // Claim from 3 of them
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    for i in 0..3 {
+        let (stream_id, recipient) = (stream_ids.get(i).unwrap(), stream_ids.get(i).unwrap().1);
+        client.claim(&stream_id, &recipient, &500);
+    }
+
+    // Cancel one stream
+    client.cancel(&stream_ids.get(3).unwrap().0, &sender);
+
+    let stats = client.get_platform_stats();
+    assert_eq!(stats.total_streams, 5);
+    assert_eq!(stats.active_streams, 3); // 5 - 1 (canceled) - 1 (will be completed next)
+    assert_eq!(stats.total_vested_xlm, 1500); // 3 streams × 500 claimed
+    assert_eq!(stats.unique_senders, 1);
+    assert_eq!(stats.unique_recipients, 5);
+
+    assert_snapshot!("platform_stats_after_mixed_operations", stats);
+}

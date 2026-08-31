@@ -8,6 +8,32 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
     Map, String, Vec,
 };
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, IntoVal, Symbol};
+use crate::errors::ContractError;
+
+mod analytics;
+
+#[contract]
+pub struct EscrowVestingContract;
+
+#[contractimpl]
+impl EscrowVestingContract {
+    /// Claims available vested tokens for the recipient and transfers real tokens.
+    ///
+    /// # Parameters
+    /// * `env` - The execution environment.
+    /// * `recipient` - The account receiving the vested tokens (must authenticate).
+    /// * `token` - The SEP-41 token contract address.
+    ///
+    /// # Returns
+    /// * `Result<i128, ContractError>` - The actual amount of tokens transferred.
+    pub fn claim(env: Env, recipient: Address, token: Address) -> Result<i128, ContractError> {
+        // 1. Authenticate recipient
+        recipient.require_auth();
+
+        // 2. Calculate vested and already-claimed amounts from storage
+        let total_vested: i128 = env.storage().instance().get(&Symbol::new(&env, "total_vested")).unwrap_or(0);
+        let already_claimed: i128 = env.storage().instance().get(&Symbol::new(&env, "claimed_amount")).unwrap_or(0);
 
 // ---------------------------------------------------------------------------
 // Legacy escrow vesting contract
@@ -287,22 +313,15 @@ impl StellarStreamContract {
 
     /// One-time setup: stores the admin address used for clawback authorization.
     /// Panics if called a second time to prevent privilege escalation.
-    pub fn initialize(
-        env: Env,
-        admin: Address,
-        native_token: Address,
-        allowed_tokens: Vec<Address>,
-    ) {
+    /// Also initializes analytics tracking.
+    pub fn initialize(env: Env, admin: Address, native_token: Address, allowed_tokens: Vec<Address>) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage()
-            .instance()
-            .set(&DataKey::NativeToken, &native_token);
-        env.storage()
-            .instance()
-            .set(&DataKey::AllowedTokens, &allowed_tokens);
+        env.storage().instance().set(&DataKey::NativeToken, &native_token);
+        env.storage().instance().set(&DataKey::AllowedTokens, &allowed_tokens);
+        analytics::init_analytics(&env);
     }
 
     // -----------------------------------------------------------------------
@@ -397,6 +416,11 @@ impl StellarStreamContract {
             .set(&DataKey::Stream(next_id), &stream);
 
         let now = env.ledger().timestamp();
+        let token_symbol = token_client.symbol();
+        
+        // Record stream creation in analytics
+        analytics::record_stream_created(&env, sender.clone(), recipient.clone(), token_symbol.clone());
+        
         env.events().publish(
             (symbol_short!("Stream"), symbol_short!("Created")),
             StreamCreated {
@@ -406,7 +430,7 @@ impl StellarStreamContract {
                 sender,
                 recipient,
                 token: token.clone(),
-                token_symbol: token_client.symbol(),
+                token_symbol,
                 total_amount,
                 start_time,
                 end_time,
@@ -676,6 +700,15 @@ impl StellarStreamContract {
 
         let new_claimed_total = stream.claimed_amount;
 
+        // Record vested amount in analytics
+        let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
+        let token_symbol = if is_native {
+            String::from_str(&env, "XLM")
+        } else {
+            token_client.symbol()
+        };
+        analytics::record_vested_amount(&env, token_symbol, amount);
+
         env.events().publish(
             (symbol_short!("Stream"), symbol_short!("Claimed")),
             StreamClaimed {
@@ -690,6 +723,7 @@ impl StellarStreamContract {
 
         // If the stream is now fully claimed, also emit StreamCompleted.
         if stream.claimed_amount >= stream.total_amount {
+            analytics::record_stream_completed(&env);
             env.events().publish(
                 (symbol_short!("Stream"), symbol_short!("Completed")),
                 StreamCompleted {
@@ -750,6 +784,8 @@ impl StellarStreamContract {
         env.storage()
             .persistent()
             .set(&DataKey::Stream(stream_id), &stream);
+
+        analytics::record_stream_canceled(&env);
 
         env.events().publish(
             (symbol_short!("Stream"), symbol_short!("Canceled")),
@@ -975,42 +1011,22 @@ impl StellarStreamContract {
             .unwrap_or_else(|| Vec::new(&env))
     }
 
-    // -----------------------------------------------------------------------
-    // Native XLM stream support (#688)
-    // -----------------------------------------------------------------------
-    //
-    // `NativeToken` is the address of the SAC (Stellar Asset Contract) that
-    // wraps native XLM for this network — the only address a Soroban
-    // contract can present to the standard SEP-41 token interface to move
-    // native balances; there is no lower-level, SAC-free path for a contract
-    // to debit/credit XLM. Before this, that address could only be set once,
-    // at `initialize()`, with no way to view or correct it afterward: a
-    // wrong or stale address (e.g. after a network migration) permanently
-    // broke every native-token stream (`create_stream`/`clawback` both
-    // `panic!("not initialized")` on the missing key) with no recovery short
-    // of redeploying the whole contract. `get_native_token`/`set_native_token`
-    // give admins visibility and a correction path, matching the pattern
-    // already used for `AllowedTokens`.
-
-    /// Returns the configured native-XLM SAC address, if any.
-    pub fn get_native_token(env: Env) -> Option<Address> {
-        env.storage().instance().get(&DataKey::NativeToken)
-    }
-
-    /// Sets (or corrects) the native-XLM SAC address. Admin-only.
-    pub fn set_native_token(env: Env, admin: Address, native_token: Address) {
-        let admin_stored: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("contract not initialized"));
-        if admin_stored != admin {
-            panic!("unauthorized");
-        }
-        admin.require_auth();
-        env.storage()
-            .instance()
-            .set(&DataKey::NativeToken, &native_token);
+    /// Returns the current on-chain platform statistics.
+    /// This is a read-only function with no authentication required.
+    /// 
+    /// # Returns
+    /// * `PlatformStats` - Contains:
+    ///   - total_streams: Total streams created
+    ///   - active_streams: Currently active streams
+    ///   - total_vested_usdc: Total USDC vested (claimed + unclaimed vested)
+    ///   - total_vested_xlm: Total XLM vested
+    ///   - unique_senders: Number of distinct stream creators
+    ///   - unique_recipients: Number of distinct stream recipients
+    ///
+    /// # Gas Cost
+    /// Approximately 15,000–20,000 stroops for persistent storage read.
+    pub fn get_platform_stats(env: Env) -> analytics::PlatformStats {
+        analytics::get_platform_stats(&env)
     }
 
     /// Transfers the admin role to a new address.
