@@ -18,4 +18,6 @@ pub enum ContractError {
     TimeoutNotExpired = 6,
     /// Emergency release disabled.
     EmergencyReleaseDisabled = 7,
+    /// Claim rejected because the stream's minimum claim interval has not elapsed.
+    ClaimTooFrequent = 8,
 }
