@@ -1568,7 +1568,7 @@ export const swaggerDocument = {
       get: {
         summary: "Get Stream History",
         description:
-          "Retrieves the complete event history for a specific stream.",
+          "Retrieves the complete event history for a specific stream, paginated and sorted ascending by timestamp (oldest first).",
         parameters: [
           {
             name: "id",
@@ -1577,6 +1577,29 @@ export const swaggerDocument = {
             description: "The unique ID of the stream.",
             schema: {
               type: "string",
+            },
+          },
+          {
+            name: "page",
+            in: "query",
+            required: false,
+            description: "Page number, starting at 1. Defaults to 1.",
+            schema: {
+              type: "integer",
+              minimum: 1,
+              default: 1,
+            },
+          },
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            description: "Number of events per page (max 100). Defaults to 50.",
+            schema: {
+              type: "integer",
+              minimum: 1,
+              maximum: 100,
+              default: 50,
             },
           },
         ],
@@ -1594,7 +1617,29 @@ export const swaggerDocument = {
                         $ref: "#/components/schemas/StreamEvent",
                       },
                     },
+                    total: {
+                      type: "integer",
+                      description: "Total number of events for the stream.",
+                    },
+                    page: {
+                      type: "integer",
+                      description: "Current page number.",
+                    },
+                    limit: {
+                      type: "integer",
+                      description: "Number of events returned per page.",
+                    },
                   },
+                },
+              },
+            },
+          },
+          "400": {
+            description: "Invalid query parameters.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
                 },
               },
             },
