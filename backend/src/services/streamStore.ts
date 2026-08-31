@@ -891,6 +891,148 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
   return stream;
 }
 
+export async function bulkCreateStreams(inputs: StreamInput[]): Promise<string[]> {
+  if (inputs.length === 0) {
+    throw new Error("At least one stream config is required");
+  }
+
+  if (inputs.length > 20) {
+    throw new Error("Maximum 20 streams per request");
+  }
+
+  // Validate all inputs have the same sender
+  const sender = inputs[0].sender;
+  for (const input of inputs) {
+    if (input.sender !== sender) {
+      throw new Error("All streams must have the same sender");
+    }
+  }
+
+  const sorobanDisabled =
+    process.env.SOROBAN_DISABLED?.toLowerCase() === "true" ||
+    process.env.SOROBAN_ENABLED?.toLowerCase() === "false";
+
+  const contractId = process.env.CONTRACT_ID;
+  const netPass =
+    process.env.NETWORK_PASSPHRASE || "Test SDF Network ; September 2015";
+
+  const streamIds: string[] = [];
+  const streams: StreamRecord[] = [];
+
+  // Create all streams
+  for (const input of inputs) {
+    const startAt = input.startAt ?? nowInSeconds();
+    let streamIdStr: string;
+
+    if (sorobanDisabled || !contractId || !rpcServer || !serverKeypair) {
+      if (!sorobanDisabled && (!contractId || !rpcServer || !serverKeypair)) {
+        logger.warn(
+          "Soroban configuration incomplete or serverKeypair missing, falling back to local SQLite creation.",
+        );
+      }
+      // Fallback SQLite-only path
+      const db = getDb();
+      const row = db
+        .prepare("SELECT MAX(CAST(id AS INTEGER)) as maxId FROM streams")
+        .get() as { maxId: number | null } | undefined;
+      const nextNumericId = (row?.maxId ?? 0) + 1;
+      streamIdStr = nextNumericId.toString();
+    } else {
+      // Soroban path
+      const sourceAccount = await rpcServer.getAccount(serverKeypair.publicKey());
+      const op = createStreamOperation(contractId, input, startAt);
+
+      const txToSimulate = new TransactionBuilder(sourceAccount, {
+        fee: "1000",
+        networkPassphrase: netPass,
+      })
+        .addOperation(op)
+        .setTimeout(30)
+        .build();
+
+      const simRes = await rpcServer.simulateTransaction(txToSimulate);
+      if (!rpc.Api.isSimulationSuccess(simRes)) {
+        throw new Error("Soroban RPC simulation failed: " + JSON.stringify(simRes));
+      }
+
+      const preparedTx = await rpcServer.prepareTransaction(txToSimulate);
+      preparedTx.sign(serverKeypair);
+
+      const sendRes = await retryWithBackoff(() => rpcServer!.sendTransaction(preparedTx));
+      if (sendRes.status !== "PENDING") {
+        throw new Error("Failed to send transaction: " + JSON.stringify(sendRes));
+      }
+
+      let txResult;
+      let attempts = 0;
+      while (attempts < 10) {
+        txResult = await retryWithBackoff(() => rpcServer!.getTransaction(sendRes.hash));
+        if (txResult.status !== "NOT_FOUND") break;
+        await new Promise((r) => setTimeout(r, 1000));
+        attempts++;
+      }
+
+      if (txResult?.status !== "SUCCESS" || !txResult.returnValue) {
+        throw new Error("Tx failed on chain: " + JSON.stringify(txResult));
+      }
+
+      const streamIdVal = scValToNative(txResult.returnValue);
+      streamIdStr = streamIdVal.toString();
+    }
+
+    const stream: StreamRecord = {
+      id: streamIdStr,
+      sender: input.sender,
+      recipient: input.recipient,
+      assetCode: input.assetCode.toUpperCase(),
+      totalAmount: input.totalAmount,
+      durationSeconds: input.durationSeconds,
+      startAt,
+      createdAt: nowInSeconds(),
+      pausedDuration: 0,
+      cliffSeconds: input.cliffSeconds ?? 0,
+    };
+
+    streamIds.push(streamIdStr);
+    streams.push(stream);
+  }
+
+  // Store all streams atomically in database
+  const db = getDb();
+  db.transaction(() => {
+    for (let i = 0; i < streams.length; i++) {
+      const stream = streams[i];
+      upsertStream(stream);
+      recordEventWithDb(
+        db,
+        stream.id,
+        "created",
+        stream.createdAt,
+        stream.sender,
+        stream.totalAmount,
+        {
+          recipient: stream.recipient,
+          assetCode: stream.assetCode,
+          durationSeconds: stream.durationSeconds,
+        },
+      );
+    }
+  })();
+
+  await invalidateCache("stream:");
+  await invalidateCache("streams:list:");
+  await invalidateCache("streams:export:");
+  resetStatsCache();
+  resetStreamMetricsCache();
+
+  // Trigger webhooks for all streams (fire-and-forget, failures won't rollback)
+  for (const stream of streams) {
+    triggerWebhook("created", stream);
+  }
+
+  return streamIds;
+}
+
 export async function estimateCreateStreamFee(input: StreamInput): Promise<StreamFeeEstimate> {
   const startAt = input.startAt ?? nowInSeconds();
   const contractId = process.env.CONTRACT_ID;
