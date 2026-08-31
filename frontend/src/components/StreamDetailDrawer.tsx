@@ -3,6 +3,7 @@ import { Stream } from "../types/stream";
 import { StreamEvent, getStream, getStreamHistory } from "../services/api";
 import { CopyableAddress } from "./CopyableAddress";
 import { CliffMarker } from "./CliffMarker";
+import { ShareStreamButton } from "./ShareStreamButton";
 
 const STELLAR_EXPERT_BASE = "https://stellar.expert/explorer/testnet/tx";
 
@@ -266,15 +267,20 @@ export function StreamDetailDrawer({
           <h2 id="drawer-title" className="drawer-title">
             Stream Detail
           </h2>
-          <button
-            ref={closeButtonRef}
-            type="button"
-            className="modal-close"
-            aria-label="Close stream detail"
-            onClick={onClose}
-          >
-            ✕
-          </button>
+          <div className="drawer-header__actions">
+            {!loading && !error && stream && (
+              <ShareStreamButton streamId={stream.id} />
+            )}
+            <button
+              ref={closeButtonRef}
+              type="button"
+              className="modal-close"
+              aria-label="Close stream detail"
+              onClick={onClose}
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         <div className="drawer-body">

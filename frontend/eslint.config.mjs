@@ -31,6 +31,7 @@ export default tseslint.config(
       'src/components/CreateStreamForm.tsx',
       'src/components/RecipientDashboard.tsx',
       'src/components/StreamsTable.tsx',
+      'src/components/ShareStreamButton.tsx',
       'src/hooks/useDraftAutosave.ts',
       'src/hooks/useFreighter.ts',
       'src/components/StreamMetricsChart.tsx',
