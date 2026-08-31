@@ -4,11 +4,12 @@ This guide provides step-by-step instructions for deploying StellarStream to var
 
 ## Table of Contents
 1. [Stellar Smart Contract Deployment](#1-stellar-smart-contract-deployment)
-2. [Backend Deployment (Render)](#2-backend-deployment-render)
-3. [Frontend Deployment (Vercel)](#3-frontend-deployment-vercel)
-4. [Post-Deploy Verification](#4-post-deploy-verification)
-5. [Docker Deployment](#5-docker-deployment)
-6. [Troubleshooting](#6-troubleshooting)
+2. [WASM Hash Verification (Reproducible Builds)](#2-wasm-hash-verification-reproducible-builds)
+3. [Backend Deployment (Render)](#3-backend-deployment-render)
+4. [Frontend Deployment (Vercel)](#4-frontend-deployment-vercel)
+5. [Post-Deploy Verification](#5-post-deploy-verification)
+6. [Docker Deployment](#6-docker-deployment)
+7. [Troubleshooting](#7-troubleshooting)
 
 ---
 
@@ -40,7 +41,141 @@ Before deploying the backend, you must deploy the Soroban smart contract to the 
 
 ---
 
-## 2. Backend Deployment (Render)
+## 2. WASM Hash Verification (Reproducible Builds)
+
+StellarStream uses SHA256 hash verification to protect against supply-chain attacks on the contract binary. Every WASM artifact is fingerprinted at build time; the deploy script refuses to deploy a binary whose hash does not match the expected value.
+
+### How It Works
+
+| File | Purpose |
+|---|---|
+| `contracts/rust-toolchain.toml` | Pins the exact Rust nightly toolchain (channel, targets, components) so every build produces the same binary regardless of when or where it runs. |
+| `contracts/wasm.sha256` | Stores the canonical SHA256 hash of the last reviewed WASM binary. Committed to version control alongside the contract source. |
+| `scripts/deploy.sh` | Builds the contract, computes the SHA256 of the output WASM, and compares it against `contracts/wasm.sha256` before deploying. |
+| `.github/workflows/contract-ci.yml` | CI builds the WASM with the pinned toolchain, computes the hash, and verifies it against the stored hash on every push and PR. |
+
+### Pinned Toolchain
+
+The file `contracts/rust-toolchain.toml` pins the Rust toolchain used by both local builds and CI:
+
+```toml
+[toolchain]
+channel = "nightly-2024-12-01"
+targets = ["wasm32-unknown-unknown"]
+components = ["rustfmt", "clippy"]
+profile = "minimal"
+```
+
+Rust's `rustup` reads this file automatically when you run any Cargo command inside the `contracts/` directory. This guarantees that `cargo build` on any machine produces byte-identical output, provided the same source and `Cargo.lock` are used.
+
+### The Hash File: `contracts/wasm.sha256`
+
+`contracts/wasm.sha256` contains one line in the format produced by `sha256sum`:
+
+```
+<hex-sha256>  target/wasm32-unknown-unknown/release/stellar_stream.wasm
+```
+
+**This file must be committed to version control.** It serves as the tamper-evident fingerprint that CI and the deploy script check against.
+
+### First-Time Build (Generating the Hash)
+
+On the first build (before `wasm.sha256` exists), the deploy script creates it automatically:
+
+```bash
+SECRET_KEY="S..." ./scripts/deploy.sh
+```
+
+The script will print:
+
+```
+No stored hash found. Saving hash to wasm.sha256 (first-time build).
+Saved SHA256 hash to wasm.sha256
+Commit this file to version control to enable future hash verification.
+```
+
+Then commit the generated file:
+
+```bash
+git add contracts/wasm.sha256
+git commit -m "chore(contracts): add initial wasm.sha256 for hash verification"
+```
+
+### Subsequent Deployments (Verification in Action)
+
+On every subsequent deploy, the script computes the hash of the freshly built WASM and compares it against the stored hash:
+
+```
+Computed SHA256: a1b2c3d4...
+Stored  SHA256:  a1b2c3d4...
+✔ Hash verification PASSED — WASM binary is reproducible.
+```
+
+### Hash Mismatch — Deployment Blocked
+
+If the hashes do not match, the deploy script **aborts immediately** with a clear error:
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║          ⚠  HASH MISMATCH — DEPLOYMENT ABORTED  ⚠           ║
+╠══════════════════════════════════════════════════════════════╣
+║  The WASM binary does not match the stored hash.             ║
+║  This may indicate:                                          ║
+║    • A supply-chain compromise                               ║
+║    • A toolchain change (compiler version, flags, etc.)      ║
+║    • Intentional contract source changes                     ║
+...
+```
+
+This blocks deployment of any binary that has not been reviewed and approved through the normal PR process.
+
+### Updating the Hash After Intentional Contract Changes
+
+When the contract source legitimately changes (e.g., after a feature merge), you must regenerate `wasm.sha256`:
+
+```bash
+# Build and update the stored hash (bypasses mismatch check for this run only)
+SKIP_HASH_CHECK=1 SECRET_KEY="S..." ./scripts/deploy.sh
+```
+
+Then review, commit, and push the updated hash file:
+
+```bash
+git add contracts/wasm.sha256
+git commit -m "chore(contracts): update wasm.sha256 after <description of change>"
+git push
+```
+
+> ⚠️ **Security note**: Only use `SKIP_HASH_CHECK=1` after manually reviewing the contract diff and confirming the change is intentional. Treat a hash mismatch as a security event until proven otherwise.
+
+### CI Integration
+
+The `contract-ci.yml` workflow automatically:
+
+1. Installs the exact Rust toolchain pinned in `rust-toolchain.toml`
+2. Builds the WASM binary
+3. Computes its SHA256
+4. Compares it against `contracts/wasm.sha256`
+5. Fails the build and prints a clear error if the hashes differ
+6. On pushes to `main`, commits an updated `wasm.sha256` if it changed
+
+This means every PR that modifies contract source code must also update `contracts/wasm.sha256`, making the change visible in the diff and requiring explicit reviewer approval.
+
+### Local Verification
+
+To verify the WASM hash locally without deploying:
+
+```bash
+cd contracts
+cargo build --target wasm32-unknown-unknown --release
+sha256sum target/wasm32-unknown-unknown/release/stellar_stream.wasm
+# Compare output against contracts/wasm.sha256
+cat wasm.sha256
+```
+
+---
+
+## 3. Backend Deployment (Render)
 
 The backend is a Node.js Express app (TypeScript, compiled to JS) that uses a SQLite database. This guide walks through deploying it on [Render](https://render.com) as a Web Service.
 
@@ -128,13 +263,13 @@ Render will poll this endpoint every 5 seconds. A `200 OK` response with `{"stat
 
 ---
 
-## 3. Frontend Deployment (Vercel)
+## 4. Frontend Deployment (Vercel)
 
 The frontend is a React app built with Vite + Tailwind CSS. This guide walks through deploying it on [Vercel](https://vercel.com).
 
 ### Prerequisites
 - A [Vercel](https://vercel.com) account (log in with GitHub)
-- Your backend deployed and accessible at a public URL (see [Section 2](#2-backend-deployment-render))
+- Your backend deployed and accessible at a public URL (see [Section 3](#3-backend-deployment-render))
 
 ### Step 1: Create a Vercel Project
 
@@ -172,7 +307,7 @@ The app uses client-side routing (React Router). Vite's build output is a single
 
 ---
 
-## 4. Post-Deploy Verification
+## 5. Post-Deploy Verification
 
 After deploying both the backend and frontend, run these checks to confirm everything is working.
 
@@ -276,7 +411,7 @@ curl -s -H "Origin: $FRONTEND_URL" -H "Access-Control-Request-Method: GET" \
 
 ---
 
-## 5. Docker Deployment
+## 6. Docker Deployment
 
 For a quick production-like setup using Docker Compose.
 
@@ -306,7 +441,7 @@ services:
 
 ---
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 ### "Contract ID not set" in Backend Logs
 Ensure the `CONTRACT_ID` environment variable is correctly set in your deployment platform. The indexer will not start without it.
