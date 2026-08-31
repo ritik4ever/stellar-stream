@@ -1836,6 +1836,47 @@ export const swaggerDocument = {
           },
         },
       },
+    "/api/streams/{id}/cost-summary": {
+      get: {
+        summary: "Get Stream Cost Summary",
+        description: "Retrieves cost summary for a stream, including total claimed, total unclaimed, claim count, average claim amount, and total fees paid.",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "The unique ID of the stream.",
+            schema: { type: "string" },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Cost summary retrieved successfully.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    total_claimed: { type: "number", example: 500 },
+                    total_unclaimed: { type: "number", example: 500 },
+                    claim_count: { type: "integer", example: 5 },
+                    avg_claim_amount: { type: "number", example: 100 },
+                    total_fees_paid: { type: "number", example: 0 },
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            description: "Stream not found.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
     },
   },
 };
