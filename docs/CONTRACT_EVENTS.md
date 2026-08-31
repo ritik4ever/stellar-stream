@@ -122,7 +122,7 @@ The claim reverts with `ClaimTooFrequent`.
 ### StreamCanceled
 
 **Topic:** `("Stream", "Canceled")`  
-**Triggered by:** `cancel()`  
+**Triggered by:** `cancel()`, `cancel_batch()`  
 **Actor:** The sender who canceled the stream.
 
 | Field             | Type      | Description                                                        |

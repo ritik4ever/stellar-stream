@@ -108,6 +108,7 @@ pub struct Stream {
     pub canceled: bool,
     pub paused: bool,
     pub pause_started_at: Option<u64>,
+    pub cliff_seconds: u64,
 
     pub metadata: Option<Map<String, String>>,
 }
@@ -218,6 +219,18 @@ pub struct StreamCanceled {
     pub sender: Address,
     /// Amount refunded to the sender (unvested tokens).
     pub refunded_amount: i128,
+}
+
+/// Result of a `cancel_batch` call: the stream IDs that were successfully
+/// canceled plus the stream IDs that could not be canceled (not found, wrong
+/// sender, or already canceled).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CancelBatchResult {
+    /// Stream IDs successfully canceled by this call.
+    pub canceled: Vec<u64>,
+    /// Stream IDs that could not be canceled (invalid / already canceled).
+    pub failed: Vec<u64>,
 }
 
 /// Emitted when a sender pauses an active stream.
@@ -385,6 +398,7 @@ impl StellarStreamContract {
             canceled: false,
             paused: false,
             pause_started_at: None,
+            cliff_seconds: 0,
 
             metadata: metadata.clone(),
         };
@@ -490,6 +504,7 @@ impl StellarStreamContract {
                 canceled: false,
                 paused: false,
                 pause_started_at: None,
+                cliff_seconds: 0,
                 metadata: None,
             };
 
@@ -705,62 +720,45 @@ impl StellarStreamContract {
     }
 
     pub fn cancel(env: Env, stream_id: u64, sender: Address) {
-        let mut stream = read_stream(&env, stream_id);
-        if stream.sender != sender {
-            panic!("sender mismatch");
-        }
         sender.require_auth();
+        cancel_stream(&env, stream_id, &sender);
+    }
 
-        if stream.canceled {
-            return;
+    /// Cancels up to 20 streams in a single call.
+    ///
+    /// Streams that cannot be canceled (not found, owned by a different sender,
+    /// or already canceled) are skipped and reported in the `failed` list; the
+    /// remaining streams are canceled normally. The call never reverts for
+    /// individual stream failures. Requesting more than 20 stream IDs reverts
+    /// with `too many stream ids`.
+    ///
+    /// Gas: each stream costs roughly the same as a single `cancel()` call, so
+    /// a full 20-stream batch costs about 20x a single cancel. See
+    /// `BENCHMARKS.md` for measured costs.
+    pub fn cancel_batch(env: Env, stream_ids: Vec<u64>, sender: Address) -> CancelBatchResult {
+        sender.require_auth();
+        if stream_ids.len() > 20 {
+            panic!("too many stream ids");
         }
 
-        let now = env.ledger().timestamp();
-        stream.canceled = true;
+        let mut canceled = Vec::new(&env);
+        let mut failed = Vec::new(&env);
 
-        let vested = vested_amount(&stream, now);
-        let sender_refund = stream.total_amount - vested;
-
-        let min_end = if now > stream.start_time {
-            now
-        } else {
-            stream.start_time
-        };
-        if min_end < stream.end_time {
-            stream.end_time = min_end;
-            stream.total_amount = vested;
+        for stream_id in stream_ids.iter() {
+            let stream_opt: Option<Stream> =
+                env.storage().persistent().get(&DataKey::Stream(stream_id));
+            match stream_opt {
+                Some(stream) if stream.sender == sender && !stream.canceled => {
+                    cancel_stream(&env, stream_id, &sender);
+                    canceled.push_back(stream_id);
+                }
+                _ => {
+                    failed.push_back(stream_id);
+                }
+            }
         }
 
-        if sender_refund > 0 {
-            let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
-            let actual_token = if is_native {
-                env.storage()
-                    .instance()
-                    .get(&DataKey::NativeToken)
-                    .unwrap_or_else(|| panic!("not initialized"))
-            } else {
-                stream.token.clone()
-            };
-            let token_client = TokenClient::new(&env, &actual_token);
-            let contract_address = env.current_contract_address();
-
-            token_client.transfer(&contract_address, &sender, &sender_refund);
-        }
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::Stream(stream_id), &stream);
-
-        env.events().publish(
-            (symbol_short!("Stream"), symbol_short!("Canceled")),
-            StreamCanceled {
-                stream_id,
-                actor: sender.clone(),
-                timestamp: now,
-                sender,
-                refunded_amount: sender_refund,
-            },
-        );
+        CancelBatchResult { canceled, failed }
     }
 
     pub fn transfer_stream(env: Env, stream_id: u64, new_recipient: Address) {
@@ -1032,6 +1030,71 @@ impl StellarStreamContract {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Cancels a single stream on behalf of `sender`.
+///
+/// Returns `true` if the stream was canceled by this call, `false` if it was
+/// already canceled. Panics if the caller is not the stream's sender or the
+/// stream does not exist.
+fn cancel_stream(env: &Env, stream_id: u64, sender: &Address) -> bool {
+    let mut stream = read_stream(env, stream_id);
+    if stream.sender != *sender {
+        panic!("sender mismatch");
+    }
+
+    if stream.canceled {
+        return false;
+    }
+
+    let now = env.ledger().timestamp();
+    stream.canceled = true;
+
+    let vested = vested_amount(&stream, now);
+    let sender_refund = stream.total_amount - vested;
+
+    let min_end = if now > stream.start_time {
+        now
+    } else {
+        stream.start_time
+    };
+    if min_end < stream.end_time {
+        stream.end_time = min_end;
+        stream.total_amount = vested;
+    }
+
+    if sender_refund > 0 {
+        let is_native = stream.token.to_string() == String::from_str(env, NATIVE_SENTINEL);
+        let actual_token = if is_native {
+            env.storage()
+                .instance()
+                .get(&DataKey::NativeToken)
+                .unwrap_or_else(|| panic!("not initialized"))
+        } else {
+            stream.token.clone()
+        };
+        let token_client = TokenClient::new(env, &actual_token);
+        let contract_address = env.current_contract_address();
+
+        token_client.transfer(&contract_address, sender, &sender_refund);
+    }
+
+    env.storage()
+        .persistent()
+        .set(&DataKey::Stream(stream_id), &stream);
+
+    env.events().publish(
+        (symbol_short!("Stream"), symbol_short!("Canceled")),
+        StreamCanceled {
+            stream_id,
+            actor: sender.clone(),
+            timestamp: now,
+            sender: sender.clone(),
+            refunded_amount: sender_refund,
+        },
+    );
+
+    true
+}
 
 fn read_stream(env: &Env, stream_id: u64) -> Stream {
     env.storage()

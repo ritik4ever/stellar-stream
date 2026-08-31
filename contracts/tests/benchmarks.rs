@@ -129,6 +129,27 @@ fn run_all_benchmarks() {
         client.cancel(&stream_id_for_cancel, &sender);
     });
 
+    // Batch cancel: create 5 streams owned by the sender, then cancel them
+    // all in a single cancel_batch call.
+    let mut batch_ids = Vec::new(&env);
+    for _ in 0..5 {
+        let id = client.create_stream(
+            &sender,
+            &recipient1,
+            &token_address,
+            &amount,
+            &start_time,
+            &end_time,
+            &cliff_seconds,
+            &None,
+        );
+        batch_ids.push_back(id);
+    }
+
+    measure_cost(&env, "cancel_batch(5)", || {
+        client.cancel_batch(&batch_ids, &sender);
+    });
+
     let mut split_recipients = Vec::new(&env);
     split_recipients.push_back((recipient1.clone(), 5_000_000_i128));
     split_recipients.push_back((recipient2.clone(), 5_000_000_i128));
