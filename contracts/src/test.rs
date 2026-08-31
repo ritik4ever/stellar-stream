@@ -3782,3 +3782,482 @@ fn test_set_native_token_rejects_non_admin() {
     client.initialize(&admin, &native_token, &soroban_sdk::vec![&env]);
     client.set_native_token(&outsider, &replacement);
 }
+
+// ---------------------------------------------------------------------------
+// SPLIT STREAM TESTS (#671)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_split_stream_basic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(5000);
+    ratios.push_back(5000);
+    let (id_a, id_b) = client.split_stream(&stream_id, &sender, &ratios);
+
+    let original = client.get_stream(&stream_id);
+    assert!(original.canceled);
+    assert_eq!(original.total_amount, 500);
+
+    let child_a = client.get_stream(&id_a);
+    let child_b = client.get_stream(&id_b);
+    assert_eq!(child_a.total_amount, 250);
+    assert_eq!(child_b.total_amount, 250);
+    assert_eq!(child_a.recipient, recipient);
+    assert_eq!(child_b.recipient, recipient);
+    assert_eq!(child_a.sender, sender);
+    assert_eq!(child_b.sender, sender);
+    assert_eq!(child_a.token, token);
+    assert_eq!(child_b.token, token);
+}
+
+#[test]
+fn test_split_stream_uneven_ratios() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(3000);
+    ratios.push_back(7000);
+    let (id_a, id_b) = client.split_stream(&stream_id, &sender, &ratios);
+
+    let child_a = client.get_stream(&id_a);
+    let child_b = client.get_stream(&id_b);
+    assert_eq!(child_a.total_amount, 150);
+    assert_eq!(child_b.total_amount, 350);
+}
+
+#[test]
+fn test_split_stream_inherits_remaining_duration() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1000, &100, &500, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 300);
+
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(5000);
+    ratios.push_back(5000);
+    let (id_a, id_b) = client.split_stream(&stream_id, &sender, &ratios);
+
+    let child_a = client.get_stream(&id_a);
+    let child_b = client.get_stream(&id_b);
+
+    assert_eq!(child_a.start_time, 300);
+    assert_eq!(child_a.end_time, 500);
+    assert_eq!(child_b.start_time, 300);
+    assert_eq!(child_b.end_time, 500);
+}
+
+#[test]
+fn test_split_stream_claimable_after_split() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(5000);
+    ratios.push_back(5000);
+    let (id_a, id_b) = client.split_stream(&stream_id, &sender, &ratios);
+
+    env.ledger().with_mut(|l| l.timestamp = 750);
+    assert_eq!(client.claimable(&id_a, &750), 125);
+    assert_eq!(client.claimable(&id_b, &750), 125);
+
+    assert_eq!(client.claimable(&id_a, &1000), 250);
+    assert_eq!(client.claimable(&id_b, &1000), 250);
+}
+
+#[test]
+fn test_split_stream_already_claimed_excluded() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+    let token_client = token::Client::new(&env, &token);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.claim(&stream_id, &recipient, &300);
+    assert_eq!(token_client.balance(&recipient), 300);
+
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(5000);
+    ratios.push_back(5000);
+    let (id_a, id_b) = client.split_stream(&stream_id, &sender, &ratios);
+
+    let child_a = client.get_stream(&id_a);
+    let child_b = client.get_stream(&id_b);
+    assert_eq!(child_a.total_amount, 250);
+    assert_eq!(child_b.total_amount, 250);
+    assert_eq!(child_a.claimed_amount, 0);
+    assert_eq!(child_b.claimed_amount, 0);
+}
+
+#[test]
+fn test_split_stream_token_conservation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+    let token_client = token::Client::new(&env, &token);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(5000);
+    ratios.push_back(5000);
+    let (id_a, id_b) = client.split_stream(&stream_id, &sender, &ratios);
+
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    client.claim(&id_a, &recipient, &250);
+    client.claim(&id_b, &recipient, &250);
+
+    assert_eq!(token_client.balance(&recipient), 500);
+}
+
+#[test]
+fn test_split_stream_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(5000);
+    ratios.push_back(5000);
+    let (id_a, id_b) = client.split_stream(&stream_id, &sender, &ratios);
+
+    let last_event = env.events().all().last().unwrap();
+    assert_eq!(last_event.0, contract_id);
+    assert_eq!(
+        last_event.1,
+        (symbol_short!("Stream"), symbol_short!("Split")).into_val(&env)
+    );
+
+    let event_data: StreamSplit = last_event.2.into_val(&env);
+    assert_eq!(event_data.original_id, stream_id);
+    assert_eq!(event_data.new_ids.len(), 2);
+    assert_eq!(event_data.new_ids.get(0).unwrap(), id_a);
+    assert_eq!(event_data.new_ids.get(1).unwrap(), id_b);
+    assert_eq!(event_data.split_ratios_bps.len(), 2);
+    assert_eq!(event_data.split_ratios_bps.get(0).unwrap(), 5000);
+    assert_eq!(event_data.split_ratios_bps.get(1).unwrap(), 5000);
+}
+
+#[test]
+#[should_panic(expected = "split ratios must sum to 10000 bps")]
+fn test_split_stream_ratios_not_10000_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 500);
+
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(4000);
+    ratios.push_back(4000);
+    client.split_stream(&stream_id, &sender, &ratios);
+}
+
+#[test]
+#[should_panic(expected = "sender mismatch")]
+fn test_split_stream_wrong_sender_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let wrong_sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 500);
+
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(5000);
+    ratios.push_back(5000);
+    client.split_stream(&stream_id, &wrong_sender, &ratios);
+}
+
+#[test]
+#[should_panic(expected = "stream already canceled")]
+fn test_split_stream_canceled_stream_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.cancel(&stream_id, &sender);
+
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(5000);
+    ratios.push_back(5000);
+    client.split_stream(&stream_id, &sender, &ratios);
+}
+
+#[test]
+#[should_panic(expected = "stream has no remaining duration to split")]
+fn test_split_stream_at_end_of_stream_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(5000);
+    ratios.push_back(5000);
+    client.split_stream(&stream_id, &sender, &ratios);
+}
+
+#[test]
+#[should_panic(expected = "split ratios must be non-zero")]
+fn test_split_stream_zero_ratio_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 500);
+
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(0);
+    ratios.push_back(10000);
+    client.split_stream(&stream_id, &sender, &ratios);
+}
+
+/// Split at 50% elapsed -> verify both halves receive correct amounts.
+/// This is the acceptance criterion test from issue #671.
+#[test]
+fn test_split_stream_acceptance_split_at_50_percent_elapsed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+    let token_client = token::Client::new(&env, &token);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(5000);
+    ratios.push_back(5000);
+    let (id_a, id_b) = client.split_stream(&stream_id, &sender, &ratios);
+
+    let child_a = client.get_stream(&id_a);
+    let child_b = client.get_stream(&id_b);
+    assert_eq!(child_a.total_amount, 250);
+    assert_eq!(child_b.total_amount, 250);
+
+    env.ledger().with_mut(|l| l.timestamp = 750);
+    assert_eq!(client.claimable(&id_a, &750), 125);
+    assert_eq!(client.claimable(&id_b, &750), 125);
+
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    client.claim(&id_a, &recipient, &250);
+    client.claim(&id_b, &recipient, &250);
+
+    assert_eq!(token_client.balance(&recipient), 500);
+}
+
+/// Split at the very start (t=0) where no tokens are vested yet.
+#[test]
+fn test_split_stream_at_start_no_vesting() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 0);
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(6000);
+    ratios.push_back(4000);
+    let (id_a, id_b) = client.split_stream(&stream_id, &sender, &ratios);
+
+    let child_a = client.get_stream(&id_a);
+    let child_b = client.get_stream(&id_b);
+    assert_eq!(child_a.total_amount, 600);
+    assert_eq!(child_b.total_amount, 400);
+}
+
+/// Paused streams cannot be split.
+#[test]
+#[should_panic(expected = "cannot split a paused stream")]
+fn test_split_stream_paused_stream_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.pause_stream(&stream_id, &sender);
+
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(5000);
+    ratios.push_back(5000);
+    client.split_stream(&stream_id, &sender, &ratios);
+}
+
+#[test]
+#[should_panic(expected = "split_ratio_bps must have exactly 2 entries")]
+fn test_split_stream_wrong_ratio_count_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 500);
+
+    let mut ratios = Vec::new(&env);
+    ratios.push_back(5000);
+    client.split_stream(&stream_id, &sender, &ratios);
+}
