@@ -6,6 +6,8 @@ import { WalletButton } from "./components/WalletButton";
 import { useFreighter } from "./hooks/useFreighter";
 import { useTheme } from "./hooks/useTheme";
 import { DashboardPage } from "./pages/DashboardPage";
+import { Settings } from "./pages/Settings";
+import "./settings.css";
 
 const SenderDashboard = lazy(() =>
   import("./components/SenderDashboard").then((m) => ({ default: m.SenderDashboard })),
@@ -22,7 +24,7 @@ function AppContent() {
 
   useEffect(() => {
     const path = location.pathname;
-    if (path !== "/" && path !== "/sender" && path !== "/recipient") {
+    if (path !== "/" && path !== "/sender" && path !== "/recipient" && path !== "/settings") {
       navigate("/");
     }
   }, [location.pathname, navigate]);
@@ -32,7 +34,9 @@ function AppContent() {
       ? "sender"
       : location.pathname === "/recipient"
         ? "recipient"
-        : "dashboard";
+        : location.pathname === "/settings"
+          ? "settings"
+          : "dashboard";
 
   return (
     <div className="app-shell">
@@ -75,6 +79,13 @@ function AppContent() {
         >
           Recipient dashboard
         </button>
+        <button
+          type="button"
+          className={`app-nav-link ${currentTab === "settings" ? "app-nav-link--active" : ""}`}
+          onClick={() => navigate("/settings")}
+        >
+          Settings
+        </button>
       </nav>
 
       <OfflineBanner />
@@ -90,6 +101,7 @@ function AppContent() {
             path="/recipient"
             element={<RecipientDashboard recipientAddress={wallet.address} />}
           />
+          <Route path="/settings" element={<Settings />} />
         </Routes>
       </Suspense>
     </div>
