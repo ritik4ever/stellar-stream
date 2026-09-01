@@ -6,8 +6,31 @@ use errors::ContractError;
 pub mod dao;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
-    Map, String, Vec,
+    IntoVal, Map, String, Symbol, Vec,
 };
+use crate::errors::ContractError;
+
+#[contract]
+pub struct EscrowVestingContract;
+
+#[contractimpl]
+impl EscrowVestingContract {
+    /// Claims available vested tokens for the recipient and transfers real tokens.
+    ///
+    /// # Parameters
+    /// * `env` - The execution environment.
+    /// * `recipient` - The account receiving the vested tokens (must authenticate).
+    /// * `token` - The SEP-41 token contract address.
+    ///
+    /// # Returns
+    /// * `Result<i128, ContractError>` - The actual amount of tokens transferred.
+    pub fn claim(env: Env, recipient: Address, token: Address) -> Result<i128, ContractError> {
+        // 1. Authenticate recipient
+        recipient.require_auth();
+
+        // 2. Calculate vested and already-claimed amounts from storage
+        let total_vested: i128 = env.storage().instance().get(&Symbol::new(&env, "total_vested")).unwrap_or(0);
+        let already_claimed: i128 = env.storage().instance().get(&Symbol::new(&env, "claimed_amount")).unwrap_or(0);
 
 // ---------------------------------------------------------------------------
 // Legacy escrow vesting contract
@@ -108,6 +131,7 @@ pub struct Stream {
     pub canceled: bool,
     pub paused: bool,
     pub pause_started_at: Option<u64>,
+    pub vested_before_topup: i128,
 
     pub metadata: Option<Map<String, String>>,
 }
@@ -276,6 +300,17 @@ pub struct StreamTransferred {
     pub new_recipient: Address,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamToppedUp {
+    pub stream_id: u64,
+    pub actor: Address,
+    pub timestamp: u64,
+    pub additional_amount: i128,
+    pub old_total_amount: i128,
+    pub new_total_amount: i128,
+}
+
 #[contract]
 pub struct StellarStreamContract;
 
@@ -385,6 +420,7 @@ impl StellarStreamContract {
             canceled: false,
             paused: false,
             pause_started_at: None,
+            vested_before_topup: 0,
 
             metadata: metadata.clone(),
         };
@@ -490,6 +526,7 @@ impl StellarStreamContract {
                 canceled: false,
                 paused: false,
                 pause_started_at: None,
+                vested_before_topup: 0,
                 metadata: None,
             };
 
@@ -702,6 +739,53 @@ impl StellarStreamContract {
         }
 
         Ok(amount)
+    }
+
+    pub fn topup_stream(env: Env, stream_id: u64, sender: Address, additional_amount: i128) {
+        if additional_amount <= 0 {
+            panic!("additional_amount must be positive");
+        }
+        let mut stream = read_stream(&env, stream_id);
+        if stream.sender != sender {
+            panic!("sender mismatch");
+        }
+        sender.require_auth();
+
+        let now = env.ledger().timestamp();
+        if stream.canceled || stream.claimed_amount >= stream.total_amount || now >= stream.end_time {
+            panic!("stream completed");
+        }
+
+        let vested = vested_amount(&stream, now);
+        let old_total_amount = stream.total_amount;
+        let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
+        let actual_token = if is_native {
+            env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+        } else {
+            stream.token.clone()
+        };
+        let token_client = TokenClient::new(&env, &actual_token);
+        if token_client.balance(&sender) < additional_amount {
+            panic!("insufficient sender balance");
+        }
+        token_client.transfer(&sender, &env.current_contract_address(), &additional_amount);
+
+        stream.vested_before_topup = vested;
+        stream.start_time = now;
+        stream.total_amount = old_total_amount.checked_add(additional_amount).unwrap();
+        env.storage().persistent().set(&DataKey::Stream(stream_id), &stream);
+
+        env.events().publish(
+            (symbol_short!("Stream"), symbol_short!("ToppedUp")),
+            StreamToppedUp {
+                stream_id,
+                actor: sender,
+                timestamp: now,
+                additional_amount,
+                old_total_amount,
+                new_total_amount: stream.total_amount,
+            },
+        );
     }
 
     pub fn cancel(env: Env, stream_id: u64, sender: Address) {
@@ -1064,7 +1148,8 @@ fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
         return 0;
     }
 
-    stream.total_amount * (elapsed as i128) / (total_duration as i128)
+    let scheduled_amount = stream.total_amount - stream.vested_before_topup;
+    stream.vested_before_topup + scheduled_amount * (elapsed as i128) / (total_duration as i128)
 }
 
 #[cfg(test)]
