@@ -8,6 +8,9 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
     Map, String, Vec,
 };
+ use crate::errors::ContractError;
+mod escrow;
+use escrow::{EscrowModule, ConditionType, ReleaseCondition, EscrowTimeoutConfig};
 
 // ---------------------------------------------------------------------------
 // Legacy escrow vesting contract
@@ -17,9 +20,8 @@ use soroban_sdk::{
 // It is only compiled in test builds: the two contracts both export a `claim`
 // WASM symbol, which would collide in the release cdylib.
 // ---------------------------------------------------------------------------
-
 #[cfg(test)]
-pub mod escrow {
+pub mod escrow_vesting_legacy {
     use super::*;
     use crate::errors::ContractError;
     use soroban_sdk::Symbol;
@@ -29,20 +31,8 @@ pub mod escrow {
 
     #[contractimpl]
     impl EscrowVestingContract {
-        /// Claims available vested tokens for the recipient and transfers real tokens.
-        ///
-        /// # Parameters
-        /// * `env` - The execution environment.
-        /// * `recipient` - The account receiving the vested tokens (must authenticate).
-        /// * `token` - The SEP-41 token contract address.
-        ///
-        /// # Returns
-        /// * `Result<i128, ContractError>` - The actual amount of tokens transferred.
         pub fn claim(env: Env, recipient: Address, token: Address) -> Result<i128, ContractError> {
-            // 1. Authenticate recipient
             recipient.require_auth();
-
-            // 2. Calculate vested and already-claimed amounts from storage
             let total_vested: i128 = env
                 .storage()
                 .instance()
@@ -53,37 +43,26 @@ pub mod escrow {
                 .instance()
                 .get(&Symbol::new(&env, "claimed_amount"))
                 .unwrap_or(0);
-
             let claimable_amount = total_vested.checked_sub(already_claimed).unwrap_or(0);
-
-            // 3. Validate claimable amount - revert with InsufficientVested if 0 or negative
             if claimable_amount <= 0 {
                 return Err(ContractError::InsufficientVested);
             }
-
-            // 4. Update contract storage accounting
             let new_claimed_total = already_claimed.checked_add(claimable_amount).unwrap();
             env.storage()
                 .instance()
                 .set(&Symbol::new(&env, "claimed_amount"), &new_claimed_total);
-
-            // 5. Transfer tokens via Soroban SEP-41 token client
             let token_client = soroban_sdk::token::Client::new(&env, &token);
             let contract_address = env.current_contract_address();
-
             token_client.transfer(&contract_address, &recipient, &claimable_amount);
-
-            // 6. Emit Claimed event
             env.events().publish(
                 (symbol_short!("Claimed"), recipient.clone()),
                 claimable_amount,
             );
-
-            // 7. Return actual transferred amount
             Ok(claimable_amount)
         }
     }
 }
+ main
 
 const NATIVE_SENTINEL: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 
@@ -1026,6 +1005,235 @@ impl StellarStreamContract {
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+    }
+
+    // -----------------------------------------------------------------------
+    // Escrow Functions
+    // -----------------------------------------------------------------------
+
+    /// Create a new escrow with conditional release conditions
+    pub fn create_escrow(
+        env: Env,
+        sender: Address,
+        recipient: Address,
+        token: Address,
+        total_amount: i128,
+        oracle: Address,
+        condition_types: Vec<u32>, // 0=Milestone, 1=KYC, 2=AdminWhitelist
+        timeout_seconds: u64,
+        metadata: Option<Map<String, String>>,
+    ) -> u64 {
+        sender.require_auth();
+
+        // Validate amount
+        if total_amount <= 0 {
+            panic!("total_amount must be positive");
+        }
+
+        // Validate token
+        let is_native = token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
+        if !is_native {
+            let allowed_tokens: Vec<Address> = env.storage().instance().get(&DataKey::AllowedTokens).unwrap_or_else(|| Vec::new(&env));
+            #[cfg(not(any(test, feature = "testutils")))]
+            if !allowed_tokens.contains(&token) {
+                panic!("ContractError::TokenNotAllowed");
+            }
+            #[cfg(any(test, feature = "testutils"))]
+            if !allowed_tokens.is_empty() && !allowed_tokens.contains(&token) {
+                panic!("ContractError::TokenNotAllowed");
+            }
+        }
+
+        let actual_token = if is_native {
+            env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+        } else {
+            token.clone()
+        };
+
+        // Check sender balance
+        let token_client = TokenClient::new(&env, &actual_token);
+        let sender_balance = token_client.balance(&sender);
+        if sender_balance < total_amount {
+            panic!("insufficient sender balance");
+        }
+
+        // Transfer tokens to contract
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&sender, &contract_address, &total_amount);
+
+        // Convert condition type indices to ConditionType enum
+        let mut conditions = Vec::new(&env);
+        for condition_type_idx in condition_types.iter() {
+            let condition_type = match condition_type_idx {
+                0 => ConditionType::Milestone,
+                1 => ConditionType::Kyc,
+                2 => ConditionType::AdminWhitelist,
+                _ => panic!("invalid condition type"),
+            };
+
+            let condition = ReleaseCondition {
+                condition_type,
+                satisfied: false,
+                satisfied_at: 0,
+                metadata: Map::new(&env),
+            };
+            conditions.push_back(condition);
+        }
+
+        // Create timeout config
+        let timeout_config = if timeout_seconds == 0 {
+            EscrowTimeoutConfig::default()
+        } else {
+            EscrowTimeoutConfig {
+                timeout_seconds,
+                emergency_release_enabled: true,
+            }
+        };
+
+        // Create escrow
+        let metadata_map = metadata.unwrap_or_else(|| Map::new(&env));
+        let escrow_id = EscrowModule::create_escrow(
+            &env,
+            sender.clone(),
+            recipient.clone(),
+            token.clone(),
+            total_amount,
+            oracle.clone(),
+            conditions,
+            timeout_config,
+            metadata_map,
+        );
+
+        // Emit event
+        let now = env.ledger().timestamp();
+        env.events().publish(
+            (symbol_short!("Escrow"), symbol_short!("Created")),
+            escrow::EscrowCreated {
+                escrow_id,
+                actor: sender.clone(),
+                timestamp: now,
+                sender: sender.clone(),
+                recipient,
+                token,
+                total_amount,
+                oracle,
+            },
+        );
+
+        escrow_id
+    }
+
+    /// Get escrow details
+    pub fn get_escrow(env: Env, escrow_id: u64) -> escrow::Escrow {
+        EscrowModule::get_escrow(&env, escrow_id)
+    }
+
+    /// Satisfy a release condition (oracle only)
+    pub fn satisfy_condition(env: Env, escrow_id: u64, condition_index: u32, oracle: Address) -> Result<(), ContractError> {
+        let result = EscrowModule::satisfy_condition(&env, escrow_id, condition_index, oracle.clone());
+        
+        if result.is_ok() {
+            // Emit event
+            let escrow = EscrowModule::get_escrow(&env, escrow_id);
+            let condition = escrow.conditions.get(condition_index).unwrap();
+            let now = env.ledger().timestamp();
+            env.events().publish(
+                (symbol_short!("Escrow"), symbol_short!("CondSat")),
+                escrow::ConditionSatisfied {
+                    escrow_id,
+                    condition_index,
+                    condition_type: condition.condition_type,
+                    actor: oracle,
+                    timestamp: now,
+                },
+            );
+        }
+
+        result
+    }
+
+    /// Release funds when all conditions are satisfied
+    pub fn release_escrow_funds(env: Env, escrow_id: u64, recipient: Address) -> Result<i128, ContractError> {
+        let result = EscrowModule::release_funds(&env, escrow_id, recipient.clone());
+        
+        if result.is_ok() {
+            let amount = result.unwrap();
+            let now = env.ledger().timestamp();
+            env.events().publish(
+                (symbol_short!("Escrow"), symbol_short!("Released")),
+                escrow::EscrowReleased {
+                    escrow_id,
+                    actor: recipient.clone(),
+                    timestamp: now,
+                    recipient,
+                    amount,
+                },
+            );
+            return Ok(amount);
+        }
+        
+        result
+    }
+
+    /// Emergency release by admin after timeout
+    pub fn emergency_release_escrow(env: Env, escrow_id: u64, admin: Address) -> Result<i128, ContractError> {
+        let result = EscrowModule::emergency_release(&env, escrow_id, admin.clone());
+        
+        if result.is_ok() {
+            let amount = result.unwrap();
+            let escrow = EscrowModule::get_escrow(&env, escrow_id);
+            let now = env.ledger().timestamp();
+            env.events().publish(
+                (symbol_short!("Escrow"), symbol_short!("EmgRel")),
+                escrow::EmergencyReleaseExecuted {
+                    escrow_id,
+                    actor: admin,
+                    timestamp: now,
+                    recipient: escrow.recipient,
+                    amount,
+                },
+            );
+            return Ok(amount);
+        }
+        
+        result
+    }
+
+    /// Cancel escrow and refund sender
+    pub fn cancel_escrow(env: Env, escrow_id: u64, sender: Address) -> Result<i128, ContractError> {
+        let result = EscrowModule::cancel_escrow(&env, escrow_id, sender.clone());
+        
+        if result.is_ok() {
+            let amount = result.unwrap();
+            let now = env.ledger().timestamp();
+            env.events().publish(
+                (symbol_short!("Escrow"), symbol_short!("Canceled")),
+                escrow::EscrowCanceled {
+                    escrow_id,
+                    actor: sender,
+                    timestamp: now,
+                    refunded_amount: amount,
+                },
+            );
+            return Ok(amount);
+        }
+        
+        result
+    }
+
+    /// Get releasable amount for an escrow
+    pub fn get_escrow_releasable(env: Env, escrow_id: u64) -> i128 {
+        EscrowModule::get_releasable_amount(&env, escrow_id)
+    }
+
+    /// Get conditions status for an escrow
+    pub fn get_escrow_conditions(env: Env, escrow_id: u64) -> Vec<ReleaseCondition> {
+        EscrowModule::get_conditions_status(&env, escrow_id)
+    }
+
+    /// Check if timeout has expired for an escrow
+    pub fn is_escrow_timeout_expired(env: Env, escrow_id: u64) -> bool {
+        EscrowModule::is_timeout_expired(&env, escrow_id)
     }
 }
 
