@@ -16,6 +16,7 @@ import {
   ApiError,
   cancelStream,
   createStream,
+  fetchStats,
   getWebSocketUrl,
   listOpenIssues,
   listStreams,
@@ -25,6 +26,19 @@ import {
 } from "../services/api";
 import { ListStreamsFilters } from "../services/api";
 import { OpenIssue, Stream } from "../types/stream";
+
+interface PlatformStats {
+  total_streams: number;
+  active_streams: number;
+  completed_streams: number;
+  canceled_streams: number;
+  total_vested_by_asset: {
+    USDC: number;
+    XLM: number;
+  };
+  unique_senders: number;
+  unique_recipients: number;
+}
 
 export interface DashboardPageProps {
   wallet?: FreighterState;
@@ -38,6 +52,7 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
   const [detailStreamId, setDetailStreamId] = useState<string | null>(null);
   const [streams, setStreams] = useState<Stream[]>([]);
   const [issues, setIssues] = useState<OpenIssue[]>([]);
+  const [platformStats, setPlatformStats] = useState<PlatformStats | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [editingStream, setEditingStream] = useState<{
     stream: Stream;
@@ -49,14 +64,15 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
   const CREATE_STREAM_SECTION_ID = "create-stream-section";
 
   const scrollToCreateStream = useCallback(() => {
-    document.getElementById(CREATE_STREAM_SECTION_ID)?.scrollIntoView({ behavior: "smooth" });
+    document
+      .getElementById(CREATE_STREAM_SECTION_ID)
+      ?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
   const { filters, filteredStreams, setFilter } = useStreamFilter(streams);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-
   const wsUrl = getWebSocketUrl();
   const { lastMessage } = useWebSocket<{
     eventType?: string;
@@ -68,21 +84,15 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
   }>(wsUrl);
 
   const metricsHistory = useMetricsHistory("7d");
-
   const metrics = useMemo(
-    () => {
-      const active = streams.filter((stream) => stream.progress.status === "active").length;
-      const completed = streams.filter((stream) => stream.progress.status === "completed").length;
-      const vested = streams.reduce((sum, stream) => sum + stream.progress.vestedAmount, 0);
-
-      return {
-        total: totalUnfilteredCount,
-        active,
-        completed,
-        vested,
-      };
-    },
-    [streams, totalUnfilteredCount],
+    () => ({
+      total: platformStats?.total_streams ?? totalUnfilteredCount,
+      active: platformStats?.active_streams ?? 0,
+      completed: platformStats?.completed_streams ?? 0,
+      vestedUSDC: platformStats?.total_vested_by_asset.USDC ?? 0,
+      vestedXLM: platformStats?.total_vested_by_asset.XLM ?? 0,
+    }),
+    [platformStats, totalUnfilteredCount],
   );
 
   const apiFilters: ListStreamsFilters = useMemo(
@@ -108,7 +118,9 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
     [filters],
   );
 
-  async function refreshStreams(currentFilters: ListStreamsFilters): Promise<void> {
+  async function refreshStreams(
+    currentFilters: ListStreamsFilters,
+  ): Promise<void> {
     const result = await listStreams({ ...currentFilters, limit: 20 });
     setStreams(result.data);
     setHasMore(result.page * result.limit < result.total);
@@ -120,7 +132,11 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
     setLoadingMore(true);
     try {
       const nextPage = currentPage + 1;
-      const result = await listStreams({ ...apiFilters, page: nextPage, limit: 20 });
+      const result = await listStreams({
+        ...apiFilters,
+        page: nextPage,
+        limit: 20,
+      });
       setStreams((prev) => [...prev, ...result.data]);
       setHasMore(result.page * result.limit < result.total);
       setCurrentPage(result.page);
@@ -138,8 +154,18 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
     }
   }
 
+  async function refreshPlatformStats(): Promise<void> {
+    try {
+      const stats = (await fetchStats()) as unknown as PlatformStats;
+      setPlatformStats(stats);
+    } catch {
+      // Keep the dashboard usable if the public stats endpoint is unavailable.
+    }
+  }
+
   useEffect(() => {
     void refreshUnfilteredCount();
+    void refreshPlatformStats();
   }, []);
 
   useEffect(() => {
@@ -177,8 +203,11 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
                 ...stream,
                 progress: {
                   ...stream.progress,
-                  vestedAmount: lastMessage.vestedAmount ?? stream.progress.vestedAmount,
-                  percentComplete: lastMessage.percentComplete ?? stream.progress.percentComplete,
+                  vestedAmount:
+                    lastMessage.vestedAmount ?? stream.progress.vestedAmount,
+                  percentComplete:
+                    lastMessage.percentComplete ??
+                    stream.progress.percentComplete,
                 },
               }
             : stream,
@@ -195,6 +224,7 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
 
       void refreshStreams(apiFilters);
       void refreshUnfilteredCount();
+      void refreshPlatformStats();
     }
   }, [apiFilters, lastMessage, showToast]);
 
@@ -206,6 +236,7 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
       await createStream(payload);
       await refreshStreams(apiFilters);
       void refreshUnfilteredCount();
+      void refreshPlatformStats();
       showToast("Stream created successfully", "success");
     } catch (err) {
       if (err instanceof ApiError) {
@@ -213,7 +244,9 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
         showToast(`Create failed (${err.statusCode}): ${err.message}`, "error");
         return;
       }
-      const fallback = err instanceof Error ? err.message : "Failed to create stream.";
+
+      const fallback =
+        err instanceof Error ? err.message : "Failed to create stream.";
       setFormError(fallback);
       showToast(fallback, "error");
     }
@@ -224,6 +257,7 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
       await cancelStream(streamId);
       await refreshStreams(apiFilters);
       void refreshUnfilteredCount();
+      void refreshPlatformStats();
       showToast("Stream canceled", "info");
     } catch (err) {
       if (err instanceof ApiError) {
@@ -243,13 +277,17 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
       await pauseStream(streamId);
       await refreshStreams(apiFilters);
       void refreshUnfilteredCount();
+      void refreshPlatformStats();
       showToast("Stream paused", "info");
     } catch (err) {
       if (err instanceof ApiError) {
         showToast(`Pause failed (${err.statusCode}): ${err.message}`, "error");
         return;
       }
-      showToast(err instanceof Error ? err.message : "Failed to pause the stream.", "error");
+      showToast(
+        err instanceof Error ? err.message : "Failed to pause the stream.",
+        "error",
+      );
     }
   }
 
@@ -258,20 +296,28 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
       await resumeStream(streamId);
       await refreshStreams(apiFilters);
       void refreshUnfilteredCount();
+      void refreshPlatformStats();
       showToast("Stream resumed", "success");
     } catch (err) {
       if (err instanceof ApiError) {
         showToast(`Resume failed (${err.statusCode}): ${err.message}`, "error");
         return;
       }
-      showToast(err instanceof Error ? err.message : "Failed to resume the stream.", "error");
+      showToast(
+        err instanceof Error ? err.message : "Failed to resume the stream.",
+        "error",
+      );
     }
   }
 
-  async function handleUpdateStartTime(streamId: string, nextStartAt: number) {
+  async function handleUpdateStartTime(
+    streamId: string,
+    nextStartAt: number,
+  ) {
     try {
       await updateStreamStartAt(streamId, nextStartAt);
       await refreshStreams(apiFilters);
+      void refreshPlatformStats();
       showToast("Start time updated", "success");
     } catch (err) {
       if (err instanceof ApiError) {
@@ -304,7 +350,9 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
         </article>
         <article className="metric-card">
           <span>Total Vested</span>
-          <strong>{metrics.vested}</strong>
+          <strong>
+            {metrics.vestedUSDC} USDC / {metrics.vestedXLM} XLM
+          </strong>
         </article>
       </section>
 
@@ -325,6 +373,7 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
             walletAddress={wallet.address}
           />
         </div>
+
         <StreamsTable
           streams={filteredStreams}
           filters={tableFilters}
@@ -333,8 +382,14 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
           onFiltersChange={(next) => {
             setFilter("status", next.status ?? defaultStreamFilters.status);
             setFilter("sender", next.sender ?? defaultStreamFilters.sender);
-            setFilter("recipient", next.recipient ?? defaultStreamFilters.recipient);
-            setFilter("assetCode", next.asset ?? defaultStreamFilters.assetCode);
+            setFilter(
+              "recipient",
+              next.recipient ?? defaultStreamFilters.recipient,
+            );
+            setFilter(
+              "assetCode",
+              next.asset ?? defaultStreamFilters.assetCode,
+            );
           }}
           setUrlFilters={setUrlFilters}
           onCancel={handleCancel}
