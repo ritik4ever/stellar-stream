@@ -480,6 +480,64 @@ export const swaggerDocument = {
         },
       },
     },
+    "/api/rate-limit-status": {
+      get: {
+        summary: "Get API rate limit status",
+        description:
+          "Returns the remaining read and mutation request counts for the calling IP address, " +
+          "along with the rate-limit reset time as a UNIX timestamp in seconds. " +
+          "This endpoint does not require authentication and does not count against the API rate limit.",
+        responses: {
+          "200": {
+            description: "Current rate limit status for the calling IP.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: [
+                    "read_remaining",
+                    "mutation_remaining",
+                    "reset_at",
+                  ],
+                  properties: {
+                    read_remaining: {
+                      type: "integer",
+                      minimum: 0,
+                      description:
+                        "Number of read requests remaining in the current rate-limit window.",
+                      example: 4999,
+                    },
+                    mutation_remaining: {
+                      type: "integer",
+                      minimum: 0,
+                      description:
+                        "Number of mutation requests remaining in the current rate-limit window.",
+                      example: 10,
+                    },
+                    reset_at: {
+                      type: "integer",
+                      description:
+                        "UNIX timestamp in seconds when the current rate-limit window resets.",
+                      example: 1716382060,
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "500": {
+            description: "Failed to retrieve rate limit status.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     "/api/auth/refresh": {
       post: {
         summary: "Refresh JWT",

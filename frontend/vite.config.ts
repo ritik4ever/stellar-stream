@@ -6,7 +6,6 @@ import { visualizer } from 'rollup-plugin-visualizer';
 /** Report-only first; set VITE_CSP_ENFORCE=true to send Content-Security-Policy instead. */
 const CSP_POLICY =
   "default-src 'self'; connect-src 'self' https://rpc-futurenet.stellar.org";
-
 const cspHeaderName =
   process.env.VITE_CSP_ENFORCE === 'true'
     ? 'Content-Security-Policy'
@@ -15,7 +14,6 @@ const cspHeaderName =
 const securityHeaders = {
   [cspHeaderName]: CSP_POLICY,
 };
-
 export default defineConfig(({ command, mode }) => ({
   plugins: [
     react(),
@@ -49,7 +47,7 @@ export default defineConfig(({ command, mode }) => ({
         });
       },
     },
-    ...(mode === 'analyze' ? [visualizer({ 
+    ...(mode === 'analyze' ? [visualizer({
       open: process.env.CI !== 'true',
       filename: 'dist/stats.html',
       gzipSize: true,
@@ -63,17 +61,29 @@ export default defineConfig(({ command, mode }) => ({
       : [
           VitePWA({
             registerType: 'autoUpdate',
+            includeAssets: [
+              'icon-192x192.png',
+              'icon-512x512.png',
+            ],
             workbox: {
+              cleanupOutdatedCaches: true,
+              clientsClaim: true,
+              skipWaiting: true,
+              navigateFallback: 'index.html',
               globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
               runtimeCaching: [
                 {
                   urlPattern: /^\/api\/streams/,
-                  handler: 'StaleWhileRevalidate',
+                  handler: 'NetworkFirst',
                   options: {
                     cacheName: 'stream-list-cache',
+                    networkTimeoutSeconds: 3,
+                    cacheableResponse: {
+                      statuses: [0, 200],
+                    },
                     expiration: {
                       maxEntries: 100,
-                      maxAgeSeconds: 60 * 5, // 5 minutes
+                      maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days
                     },
                     cacheKeyWillBeUsed: async ({ request }) => {
                       const url = new URL(request.url);
@@ -96,6 +106,7 @@ export default defineConfig(({ command, mode }) => ({
               ],
             },
             manifest: {
+              id: '/',
               name: 'Stellar Stream',
               short_name: 'StellarStream',
               description: 'Payment streaming platform for Stellar',
@@ -103,16 +114,25 @@ export default defineConfig(({ command, mode }) => ({
               background_color: '#ffffff',
               display: 'standalone',
               start_url: '/',
+              scope: '/',
               icons: [
                 {
                   src: '/icon-192x192.png',
                   sizes: '192x192',
                   type: 'image/png',
+                  purpose: 'any',
                 },
                 {
                   src: '/icon-512x512.png',
                   sizes: '512x512',
                   type: 'image/png',
+                  purpose: 'any',
+                },
+                {
+                  src: '/icon-512x512.png',
+                  sizes: '512x512',
+                  type: 'image/png',
+                  purpose: 'maskable',
                 },
               ],
             },
