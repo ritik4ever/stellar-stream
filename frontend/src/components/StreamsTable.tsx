@@ -10,7 +10,8 @@ import {
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Stream } from "../types/stream";
-import { getExportCsvUrl, ListStreamsFilters, cancelStream } from "../services/api";
+import { getExportCsvUrl, ListStreamsFilters, cancelStream, pauseStream, resumeStream } from "../services/api";
+import { BulkActionModal, type BulkActionType, type BulkActionState } from "./BulkActionModal";
 import { CopyableAddress } from "./CopyableAddress";
 import { StreamTimeline } from "./StreamTimeline";
 import { getHealthBadges } from "../utils/streamHealthBadges";
@@ -91,6 +92,18 @@ function formatDuration(seconds: number): string {
   return `${(seconds / 86400).toFixed(1)}d`;
 }
 
+const BULK_ACTION_FNS: Record<BulkActionType, (id: string) => Promise<unknown>> = {
+  cancel: cancelStream,
+  pause: pauseStream,
+  resume: resumeStream,
+};
+
+const BULK_ACTION_FNS: Record<BulkActionType, (id: string) => Promise<unknown>> = {
+  cancel: cancelStream,
+  pause: pauseStream,
+  resume: resumeStream,
+};
+
 export function StreamsTable({
   streams,
   loading = false,
@@ -163,8 +176,7 @@ export function StreamsTable({
 
   const [selectedStreamIds, setSelectedStreamIds] = useState<Set<string>>(new Set());
   const [expandedStreamId, setExpandedStreamId] = useState<string | null>(null);
-  const [isBulkCanceling, setIsBulkCanceling] = useState(false);
-  const [bulkCancelProgress, setBulkCancelProgress] = useState({ current: 0, total: 0 });
+  const [bulkActionState, setBulkActionState] = useState<BulkActionState | null>(null);
 
   const exportUrl = useMemo(() => getExportCsvUrl(filters as Record<string, string>), [filters]);
 
@@ -194,8 +206,10 @@ export function StreamsTable({
 
   const isStreamSelectable = useCallback((stream: Stream): boolean => {
     return (
-      stream.progress.status === "active" || stream.progress.status === "scheduled"
-    );
+      stream.progress.status === "active" ||
+      stream.progress.status === "scheduled" ||
+      stream.progress.status === "paused"
+    ); 
   }, []);
 
   const selectableStreams = useMemo(
@@ -244,26 +258,54 @@ export function StreamsTable({
     onOpenStream?.(id);
   }, [onOpenStream]);
 
-  const handleBulkCancel = useCallback(async () => {
-    const idsToCancel = Array.from(selectedStreamIds);
-    if (idsToCancel.length === 0) return;
+  /** Opens the confirmation modal for the given batch action; does not execute yet. */
+  const requestBulkAction = useCallback(
+    (action: BulkActionType) => {
+      const total = selectedStreamIds.size;
+      if (total === 0) return;
+      setBulkActionState({
+        action,
+        phase: "confirm",
+        progress: { current: 0, total },
+        failures: [],
+      });
+    },
+    [selectedStreamIds],
+  );
 
-    setIsBulkCanceling(true);
-    setBulkCancelProgress({ current: 0, total: idsToCancel.length });
+  /** Runs the confirmed batch action sequentially, one stream at a time. */
+  const runBulkAction = useCallback(async () => {
+    if (!bulkActionState) return;
+    const { action } = bulkActionState;
+    const ids = Array.from(selectedStreamIds);
+    const actionFn = BULK_ACTION_FNS[action];
+    const failures: { streamId: string; message: string }[] = [];
 
-    for (let i = 0; i < idsToCancel.length; i++) {
-      setBulkCancelProgress({ current: i + 1, total: idsToCancel.length });
+    setBulkActionState((prev) =>
+      prev ? { ...prev, phase: "running", progress: { current: 0, total: ids.length } } : prev,
+    );
+
+    for (let i = 0; i < ids.length; i++) {
+      setBulkActionState((prev) =>
+        prev ? { ...prev, progress: { current: i + 1, total: ids.length } } : prev,
+      );
       try {
-        await cancelStream(idsToCancel[i]);
+        await actionFn(ids[i]);
       } catch (error) {
-        console.error(`Failed to cancel stream ${idsToCancel[i]}:`, error);
+        const message = error instanceof Error ? error.message : "Request failed";
+        failures.push({ streamId: ids[i], message });
+        console.error(`Failed to ${action} stream ${ids[i]}:`, error);
       }
     }
 
+    setBulkActionState((prev) => (prev ? { ...prev, phase: "complete", failures } : prev));
     setSelectedStreamIds(new Set());
-    setIsBulkCanceling(false);
-    setBulkCancelProgress({ current: 0, total: 0 });
-  }, [selectedStreamIds]);
+    onRefreshStreams?.();
+  }, [bulkActionState, selectedStreamIds, onRefreshStreams]);
+
+  const closeBulkActionModal = useCallback(() => {
+    setBulkActionState((prev) => (prev && prev.phase === "running" ? prev : null));
+  }, []);
 
   useEffect(() => {
     setSelectedStreamIds((prev) => {
@@ -591,10 +633,17 @@ export function StreamsTable({
       {selectedStreamIds.size > 0 && (
         <BulkActionBar
           selectedCount={selectedStreamIds.size}
-          onCancel={handleBulkCancel}
-          isCanceling={isBulkCanceling}
-          progress={bulkCancelProgress}
-          buttonRef={cancelButtonRef}
+          onRequestAction={requestBulkAction}
+          isBusy={bulkActionState?.phase === "running"}
+          cancelButtonRef={cancelButtonRef}
+        />
+      )}
+
+      {bulkActionState && (
+        <BulkActionModal
+          state={bulkActionState}
+          onConfirm={runBulkAction}
+          onClose={closeBulkActionModal}
         />
       )}
     </>
@@ -603,18 +652,16 @@ export function StreamsTable({
 
 interface BulkActionBarProps {
   selectedCount: number;
-  onCancel: () => void;
-  isCanceling: boolean;
-  progress: { current: number; total: number };
-  buttonRef?: React.Ref<HTMLButtonElement>;
+  onRequestAction: (action: BulkActionType) => void;
+  isBusy?: boolean;
+  cancelButtonRef?: React.Ref<HTMLButtonElement>;
 }
 
 function BulkActionBar({
   selectedCount,
-  onCancel,
-  isCanceling,
-  progress,
-  buttonRef,        // ← add this line to the destructured props
+  onRequestAction,
+  isBusy,
+  cancelButtonRef,
 }: BulkActionBarProps) {
   return (
     <div className="bulk-action-bar">
@@ -623,14 +670,29 @@ function BulkActionBar({
           {selectedCount} stream{selectedCount !== 1 ? "s" : ""} selected
         </span>
         <button
-          ref={buttonRef}
-          className="bulk-action-bar__button"
-          onClick={onCancel}
-          disabled={isCanceling}
+          type="button"
+          className="bulk-action-bar__button bulk-action-bar__button--secondary"
+          onClick={() => onRequestAction("pause")}
+          disabled={isBusy}
         >
-          {isCanceling
-            ? `Canceling ${progress.current}/${progress.total}...`
-            : `Cancel ${selectedCount} Stream${selectedCount !== 1 ? "s" : ""}`}
+          Pause
+        </button>
+        <button
+          type="button"
+          className="bulk-action-bar__button bulk-action-bar__button--secondary"
+          onClick={() => onRequestAction("resume")}
+          disabled={isBusy}
+        >
+          Resume
+        </button>
+        <button
+          ref={cancelButtonRef}
+          type="button"
+          className="bulk-action-bar__button"
+          onClick={() => onRequestAction("cancel")}
+          disabled={isBusy}
+        >
+          {`Cancel ${selectedCount} Stream${selectedCount !== 1 ? "s" : ""}`}
         </button>
       </div>
     </div>
