@@ -31,7 +31,6 @@ jobs:
         working-directory: backend
         run: npm run build|| npx tsc --noEmit || echo "No build script found - typecheck passed"
 
-
   frontend-build:
     name: Frontend Build
     runs-on: ubuntu-latest
@@ -53,14 +52,3 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: npm run build
-
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-
