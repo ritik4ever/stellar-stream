@@ -145,6 +145,7 @@ const listStreamsQuerySchema = z.object({
       return value.split(",").map((code) => code.trim().toUpperCase());
     }),
   q: z.string().trim().optional(),
+  tag: z.string().trim().optional(),
   minAmount: z.coerce
     .number()
     .nonnegative("minAmount must be a non-negative number")
@@ -591,6 +592,12 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
   if (query.maxAmount !== undefined) {
     data = data.filter((stream) => stream.totalAmount <= query.maxAmount!);
   }
+  if (query.tag) {
+    const filterTag = query.tag.toLowerCase();
+    data = data.filter((stream) =>
+      stream.tags && stream.tags.some((t) => t.toLowerCase() === filterTag),
+    );
+  }
 
   const total = data.length;
   const page = query.page ?? PAGINATION_DEFAULT_PAGE;
@@ -897,6 +904,12 @@ app.get(
     if (query.maxAmount !== undefined) {
       data = data.filter((stream) => stream.totalAmount <= query.maxAmount!);
     }
+    if (query.tag) {
+      const filterTag = query.tag.toLowerCase();
+      data = data.filter((stream) =>
+        stream.tags && stream.tags.some((t) => t.toLowerCase() === filterTag),
+      );
+    }
 
     const hasPage = req.query.page !== undefined;
     const hasLimit = req.query.limit !== undefined;
@@ -980,6 +993,12 @@ app.get(
     }
     if (query.maxAmount !== undefined) {
       data = data.filter((stream) => stream.totalAmount <= query.maxAmount!);
+    }
+    if (query.tag) {
+      const filterTag = query.tag.toLowerCase();
+      data = data.filter((stream) =>
+        stream.tags && stream.tags.some((t) => t.toLowerCase() === filterTag),
+      );
     }
 
     const hasPage = req.query.page !== undefined;
@@ -1081,6 +1100,12 @@ app.get(
     if (query.maxAmount !== undefined) {
       data = data.filter((stream) => stream.totalAmount <= query.maxAmount!);
     }
+    if (query.tag) {
+      const filterTag = query.tag.toLowerCase();
+      data = data.filter((stream) =>
+        stream.tags && stream.tags.some((t) => t.toLowerCase() === filterTag),
+      );
+    }
 
     const hasPage = req.query.page !== undefined;
     const hasLimit = req.query.limit !== undefined;
@@ -1155,6 +1180,12 @@ app.get(
           stream.assetCode.toLowerCase().includes(searchTerm)
         );
       });
+    }
+    if (query.tag) {
+      const filterTag = query.tag.toLowerCase();
+      data = data.filter((stream) =>
+        stream.tags && stream.tags.some((t) => t.toLowerCase() === filterTag),
+      );
     }
 
     const hasPage = req.query.page !== undefined;

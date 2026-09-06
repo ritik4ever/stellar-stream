@@ -34,6 +34,7 @@ export interface StreamInput {
   durationSeconds: number;
   startAt?: number;
   cliffSeconds?: number;
+  tags?: string[];
 }
 
 export interface StreamFeeEstimate {
@@ -57,6 +58,7 @@ export interface StreamRecord {
   pausedDuration: number;
   cliffSeconds: number;
   metadata?: Record<string, string> | null;
+  tags?: string[] | null;
 }
 
 export interface StreamProgress {
@@ -97,6 +99,7 @@ interface StreamRow {
   paused_duration: number;
   cliff_seconds: number;
   metadata: string | null;
+  tags: string | null;
 }
 
 function rowToRecord(row: StreamRow): StreamRecord {
@@ -106,6 +109,17 @@ function rowToRecord(row: StreamRow): StreamRecord {
       metadata = JSON.parse(row.metadata);
     } catch {
       metadata = null;
+    }
+  }
+  let tags: string[] | null = null;
+  if (row.tags) {
+    try {
+      const parsed = JSON.parse(row.tags);
+      if (Array.isArray(parsed)) {
+        tags = parsed;
+      }
+    } catch {
+      tags = null;
     }
   }
   return {
@@ -124,6 +138,7 @@ function rowToRecord(row: StreamRow): StreamRecord {
     pausedDuration: row.paused_duration ?? 0,
     cliffSeconds: row.cliff_seconds ?? 0,
     metadata,
+    tags,
   };
 }
 
@@ -131,8 +146,8 @@ function upsertStream(record: StreamRecord): void {
   const db = getDb();
   db.prepare(
     `
-    INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at, canceled_at, completed_at, refunded_amount, archived_at, paused_at, paused_duration, cliff_seconds, metadata)
-    VALUES (@id, @sender, @recipient, @assetCode, @totalAmount, @durationSeconds, @startAt, @createdAt, @canceledAt, @completedAt, @refundedAmount, @archivedAt, @pausedAt, @pausedDuration, @cliffSeconds, @metadata)
+    INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at, canceled_at, completed_at, refunded_amount, archived_at, paused_at, paused_duration, cliff_seconds, metadata, tags)
+    VALUES (@id, @sender, @recipient, @assetCode, @totalAmount, @durationSeconds, @startAt, @createdAt, @canceledAt, @completedAt, @refundedAmount, @archivedAt, @pausedAt, @pausedDuration, @cliffSeconds, @metadata, @tags)
     ON CONFLICT(id) DO UPDATE SET
       sender = excluded.sender,
       recipient = excluded.recipient,
@@ -148,7 +163,8 @@ function upsertStream(record: StreamRecord): void {
       paused_at = excluded.paused_at,
       paused_duration = excluded.paused_duration,
       cliff_seconds = excluded.cliff_seconds,
-      metadata = excluded.metadata
+      metadata = excluded.metadata,
+      tags = excluded.tags
   `,
   ).run({
     id: record.id,
@@ -167,6 +183,7 @@ function upsertStream(record: StreamRecord): void {
     pausedDuration: record.pausedDuration ?? 0,
     cliffSeconds: record.cliffSeconds ?? 0,
     metadata: record.metadata ? JSON.stringify(record.metadata) : null,
+    tags: record.tags ? JSON.stringify(record.tags) : null,
   });
   syncFtsIndex(record.id, record.sender, record.recipient, record.assetCode);
 }
@@ -857,6 +874,7 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
     createdAt: nowInSeconds(),
     pausedDuration: 0,
     cliffSeconds: input.cliffSeconds ?? 0,
+    tags: input.tags ?? null,
   };
 
   const db = getDb();
@@ -981,8 +999,8 @@ export async function archiveOldStreams(): Promise<number> {
 
         db.prepare(
           `
-        INSERT INTO stream_archive (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at, canceled_at, completed_at, refunded_amount, archived_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO stream_archive (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at, canceled_at, completed_at, refunded_amount, archived_at, tags)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         ).run(
           record.id,
@@ -997,6 +1015,7 @@ export async function archiveOldStreams(): Promise<number> {
           record.completedAt ?? null,
           record.refundedAmount ?? null,
           now,
+          record.tags ? JSON.stringify(record.tags) : null,
         );
 
         db.prepare("UPDATE streams SET archived_at = ? WHERE id = ?").run(now, record.id);
