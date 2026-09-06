@@ -3,6 +3,7 @@ import { CreateStreamForm } from "../components/CreateStreamForm";
 import { EditStartTimeModal } from "../components/EditStartTimeModal";
 import { IssueBacklog } from "../components/IssueBacklog";
 import { StreamDetailDrawer } from "../components/StreamDetailDrawer";
+import { StreamGantt } from "../components/StreamGantt";
 import { StreamMetricsChart } from "../components/StreamMetricsChart";
 import { StreamTimeline } from "../components/StreamTimeline";
 import { StreamsTable } from "../components/StreamsTable";
@@ -315,6 +316,11 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
           loading={metricsHistory.loading}
           error={metricsHistory.error}
         />
+      </section>
+
+      <section className="card" style={{ marginTop: "1rem" }}>
+        <h2 style={{ marginBottom: "1rem" }}>Stream Gantt</h2>
+        <StreamGantt streams={streams} onOpenStream={setDetailStreamId} />
       </section>
 
       <section className="layout-grid">
