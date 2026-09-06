@@ -1,5 +1,5 @@
 export const swaggerDocument = {
-  openapi: "3.0.0",
+  openapi: "3.1.0",
   info: {
     title: "StellarStream API",
     version: "1.0.0",
@@ -44,8 +44,7 @@ export const swaggerDocument = {
             type: "number",
             description: "Total amount to stream.",
             example: 1000,
-            minimum: 0,
-            exclusiveMinimum: true,
+            exclusiveMinimum: 0,
           },
           durationSeconds: {
             type: "number",
@@ -372,8 +371,7 @@ export const swaggerDocument = {
             example: 42,
           },
           onChainStreamCount: {
-            type: "integer",
-            nullable: true,
+            type: ["integer", "null"],
             description: "Canonical stream count read from the on-chain NextStreamId. Null when the Soroban RPC is unavailable.",
             example: 42,
           },
