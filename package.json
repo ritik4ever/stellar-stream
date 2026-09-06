@@ -11,6 +11,7 @@
     "deploy:contract": "./scripts/deploy.sh",
     "gen:bindings": "./scripts/generate-contract-bindings.sh",
     "changelog:update": "conventional-changelog -p angular -i CHANGELOG.md -s",
+    "load-test": "k6 run scripts/load-test/stream-load-test.js",
     "prepare": "husky"
   },
   "license": "MIT",
