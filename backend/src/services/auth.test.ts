@@ -88,6 +88,19 @@ describe("verifyChallengeAndIssueToken", () => {
       expect(decoded.threshold).toBeUndefined();
     });
 
+    it("issues a JWT without multisig fields when Horizon fetch rejects", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Horizon unavailable")));
+
+      const challenge = generateChallenge(clientKeypair.publicKey());
+      const signedTx = signChallenge(challenge, clientKeypair);
+      const token = await verifyChallengeAndIssueToken(signedTx);
+
+      const decoded = jwt.verify(token, TEST_JWT_SECRET) as any;
+      expect(decoded.accountId).toBe(clientKeypair.publicKey());
+      expect(decoded.signer_count).toBeUndefined();
+      expect(decoded.threshold).toBeUndefined();
+    });
+
     it("issues a JWT without multisig fields when account has only one signer", async () => {
       vi.stubGlobal(
         "fetch",
@@ -344,6 +357,22 @@ describe("authMiddleware", () => {
 
   it("returns 401 with invalid_token error code for malformed token", () => {
     req.headers.authorization = "Bearer invalid.jwt.token";
+
+    authMiddleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Invalid authorization token.",
+      statusCode: 401,
+      requestId: "test-request-id",
+      code: "invalid_token",
+    });
+  });
+
+  it("returns 401 with invalid_token error code for a token signed with the wrong secret", () => {
+    const token = jwt.sign({ accountId: "GTEST123" }, "wrong_secret", { expiresIn: "1h" });
+    req.headers.authorization = `Bearer ${token}`;
 
     authMiddleware(req, res, next);
 

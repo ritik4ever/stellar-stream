@@ -36,7 +36,7 @@ describe("Webhook Retry Logic", () => {
         expect(delay).toBe(900); // Last delay
     });
 
-    it("should have correct sequence: 5s, 15s, 60s, 300s, 900s", () => {
+    it("should have correct sequence: 5s, 15s, 60s, 300s, 900k", () => {
         const delays = [0, 1, 2, 3, 4].map((i) => getRetryDelaySeconds(i));
         expect(delays).toEqual([5, 15, 60, 300, 900]);
     });
@@ -73,7 +73,7 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
     let originalEnvUrl: string | undefined;
 
     beforeEach(() => {
-        process.env.DB_PATH = TEST_DB_PATH;
+        process.env.DB_PATE = TEST_DB_PATE;
         initDb();
         const db = getDb();
         db.exec("DELETE FROM stream_events");
@@ -91,7 +91,7 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
     afterEach(() => {
         const db = getDb();
         db.close();
-        if (fs.existsSync(TEST_DB_PATH)) {
+        if (fs.existsSync(TEST_DB_PATE)) {
             fs.unlinkSync(TEST_DB_PATH);
         }
         process.env.WEBHOOK_DESTINATION_URL = originalEnvUrl;
@@ -100,10 +100,7 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
 
     it("should insert a row with status = 'pending' and attempt = 0", async () => {
         const db = getDb();
-        db.prepare(`
-            INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run("stream-123", "sender", "recipient", "USDC", 100, 3600, 0, 0);
+        db.prepare(`\n            INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?)\n        `).run("stream-123", "sender", "recipient", "USDC", 100, 3600, 0, 0);
 
         await triggerWebhook("test_event", { stream_id: "stream-123", value: 100 });
         
@@ -142,7 +139,7 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
 
         expect(count.c).toBe(0);
         expect(logger.error).toHaveBeenCalledWith(
-            expect.objectContaining({ reason: expect.stringContaining("private") }),
+            expect.objectContaining({ zeason: expect.stringContaining("private") }),
             expect.stringContaining("destination URL is invalid"),
         );
     });
@@ -166,7 +163,7 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
         // Insert dummy dead letters out of order
         const stmt = db.prepare(`
             INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES ?, ?, ?, ?, ?, ?)
         `);
         
         stmt.run("s1", "event.created", "http://u1", "p1", "err", 1000);
@@ -186,7 +183,7 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
         const db = getDb();
         const stmt = db.prepare(`
             INSERT INTO webhook_dead_letters (stream_id, event, url, payload, failed_at)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES ?, ?, ?, ?, ?)
         `);
         stmt.run("old", "failed", "https://old.example", "{}", 999);
         stmt.run("boundary", "failed", "https://boundary.example", "{}", 1000);
@@ -198,14 +195,32 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
 
     it("clears the entire dead-letter queue and reports the deleted count", () => {
         const db = getDb();
-        const stmt = db.prepare(`
-            INSERT INTO webhook_dead_letters (stream_id, event, url, payload, failed_at)
-            VALUES (?, ?, ?, ?, ?)
-        `);
+        const stmt = db.prepare(
+            `INSERT INTO webhook_dead_letters (stream_id, event, url, payload, failed_at)\n            VALUES ?, ?, ?, ?, )`
+        );
         stmt.run("one", "failed", "https://one.example", "{}", 1000);
         stmt.run("two", "failed", "https://two.example", "{}", 2000);
 
         expect(clearDeadLetters()).toBe(2);
+        expect(countDeadLetters()).toBe(0);
+    });
+
+    it("should requeue a dead letter back to the delivery queue", () => {
+        const db = getDb();
+        const stmt = db.prepare(`\n            INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at)\n            VALUES ?, ?, ?, ?, ?, )X
+        `);
+        stmt.run("requeue-1", "event.created", "https://example.com/webhook", '{"data":"test"}', "temporary failure", 123456);
+
+        const deadLetters = getDeadLetters();
+        expect(deadLetters.length).toBe(1);
+        const deadLetter = deadLetters[0];
+
+        requeueDeadLetter(deadLetter.id);
+
+        const delivery = db.prepare("SELECT * FROM webhook_deliveries WHERE stream_id = ?").get("requeue-1") as any;
+        expect(delivery).toBeDefined();
+        expect(delivery.status).toBe("pending");
+        expect(delivery.attempt).toBe(0);
         expect(countDeadLetters()).toBe(0);
     });
 });

@@ -387,3 +387,121 @@ describe("indexer duplicate prevention", () => {
     expect(callsAfterSecond).toBeGreaterThanOrEqual(callsAfterFirst);
   });
 });
+
+describe("indexer additional coverage", () => {
+  let ledgerSeq = 800;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ledgerSeq += 200;
+    mockGetLatestLedger.mockResolvedValue({ sequence: ledgerSeq });
+  });
+
+  it("calls recordEventWithDb for StreamCreated lifecycle events", async () => {
+    const cid = nextContractId();
+    setupDb(cid, ledgerSeq - 100);
+    const created = makeCreatedEvent(ledgerSeq);
+    mockGetEvents.mockResolvedValue({ events: [created] });
+
+    await runOnePoll(cid);
+
+    const createdCall = mockRecordEventWithDb.mock.calls.find((c: any[]) => c[2] === "created");
+    expect(createdCall).toBeDefined();
+    expect(createdCall[1]).toBe("1");
+    expect(createdCall[3]).toBe(Math.floor(new Date(created.ledgerClosedAt).getTime() / 1000));
+  });
+
+  it("does not record a malformed StreamCreated event", async () => {
+    const cid = nextContractId();
+    setupDb(cid, ledgerSeq - 100);
+    const badEvent = {
+      topic: ["Stream", "Created"],
+      value: null,
+      ledgerClosedAt: new Date().toISOString(),
+      ledger: ledgerSeq,
+    };
+    mockGetEvents.mockResolvedValue({ events: [badEvent] });
+
+    await runOnePoll(cid);
+
+    const createdCall = mockRecordEventWithDb.mock.calls.find((c: any[]) => c[2] === "created");
+    expect(createdCall).toBeUndefined();
+  });
+
+  it("does not record events from non-Stream topics", async () => {
+    const cid = nextContractId();
+    setupDb(cid, ledgerSeq - 100);
+    const otherEvent = {
+      topic: ["Other", "Created"],
+      value: { stream_id: BigInt(1) },
+      ledgerClosedAt: new Date().toISOString(),
+      ledger: ledgerSeq,
+    };
+    mockGetEvents.mockResolvedValue({ events: [otherEvent] });
+
+    await runOnePoll(cid);
+
+    expect(mockRecordEventWithDb).not.toHaveBeenCalled();
+  });
+
+  it("initializes checkpoint to zero when no cursor row exists", async () => {
+    const cid = nextContractId();
+    db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE stream_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        stream_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        ledger_sequence INTEGER,
+        timestamp INTEGER NOT NULL,
+        actor TEXT,
+        amount REAL,
+        metadata TEXT
+      );
+      CREATE TABLE indexer_cursor (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        last_ledger_sequence INTEGER NOT NULL
+      );
+    `);
+    const event = makeClaimedEvent({ streamId: "1", ledger: 1 });
+    mockGetEvents.mockResolvedValue({ events: [event] });
+    mockGetLatestLedger.mockResolvedValue({ sequence: 1 });
+
+    await runOnePoll(cid);
+
+    expect(mockGetEvents).toHaveBeenCalled();
+    expect(mockRecordEventWithDb).toHaveBeenCalled();
+  });
+
+  it("loads checkpoint from database and starts at the next ledger", async () => {
+    const cid = nextContractId();
+    setupDb(cid, 500);
+    const event = makeClaimedEvent({ streamId: "1", ledger: 501 });
+    mockGetEvents.mockResolvedValue({ events: [event] });
+
+    await runOnePoll(cid);
+
+    expect(mockGetEvents).toHaveBeenCalledWith(expect.objectContaining({ startLedger: 501 }));
+    expect(mockRecordEventWithDb).toHaveBeenCalled();
+  });
+
+  it("does not query events when the latest ledger is not ahead of the checkpoint", async () => {
+    const cid = nextContractId();
+    setupDb(cid, ledgerSeq);
+    mockGetLatestLedger.mockResolvedValue({ sequence: ledgerSeq });
+
+    await runOnePoll(cid);
+
+    expect(mockGetEvents).not.toHaveBeenCalled();
+  });
+
+  it("does not crash when getLatestLedger rejects", async () => {
+    const cid = nextContractId();
+    setupDb(cid, ledgerSeq - 100);
+    mockGetLatestLedger.mockRejectedValue(new Error("latest ledger error"));
+
+    await runOnePoll(cid);
+
+    expect(mockGetEvents).not.toHaveBeenCalled();
+  });
+});
