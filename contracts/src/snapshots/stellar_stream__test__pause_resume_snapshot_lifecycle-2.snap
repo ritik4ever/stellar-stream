@@ -1,5 +1,6 @@
 ---
 source: src/test.rs
+assertion_line: 1779
 expression: resumed_stream
 ---
 Stream {
@@ -10,6 +11,8 @@ Stream {
     claimed_amount: 0,
     start_time: 1100,
     end_time: 2100,
+    cliff_seconds: 0,
+    vesting_type: String(linear),
     min_claim_interval_seconds: 0,
     last_claim_time: 0,
     canceled: false,
