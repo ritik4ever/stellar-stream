@@ -628,7 +628,11 @@ export const swaggerDocument = {
       get: {
         summary: "List all streams",
         description:
-          "Retrieves streams with optional filtering by status/sender/recipient and optional pagination.",
+          "Retrieves streams with optional filtering by status/sender/recipient/asset and optional pagination. " +
+          "All filter parameters combine with AND logic: a stream must satisfy every supplied filter to appear in results. " +
+          "For example, ?asset=USDC&q=GABC returns only streams whose asset is USDC AND whose id/sender/recipient matches 'GABC'. " +
+          "When an explicit asset filter (asset or assetCode) is present, the q search does not apply to the asset code field — " +
+          "the explicit asset filter governs asset matching.",
         parameters: [
           {
             name: "status",
@@ -662,7 +666,10 @@ export const swaggerDocument = {
             name: "asset",
             in: "query",
             required: false,
-            description: "Exact asset code match.",
+            description:
+              "Exact asset code match (case-insensitive). " +
+              "Combines with AND logic alongside all other filters including q. " +
+              "When asset is set, the q parameter searches only across id, sender, and recipient — not asset code.",
             schema: {
               type: "string",
             },
@@ -671,7 +678,10 @@ export const swaggerDocument = {
             name: "assetCode",
             in: "query",
             required: false,
-            description: "Filter by one or more asset codes (comma-separated). Case-insensitive. Example: ?assetCode=USDC,XLM",
+            description:
+              "Filter by one or more asset codes (comma-separated, case-insensitive). Example: ?assetCode=USDC,XLM. " +
+              "Combines with AND logic alongside all other filters including q. " +
+              "When assetCode is set, the q parameter searches only across id, sender, and recipient — not asset code.",
             schema: {
               type: "string",
             },
@@ -680,7 +690,17 @@ export const swaggerDocument = {
             name: "q",
             in: "query",
             required: false,
-            description: "General search term. Searches across stream ID, sender, recipient, and asset code (case-insensitive). Combines with other filters.",
+            description:
+              "General search term (case-insensitive substring match). " +
+              "Searches across stream id, sender, recipient, and — when no explicit asset/assetCode filter is active — asset code. " +
+              "Combines with AND logic with all other filters: results must satisfy q AND every other supplied filter. " +
+              "Filter combination semantics: " +
+              "q alone → matches any stream whose id/sender/recipient/assetCode contains the term; " +
+              "asset alone → exact asset code match; " +
+              "assetCode alone → multi-asset match; " +
+              "q + asset (AND) → asset filter pins the asset, q searches id/sender/recipient only; " +
+              "q + assetCode (AND) → same as q + asset but for multi-asset; " +
+              "all filters (AND) → every supplied filter must be satisfied.",
             schema: {
               type: "string",
             },
@@ -1141,6 +1161,7 @@ export const swaggerDocument = {
         description:
           "Returns all streams where the given Stellar account is the sender. " +
           "Supports the same pagination, filtering, and search parameters as GET /api/streams. " +
+          "All filter parameters combine with AND logic; see GET /api/streams for full q + asset combination semantics. " +
           "Results are cached for 5 seconds per address.",
         parameters: [
           {
@@ -1262,6 +1283,7 @@ export const swaggerDocument = {
         description:
           "Returns all streams where the given Stellar account is the recipient. " +
           "Supports the same pagination, filtering, and search parameters as GET /api/streams. " +
+          "All filter parameters combine with AND logic; see GET /api/streams for full q + asset combination semantics. " +
           "Results are cached for 5 seconds per address.",
         parameters: [
           {
