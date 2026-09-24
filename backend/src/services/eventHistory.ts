@@ -241,3 +241,32 @@ export function streamHasEvent(
 
   return row !== undefined;
 }
+
+export interface StreamCostSummary {
+  total_claimed: number;
+  total_unclaimed: number;
+  claim_count: number;
+  avg_claim_amount: number;
+  total_fees_paid: number;
+}
+
+export function getStreamCostSummary(streamId: string, totalAmount: number): StreamCostSummary {
+  const db = getDb();
+  const row = db
+    .prepare(`SELECT COUNT(*) as count, SUM(amount) as total FROM stream_events WHERE stream_id = ? AND event_type = 'claimed'`)
+    .get(streamId) as { count: number; total: number | null };
+
+  const claim_count = row.count || 0;
+  const total_claimed = row.total || 0;
+  const avg_claim_amount = claim_count > 0 ? total_claimed / claim_count : 0;
+  const total_unclaimed = Math.max(0, totalAmount - total_claimed);
+  const total_fees_paid = 0; // Fee mechanism not currently active for claims
+
+  return {
+    total_claimed,
+    total_unclaimed,
+    claim_count,
+    avg_claim_amount,
+    total_fees_paid,
+  };
+}
