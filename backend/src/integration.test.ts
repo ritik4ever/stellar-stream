@@ -348,58 +348,136 @@ describe("Backend Integration Tests", () => {
           `).run("1", "claimed", now - i, mockStream.sender, 100 + i);
         }
 
-        // Request first page with pageSize 10
+        // Request first page with limit 10
         const page1Response = await request(app)
           .get("/api/streams/1/history")
-          .query({ page: 1, pageSize: 10 });
+          .query({ page: 1, limit: 10 });
 
         expect(page1Response.status).toBe(200);
         expect(page1Response.body.data).toHaveLength(10);
         expect(page1Response.body.page).toBe(1);
-        expect(page1Response.body.pageSize).toBe(10);
+        expect(page1Response.body.limit).toBe(10);
         expect(page1Response.body.total).toBe(25);
-        expect(page1Response.body.hasMore).toBe(true);
 
         // Request second page
         const page2Response = await request(app)
           .get("/api/streams/1/history")
-          .query({ page: 2, pageSize: 10 });
+          .query({ page: 2, limit: 10 });
 
         expect(page2Response.status).toBe(200);
         expect(page2Response.body.data).toHaveLength(10);
         expect(page2Response.body.page).toBe(2);
-        expect(page2Response.body.hasMore).toBe(true);
+        expect(page2Response.body.limit).toBe(10);
 
         // Request third page (last page with 5 items)
         const page3Response = await request(app)
           .get("/api/streams/1/history")
-          .query({ page: 3, pageSize: 10 });
+          .query({ page: 3, limit: 10 });
 
         expect(page3Response.status).toBe(200);
         expect(page3Response.body.data).toHaveLength(5);
-        expect(page3Response.body.hasMore).toBe(false);
+        expect(page3Response.body.limit).toBe(10);
 
-        // Verify events are ordered by timestamp DESC (newest first)
+        // Verify events are ordered by timestamp ASC (oldest first)
         const timestamps = page1Response.body.data.map((e: any) => e.timestamp);
         for (let i = 1; i < timestamps.length; i++) {
-          expect(timestamps[i]).toBeLessThanOrEqual(timestamps[i - 1]);
+          expect(timestamps[i]).toBeGreaterThanOrEqual(timestamps[i - 1]);
         }
       });
 
-      it("should enforce max pageSize of 100", async () => {
+      it("should return 400 when limit exceeds 100", async () => {
         const response = await request(app)
           .get("/api/streams/1/history")
-          .query({ page: 1, pageSize: 200 });
+          .query({ page: 1, limit: 200 });
 
-        expect(response.status).toBe(200);
-        expect(response.body.pageSize).toBe(100);
+        expect(response.status).toBe(400);
+        expect(response.body.code).toBe("VALIDATION_ERROR");
       });
 
-      it("should use default pageSize of 20 when not specified", async () => {
+      it("should use default limit of 50 when not specified", async () => {
         const response = await request(app).get("/api/streams/1/history");
 
         expect(response.status).toBe(200);
-        expect(response.body.pageSize).toBe(20);
+        expect(response.body.limit).toBe(50);
+      });
+
+      it("should keep pageSize as a supported alias for limit", async () => {
+        const response = await request(app)
+          .get("/api/streams/1/history")
+          .query({ page: 1, pageSize: 10 });
+
+        expect(response.status).toBe(200);
+        expect(response.body.limit).toBe(10);
+      });
+
+      it("should correctly paginate stream history with 500+ events", async () => {
+        const db = getDb();
+        const now = Math.floor(Date.now() / 1000);
+
+        // Insert 505 claimed events plus the seeded created event
+        const insert = db.prepare(`
+          INSERT INTO stream_events (stream_id, event_type, timestamp, actor, amount)
+          VALUES (?, ?, ?, ?, ?)
+        `);
+        for (let i = 1; i <= 505; i++) {
+          insert.run("1", "claimed", now - i, mockStream.sender, i);
+        }
+
+        const totalEvents = 505 + 1; // claimed + created
+
+        // First page: limit 50, descending offset spanning full range
+        const page1 = await request(app)
+          .get("/api/streams/1/history")
+          .query({ page: 1, limit: 100 });
+        expect(page1.status).toBe(200);
+        expect(page1.body.total).toBe(totalEvents);
+        expect(page1.body.limit).toBe(100);
+        expect(page1.body.data).toHaveLength(100);
+
+        // Last page should contain the remainder
+        const lastExpected = Math.ceil(totalEvents / 100);
+        const lastPage = await request(app)
+          .get("/api/streams/1/history")
+          .query({ page: lastExpected, limit: 100 });
+        expect(lastPage.status).toBe(200);
+        expect(lastPage.body.total).toBe(totalEvents);
+        const remainder = totalEvents - (lastExpected - 1) * 100;
+        expect(lastPage.body.data).toHaveLength(remainder);
+
+        // Paginated rows must union to exactly the total with no overlap;
+        // verify ascending order across the first few pages.
+        const allTimestamps: number[] = [];
+        for (let p = 1; p <= 3; p++) {
+          const res = await request(app)
+            .get("/api/streams/1/history")
+            .query({ page: p, limit: 100 });
+          const ts = res.body.data.map((e: any) => e.timestamp);
+          for (let i = 1; i < ts.length; i++) {
+            expect(ts[i]).toBeGreaterThanOrEqual(ts[i - 1]);
+          }
+          allTimestamps.push(...ts);
+        }
+        // No overlapping rows across pages (each page is a disjoint slice).
+        expect(new Set(allTimestamps).size).toBe(allTimestamps.length);
+      });
+
+      it("should return 400 for invalid page and limit params", async () => {
+        const invalidQueries = [
+          { page: 0, limit: 50 },
+          { page: -1, limit: 50 },
+          { page: 1, limit: -5 },
+          { page: 1, limit: 0 },
+          { page: "abc", limit: 50 },
+          { page: 1, limit: "x" },
+        ];
+
+        for (const q of invalidQueries) {
+          const response = await request(app)
+            .get("/api/streams/1/history")
+            .query(q);
+          expect(response.status).toBe(400);
+          expect(response.body.code).toBe("VALIDATION_ERROR");
+        }
       });
 
       describe("pagination and filter combinations", () => {

@@ -75,7 +75,8 @@ npm test -- --coverage
 ### 3. Stream History
 
 #### GET /api/streams/:id/history
-- ✅ Get event history for stream
+- ✅ Get event history for stream (paginated via `page`/`limit`, default limit 50, ascending order)
+- ✅ 400 for invalid `page`/`limit` params (limit max 100)
 - ✅ 404 for non-existent stream
 
 #### GET /api/streams/:id/snapshot
