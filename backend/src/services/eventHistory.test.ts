@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import Database from "better-sqlite3";
-import { recordEventWithDb, getStreamHistory } from "./eventHistory";
+import { recordEventWithDb, getStreamHistory, getActivityFeed } from "./eventHistory";
 
 const dbMocks = vi.hoisted(() => ({
   getDb: vi.fn(),
@@ -13,6 +13,11 @@ function createTestDb() {
   const db = new Database(":memory:");
   db.pragma("foreign_keys = OFF");
   db.exec(`
+    CREATE TABLE streams (
+      id              TEXT PRIMARY KEY,
+      sender          TEXT NOT NULL,
+      recipient       TEXT NOT NULL
+    );
     CREATE TABLE stream_events (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       stream_id       TEXT NOT NULL,
@@ -186,6 +191,79 @@ describe("eventHistory", () => {
       expect(historyA.map((e) => e.timestamp)).toEqual([1000, 2000]);
       expect(historyB).toHaveLength(1);
       expect(historyB[0].timestamp).toBe(500);
+    });
+  });
+
+  describe("getActivityFeed", () => {
+    function seedStream(streamId: string, sender: string, recipient: string) {
+      db.prepare(
+        "INSERT INTO streams (id, sender, recipient) VALUES (?, ?, ?)",
+      ).run(streamId, sender, recipient);
+    }
+
+    it("includes events for streams where the account is the sender", () => {
+      seedStream("stream-1", "GSENDER", "GRECIPIENT");
+      recordEventWithDb(db, "stream-1", "created", 1000, "GSENDER");
+      recordEventWithDb(db, "stream-1", "claimed", 2000, "GRECIPIENT");
+
+      const feed = getActivityFeed("GSENDER", undefined, 50);
+
+      expect(feed.map((e) => e.eventType)).toEqual(["claimed", "created"]);
+    });
+
+    it("includes events for streams where the account is the recipient", () => {
+      seedStream("stream-2", "GOTHER", "GRECIPIENT");
+      recordEventWithDb(db, "stream-2", "created", 1000, "GOTHER");
+
+      const feed = getActivityFeed(undefined, "GRECIPIENT", 50);
+
+      expect(feed).toHaveLength(1);
+      expect(feed[0].streamId).toBe("stream-2");
+    });
+
+    it("excludes events from streams unrelated to the account", () => {
+      seedStream("stream-3", "GA", "GB");
+      seedStream("stream-4", "GC", "GD");
+      recordEventWithDb(db, "stream-3", "created", 1000, "GA");
+      recordEventWithDb(db, "stream-4", "created", 1000, "GC");
+
+      const feed = getActivityFeed("GA", undefined, 50);
+
+      expect(feed).toHaveLength(1);
+      expect(feed[0].streamId).toBe("stream-3");
+    });
+
+    it("sorts events by timestamp descending", () => {
+      seedStream("stream-5", "GUSER", "GOTHER");
+      recordEventWithDb(db, "stream-5", "created", 1000, "GUSER");
+      recordEventWithDb(db, "stream-5", "paused", 3000, "GUSER");
+      recordEventWithDb(db, "stream-5", "resumed", 2000, "GUSER");
+
+      const feed = getActivityFeed("GUSER", undefined, 50);
+
+      expect(feed.map((e) => e.timestamp)).toEqual([3000, 2000, 1000]);
+    });
+
+    it("respects the limit parameter", () => {
+      seedStream("stream-6", "GUSER", "GOTHER");
+      for (let i = 0; i < 5; i++) {
+        recordEventWithDb(db, "stream-6", "created", 1000 + i, "GUSER");
+      }
+
+      const feed = getActivityFeed("GUSER", undefined, 2);
+
+      expect(feed).toHaveLength(2);
+    });
+
+    it("returns events matching either sender or recipient when both are provided", () => {
+      seedStream("stream-7", "GUSER", "GOTHER1");
+      seedStream("stream-8", "GOTHER2", "GUSER");
+      recordEventWithDb(db, "stream-7", "created", 1000, "GUSER");
+      recordEventWithDb(db, "stream-8", "claimed", 2000, "GUSER");
+
+      const feed = getActivityFeed("GUSER", "GUSER", 50);
+
+      expect(feed.map((e) => e.streamId).sort()).toEqual(["stream-7", "stream-8"]);
     });
   });
 });

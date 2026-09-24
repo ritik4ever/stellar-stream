@@ -209,6 +209,27 @@ export const senderAccountIdSchema = z.object({
   accountId: stellarAccountIdSchema,
 });
 
+export const activityFeedQuerySchema = z
+  .object({
+    sender: stellarAccountIdSchema.optional(),
+    recipient: stellarAccountIdSchema.optional(),
+    limit: z
+      .coerce.number()
+      .int("limit must be an integer")
+      .min(1, "limit must be greater than or equal to 1")
+      .max(100, "limit must be less than or equal to 100")
+      .optional(),
+  })
+  .superRefine((payload, ctx) => {
+    if (!payload.sender && !payload.recipient) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["sender"],
+        message: "At least one of sender or recipient is required.",
+      });
+    }
+  });
+
 export const bulkCancelStreamsSchema = z.object({
   streamIds: z
     .array(streamIdSchema)
