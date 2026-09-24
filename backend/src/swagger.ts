@@ -830,9 +830,103 @@ export const swaggerDocument = {
         },
       },
     },
+    "/api/streams/search": {
+      get: {
+        summary: "Full-text search for streams",
+        description:
+          "Searches streams using a case-insensitive substring match of `q` across stream id, " +
+          "sender, recipient, and assetCode fields.  An optional `asset` query parameter " +
+          "applies an additional exact asset-code filter (AND-composed with `q`).\n\n" +
+          "**Boundary behaviour**\n" +
+          "- Missing or empty `q` → 400 VALIDATION_ERROR\n" +
+          "- `asset` with invalid format (non-alphanumeric or >12 chars) → 400 VALIDATION_ERROR\n" +
+          "- Valid `q` that matches nothing → 200, data: [], total: 0\n" +
+          "- Valid `q` + `asset` combination → 200, intersection of both filters\n\n" +
+          "The `total` field always reflects the number of matched rows returned; " +
+          "`data` and `total` are always consistent.",
+        parameters: [
+          {
+            name: "q",
+            in: "query",
+            required: true,
+            description:
+              "Non-empty search term. Case-insensitive substring match across stream id, " +
+              "sender, recipient, and assetCode.",
+            schema: {
+              type: "string",
+              minLength: 1,
+            },
+          },
+          {
+            name: "asset",
+            in: "query",
+            required: false,
+            description:
+              "Optional exact asset-code filter (case-insensitive, 1–12 alphanumeric characters). " +
+              "When provided, only streams matching BOTH `q` AND this asset code are returned. " +
+              "Values outside the 1–12 alphanumeric character range return a 400.",
+            schema: {
+              type: "string",
+              pattern: "^[A-Za-z0-9]{1,12}$",
+              example: "USDC",
+            },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Search results with total count and echoed query context.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/Stream" },
+                    },
+                    total: {
+                      type: "number",
+                      description: "Number of streams in the result set (equals data.length).",
+                      example: 3,
+                    },
+                    query: {
+                      type: "string",
+                      description: "The search term that was applied.",
+                      example: "GABC",
+                    },
+                    asset: {
+                      type: "string",
+                      description: "The asset filter that was applied (only present when ?asset was supplied).",
+                      example: "USDC",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": {
+            description: "Missing, empty, or invalid query parameters.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+          "500": {
+            description: "Unexpected server error during search.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+        },
+      },
+    },
     "/api/streams/{id}": {
       get: {
         summary: "Get a specific stream",
+
         description: "Retrieves a stream by its unique ID.",
         parameters: [
           {
