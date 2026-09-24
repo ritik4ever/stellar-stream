@@ -217,6 +217,28 @@ export const bulkCancelStreamsSchema = z.object({
   sender: stellarAccountIdSchema,
 });
 
+export const addStreamNoteSchema = z.object({
+  content: z
+    .string()
+    .trim()
+    .min(1, "content is required")
+    .max(500, "content must be at most 500 characters"),
+});
+
+export const listStreamNotesQuerySchema = z.object({
+  page: z
+    .coerce.number()
+    .int("page must be an integer")
+    .min(1, "page must be greater than or equal to 1")
+    .optional(),
+  limit: z
+    .coerce.number()
+    .int("limit must be an integer")
+    .min(1, "limit must be greater than or equal to 1")
+    .max(100, "limit must be less than or equal to 100")
+    .optional(),
+});
+
 export type CreateStreamPayload = z.infer<typeof createStreamPayloadSchema>;
 
 export type ValidationIssue = {
