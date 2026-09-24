@@ -30,7 +30,7 @@
  * fresh Node process, so the rate limiter is re-initialised with those values.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import jwt from "jsonwebtoken";
 import path from "path";
@@ -44,6 +44,15 @@ const TEST_DB_PATH = path.join(
   "test-auth-protected-375.db",
 );
 process.env.DB_PATH = TEST_DB_PATH;
+
+const mockClawbackStream = vi.fn();
+vi.mock("./services/streamStore", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./services/streamStore")>();
+  return {
+    ...actual,
+    clawbackStream: mockClawbackStream,
+  };
+});
 
 // Import app AFTER DB_PATH is set (env vars that control rate limits are
 // already set by src/test-setup.ts which runs before any imports).
@@ -503,7 +512,80 @@ describe("Auth-protected routes integration tests (#375)", () => {
   });
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  14. Token format edge cases
+  //  14. Admin route: POST /api/admin/streams/:id/clawback (adminAuth)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  describe("POST /api/admin/streams/:id/clawback (adminAuth)", () => {
+    const url = `/api/admin/streams/${FIXTURE_STREAM_ID}/clawback`;
+
+    beforeEach(() => {
+      mockClawbackStream.mockReset();
+    });
+
+    it("no X-Admin-Key header → 401", async () => {
+      seedFixtureStream(senderKp.publicKey(), recipientKp.publicKey());
+      expect401(await send("post", url, { body: { amount: 100 } }));
+    });
+
+    it("wrong X-Admin-Key → 401", async () => {
+      seedFixtureStream(senderKp.publicKey(), recipientKp.publicKey());
+      expect401(
+        await send("post", url, { adminKey: "wrong-key", body: { amount: 100 } }),
+      );
+    });
+
+    it("missing amount field → 400", async () => {
+      seedFixtureStream(senderKp.publicKey(), recipientKp.publicKey());
+      const res = await send("post", url, { adminKey: ADMIN_KEY, body: {} });
+      expect(res.status).toBe(400);
+    });
+
+    it("amount <= 0 → 400", async () => {
+      seedFixtureStream(senderKp.publicKey(), recipientKp.publicKey());
+      const res = await send("post", url, { adminKey: ADMIN_KEY, body: { amount: 0 } });
+      expect(res.status).toBe(400);
+    });
+
+    it("stream not found → 404", async () => {
+      const missingUrl = `/api/admin/streams/999999/clawback`;
+      const res = await send("post", missingUrl, {
+        adminKey: ADMIN_KEY,
+        body: { amount: 100 },
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it("valid admin key + Soroban success → 200 with txHash", async () => {
+      seedFixtureStream(senderKp.publicKey(), recipientKp.publicKey());
+      mockClawbackStream.mockResolvedValue({ txHash: "abc123", actualAmount: 100 });
+
+      const res = await send("post", url, {
+        adminKey: ADMIN_KEY,
+        body: { amount: 100 },
+      });
+      expectAuthPassed(res);
+      expect(res.status).toBe(200);
+      expect(res.body.result.txHash).toBe("abc123");
+      expect(res.body.result.actualAmount).toBe(100);
+    });
+
+    it("valid admin key + Soroban failure → 502", async () => {
+      seedFixtureStream(senderKp.publicKey(), recipientKp.publicKey());
+      mockClawbackStream.mockRejectedValue(
+        Object.assign(new Error("Soroban tx failed"), { statusCode: 502 }),
+      );
+
+      const res = await send("post", url, {
+        adminKey: ADMIN_KEY,
+        body: { amount: 100 },
+      });
+      expectAuthPassed(res);
+      expect(res.status).toBe(502);
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  15. Token format edge cases
   //      (exercised against a read-only route to avoid mutation side-effects)
   // ══════════════════════════════════════════════════════════════════════════
 
