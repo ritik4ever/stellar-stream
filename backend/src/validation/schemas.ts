@@ -217,6 +217,26 @@ export const bulkCancelStreamsSchema = z.object({
   sender: stellarAccountIdSchema,
 });
 
+export const bulkCreateStreamsSchema = z.object({
+  streams: z
+    .array(createStreamPayloadSchema)
+    .min(1, "At least one stream config is required")
+    .max(20, "Maximum 20 streams per request"),
+  sender: stellarAccountIdSchema,
+}).superRefine((payload, ctx) => {
+  // Verify all streams have the same sender as the request body
+  for (const stream of payload.streams) {
+    if (stream.sender !== payload.sender) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["streams"],
+        message: "All streams must have the same sender as the request body",
+      });
+      break;
+    }
+  }
+});
+
 export type CreateStreamPayload = z.infer<typeof createStreamPayloadSchema>;
 
 export type ValidationIssue = {
