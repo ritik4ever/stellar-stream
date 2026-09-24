@@ -3,6 +3,8 @@ import { BrowserRouter, Routes, Route, useNavigate, useLocation } from "react-ro
 import { DarkModeToggle } from "./components/DarkModeToggle";
 import { OfflineBanner } from "./components/OfflineBanner";
 import { WalletButton } from "./components/WalletButton";
+import { OnboardingChecklist } from "./components/OnboardingChecklist";
+import { markDashboardVisited } from "./hooks/useOnboardingStatus";
 import { useFreighter } from "./hooks/useFreighter";
 import { useTheme } from "./hooks/useTheme";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -20,6 +22,7 @@ function AppContent() {
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   useEffect(() => {
     const path = location.pathname;
@@ -32,6 +35,12 @@ function AppContent() {
       navigate("/");
     }
   }, [location.pathname, navigate]);
+
+  useEffect(() => {
+    if (location.pathname === "/") {
+      markDashboardVisited();
+    }
+  }, [location.pathname]);
 
   const currentTab =
     location.pathname === "/sender"
@@ -50,6 +59,15 @@ function AppContent() {
           </div>
 
           <DarkModeToggle theme={theme} onToggle={toggleTheme} />
+
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => setShowOnboarding(true)}
+            title="Getting started guide"
+          >
+            ? Help
+          </button>
 
           <WalletButton wallet={wallet} />
         </div>
@@ -99,6 +117,12 @@ function AppContent() {
           <Route path="/my-streams" element={<SenderDashboardPage wallet={wallet} />} />
         </Routes>
       </Suspense>
+
+      <OnboardingChecklist
+        wallet={wallet}
+        forceOpen={showOnboarding}
+        onClose={() => setShowOnboarding(false)}
+      />
     </div>
   );
 }
