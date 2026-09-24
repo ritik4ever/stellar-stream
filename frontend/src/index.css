@@ -1427,3 +1427,92 @@ input {
   align-items: center;
   margin-right: 0.5rem;
 }
+
+
+
+/* ── Bulk action bar (StreamsTable batch cancel/pause/resume) ───────────── */
+
+.bulk-action-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 1.5rem;
+  display: flex;
+  justify-content: center;
+  z-index: 1000;
+  pointer-events: none;
+  animation: bulk-action-slide-up 0.18s ease-out;
+}
+
+.bulk-action-bar__content {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: #111827;
+  color: #f9fafb;
+  border-radius: 12px;
+  padding: 0.65rem 1rem;
+  min-width: 320px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+}
+
+.bulk-action-bar__count {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-right: 0.25rem;
+  white-space: nowrap;
+}
+
+.bulk-action-bar__button {
+  border: none;
+  border-radius: 8px;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: #dc2626;
+  color: white;
+  transition: background 0.12s;
+}
+
+.bulk-action-bar__button:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.bulk-action-bar__button--secondary {
+  background: #374151;
+  color: #f9fafb;
+}
+
+.bulk-action-bar__button--secondary:hover:not(:disabled) {
+  background: #4b5563;
+}
+
+.bulk-action-bar__button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@keyframes bulk-action-slide-up {
+  from {
+    transform: translateY(16px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (max-width: 768px) {
+  .bulk-action-bar {
+    bottom: 0.75rem;
+    padding: 0 0.75rem;
+  }
+  .bulk-action-bar__content {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+}
