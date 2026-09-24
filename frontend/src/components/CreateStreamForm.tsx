@@ -27,6 +27,7 @@ interface CreateStreamFormProps {
   onCreateSplit?: (payload: CreateSplitStreamPayload) => Promise<void>;
   apiError?: string | null;
   walletAddress?: string | null;
+  initialData?: Partial<FormValues>;
 }
 
 /**
@@ -175,12 +176,22 @@ export function CreateStreamForm({
   onCreateSplit,
   apiError,
   walletAddress,
+  initialData,
 }: CreateStreamFormProps) {
+  const finalInitialValues = { ...INITIAL_VALUES, ...initialData };
   const [values, setValues, hasDraft, clearDraft] = useDraftAutosave<FormValues>(
     "stellar-stream:create-draft",
-    INITIAL_VALUES,
+    finalInitialValues,
     2000 // Autosave every 2 seconds
   );
+
+  // If initialData changes (e.g. user clicked clone), we need to update the form and clear the draft.
+  useEffect(() => {
+    if (initialData) {
+      setValues(prev => ({ ...prev, ...initialData }));
+      clearDraft();
+    }
+  }, [initialData, setValues, clearDraft]);
   const [allowedAssets, setAllowedAssets] = useState<string[]>([]);
   const [configFetchFailed, setConfigFetchFailed] = useState(false);
   const [streamMode, setStreamMode] = useState<StreamMode>("single");

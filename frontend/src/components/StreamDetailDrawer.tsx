@@ -44,6 +44,8 @@ interface StreamDetailDrawerProps {
   signAction?: (payload: Record<string, unknown>) => Promise<string>;
   /** The connected wallet address — used to gate sender-only actions */
   walletAddress?: string | null;
+  /** Called when clone action is triggered from the drawer */
+  onClone?: (stream: Stream) => void;
 }
 
 function formatTs(unixSeconds: number): string {
@@ -104,6 +106,7 @@ export function StreamDetailDrawer({
   onResume,
   signAction,
   walletAddress,
+  onClone,
 }: StreamDetailDrawerProps) {
   const [stream, setStream] = useState<Stream | null>(null);
   const [history, setHistory] = useState<StreamEvent[]>([]);
@@ -246,7 +249,9 @@ export function StreamDetailDrawer({
     !!signAction &&
     stream?.progress.status === "paused";
 
-  const hasActions = !!onCancel || showPause || showResume;
+  const showClone = !!onClone && stream && (stream.progress.status === "active" || stream.progress.status === "completed");
+
+  const hasActions = !!onCancel || showPause || showResume || showClone;
 
   return (
     <div
@@ -476,6 +481,17 @@ export function StreamDetailDrawer({
                         aria-busy={canceling}
                       >
                         {canceling ? "Canceling…" : "Cancel Stream"}
+                      </button>
+                    )}
+
+                    {/* Clone */}
+                    {showClone && (
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        onClick={() => onClone(stream)}
+                      >
+                        Clone Stream
                       </button>
                     )}
                   </div>
