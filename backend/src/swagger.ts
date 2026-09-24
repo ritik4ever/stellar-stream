@@ -637,7 +637,7 @@ export const swaggerDocument = {
             description: "Filter by stream status.",
             schema: {
               type: "string",
-              enum: ["scheduled", "active", "completed", "canceled"],
+              enum: ["scheduled", "active", "paused", "completed", "canceled"],
             },
           },
           {
@@ -683,6 +683,35 @@ export const swaggerDocument = {
             description: "General search term. Searches across stream ID, sender, recipient, and asset code (case-insensitive). Combines with other filters.",
             schema: {
               type: "string",
+            },
+          },
+          {
+            name: "minAmount",
+            in: "query",
+            required: false,
+            description: "Filter by minimum total amount.",
+            schema: {
+              type: "number",
+              minimum: 0,
+            },
+          },
+          {
+            name: "maxAmount",
+            in: "query",
+            required: false,
+            description: "Filter by maximum total amount.",
+            schema: {
+              type: "number",
+              minimum: 0,
+            },
+          },
+          {
+            name: "include_archived",
+            in: "query",
+            required: false,
+            description: "Include archived streams in the results.",
+            schema: {
+              type: "boolean",
             },
           },
           {
@@ -1045,7 +1074,7 @@ export const swaggerDocument = {
             description: "Filter by stream status.",
             schema: {
               type: "string",
-              enum: ["scheduled", "active", "completed", "canceled"],
+              enum: ["scheduled", "active", "paused", "completed", "canceled"],
             },
           },
           {
@@ -1162,7 +1191,7 @@ export const swaggerDocument = {
             description: "Filter by stream status.",
             schema: {
               type: "string",
-              enum: ["scheduled", "active", "completed", "canceled"],
+              enum: ["scheduled", "active", "paused", "completed", "canceled"],
             },
           },
           {
@@ -1257,7 +1286,7 @@ export const swaggerDocument = {
             description: "Filter by stream status.",
             schema: {
               type: "string",
-              enum: ["scheduled", "active", "completed", "canceled"],
+              enum: ["scheduled", "active", "paused", "completed", "canceled"],
             },
           },
           {
@@ -1378,7 +1407,7 @@ export const swaggerDocument = {
             description: "Filter by stream status.",
             schema: {
               type: "string",
-              enum: ["scheduled", "active", "completed", "canceled"],
+              enum: ["scheduled", "active", "paused", "completed", "canceled"],
             },
           },
           {
