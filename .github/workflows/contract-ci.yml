@@ -15,7 +15,7 @@ jobs:
     name: Build and test Soroban contract
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     defaults:
       run:
         working-directory: contracts
@@ -24,10 +24,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      # Use the exact toolchain version pinned in contracts/rust-toolchain.toml for
+      # reproducible builds. The file specifies channel, targets, and components.
+      - name: Install pinned Rust toolchain (from rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2024-12-01
           targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
 
       - name: Cache cargo registry and build artifacts
         uses: actions/cache@v4
@@ -68,10 +72,105 @@ jobs:
           RUSTFLAGS: "-D warnings"
         run: cargo test --locked
 
-      - name: Build WASM binary and report size
+      - name: Build WASM binary
+        run: cargo build --target wasm32-unknown-unknown --release
+
+      - name: Report WASM binary size
         run: |
-          cargo build --target wasm32-unknown-unknown --release
-          SIZE=$(wc -c < target/wasm32-unknown-unknown/release/stellar_stream.wasm)
+          WASM_PATH="target/wasm32-unknown-unknown/release/stellar_stream.wasm"
+          SIZE=$(wc -c < "$WASM_PATH")
           echo "WASM Binary Size: ${SIZE} bytes ($(numfmt --to=iec ${SIZE}))"
           echo "## WASM Binary Size" >> $GITHUB_STEP_SUMMARY
           echo "**$(numfmt --to=iec ${SIZE})** (${SIZE} bytes)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Compute SHA256 of WASM binary
+        id: wasm_hash
+        run: |
+          WASM_PATH="target/wasm32-unknown-unknown/release/stellar_stream.wasm"
+          HASH=$(sha256sum "$WASM_PATH" | awk '{print $1}')
+          echo "sha256=${HASH}" >> "$GITHUB_OUTPUT"
+          echo "Computed SHA256: ${HASH}"
+
+      - name: Verify or update wasm.sha256
+        id: hash_check
+        run: |
+          WASM_PATH="target/wasm32-unknown-unknown/release/stellar_stream.wasm"
+          COMPUTED="${{ steps.wasm_hash.outputs.sha256 }}"
+          HASH_FILE="wasm.sha256"
+
+          if [ -f "$HASH_FILE" ]; then
+            # Strip comment lines and blank lines, extract the first hash token
+            STORED=$(grep -v '^#' "$HASH_FILE" | grep -v '^[[:space:]]*$' | awk '{print $1}' | head -n 1)
+
+            if [ -z "$STORED" ]; then
+              # File exists but contains only comments / is empty (placeholder state)
+              echo "Hash file exists but has no stored hash yet. Writing initial hash."
+              echo "${COMPUTED}  ${WASM_PATH}" >> "$HASH_FILE"
+              echo "hash_matched=new" >> "$GITHUB_OUTPUT"
+            elif [ "$COMPUTED" = "$STORED" ]; then
+              echo "Stored  SHA256: ${STORED}"
+              echo "Computed SHA256: ${COMPUTED}"
+              echo "✔ Hash verification PASSED — WASM binary is reproducible."
+              echo "hash_matched=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "Stored  SHA256: ${STORED}"
+              echo "Computed SHA256: ${COMPUTED}"
+              echo "::error::⚠ HASH MISMATCH — computed hash does not match stored hash in contracts/wasm.sha256"
+              echo "::error::Stored:   ${STORED}"
+              echo "::error::Computed: ${COMPUTED}"
+              echo "::error::This may indicate a supply-chain compromise or an unreviewed toolchain/source change."
+              echo "::error::If the contract source was intentionally changed, update contracts/wasm.sha256 by running: SKIP_HASH_CHECK=1 ./scripts/deploy.sh"
+              echo "hash_matched=false" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+          else
+            echo "No stored hash found. Writing new wasm.sha256 (first build)."
+            echo "${COMPUTED}  ${WASM_PATH}" > "$HASH_FILE"
+            echo "hash_matched=new" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Append hash info to step summary
+        if: always()
+        run: |
+          COMPUTED="${{ steps.wasm_hash.outputs.sha256 }}"
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## WASM SHA256 Hash" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.hash_check.outputs.hash_matched }}" = "true" ]; then
+            echo "✅ **Hash verified** — binary matches stored hash." >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.hash_check.outputs.hash_matched }}" = "new" ]; then
+            echo "🆕 **New hash stored** — \`contracts/wasm.sha256\` written for the first time." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Hash mismatch** — build rejected for supply-chain safety." >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${COMPUTED}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload wasm.sha256 as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-sha256
+          path: contracts/wasm.sha256
+          retention-days: 90
+
+      - name: Upload WASM binary as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stellar-stream-wasm
+          path: contracts/target/wasm32-unknown-unknown/release/stellar_stream.wasm
+          retention-days: 90
+
+      # On pushes to main (not PRs), commit the updated wasm.sha256 back to the repo
+      - name: Commit updated wasm.sha256 to repository
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: ${{ github.workspace }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add contracts/wasm.sha256
+          if git diff --cached --quiet; then
+            echo "wasm.sha256 is unchanged — no commit needed."
+          else
+            git commit -m "chore(contracts): update wasm.sha256 [skip ci]"
+            git push
+          fi
