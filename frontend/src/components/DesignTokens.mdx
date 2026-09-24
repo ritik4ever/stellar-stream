@@ -1,0 +1,41 @@
+import { Meta, ColorPalette, ColorItem } from '@storybook/blocks';
+
+<Meta title="Design Tokens" />
+
+# Design Tokens
+
+Core design tokens used across the StellarStream frontend, defined in `tailwind.config.js`.
+
+## Colors
+
+<ColorPalette>
+  <ColorItem
+    title="stellar.blue"
+    subtitle="Primary brand blue"
+    colors={{ blue: '#3E1BDB' }}
+  />
+  <ColorItem
+    title="stellar.purple"
+    subtitle="Secondary accent"
+    colors={{ purple: '#7B61FF' }}
+  />
+  <ColorItem
+    title="stellar.dark"
+    subtitle="Base background (dark mode)"
+    colors={{ dark: '#0B0D17' }}
+  />
+  <ColorItem
+    title="stellar.card"
+    subtitle="Card / surface background"
+    colors={{ card: '#141627' }}
+  />
+  <ColorItem
+    title="stellar.border"
+    subtitle="Border color"
+    colors={{ border: '#1E2139' }}
+  />
+</ColorPalette>
+
+## Dark Mode
+
+Dark mode is class-based (`darkMode: 'class'`), toggled by adding a `dark` class to a parent element rather than relying on system preference.
