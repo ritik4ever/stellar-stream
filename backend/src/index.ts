@@ -1191,6 +1191,11 @@ app.get(
           stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
       );
     }
+    if (query.assetCode && query.assetCode.length > 0) {
+      data = data.filter((stream) =>
+        query.assetCode!.includes(stream.assetCode.toUpperCase()),
+      );
+    }
     if (query.q && query.q.length > 0) {
       const searchTerm = query.q.toLowerCase();
       data = data.filter((stream) => {
@@ -1201,6 +1206,12 @@ app.get(
           stream.assetCode.toLowerCase().includes(searchTerm)
         );
       });
+    }
+    if (query.minAmount !== undefined) {
+      data = data.filter((stream) => stream.totalAmount >= query.minAmount!);
+    }
+    if (query.maxAmount !== undefined) {
+      data = data.filter((stream) => stream.totalAmount <= query.maxAmount!);
     }
 
     const hasPage = req.query.page !== undefined;
