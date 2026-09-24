@@ -1311,7 +1311,7 @@ export function markStreamComplete(id: string, at: number = nowInSeconds()): Str
   return stream;
 }
 
-export function deleteStreamById(id: string): boolean {
+export async function deleteStreamById(id: string): Promise<boolean> {
   const db = getDb();
 
   const stream = db
@@ -1324,6 +1324,9 @@ export function deleteStreamById(id: string): boolean {
 
   const now = nowInSeconds();
   db.prepare("UPDATE streams SET archived_at = ? WHERE id = ?").run(now, id);
+
+  await invalidateCache("streams:list:");
+  await invalidateCache("streams:export:");
 
   return true;
 }
