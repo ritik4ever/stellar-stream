@@ -30,6 +30,11 @@ NETWORK_PASSPHRASE="${NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}"
 RPC_URL="${RPC_URL:-https://soroban-testnet.stellar.org:443}"
 
 # ── Checks ────────────────────────────────────────────────────────────────
+if [ -z "$CONTRACT_ID" ] && [ -f "contracts/contract_id.txt" ]; then
+    CONTRACT_ID=$(cat contracts/contract_id.txt)
+    echo -e "${YELLOW}Notice: CONTRACT_ID not set directly, read from contracts/contract_id.txt ($CONTRACT_ID)${NC}"
+fi
+
 if [ -z "$CONTRACT_ID" ]; then
     echo -e "${RED}Error: CONTRACT_ID environment variable is required${NC}"
     echo ""
@@ -75,6 +80,20 @@ echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}Bindings generated successfully!${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
+
+if [ "$SKIP_TS_CHECK" != "true" ] && [ -d "frontend" ] && [ -f "frontend/tsconfig.json" ]; then
+    echo -e "${YELLOW}Validating frontend TypeScript compilation...${NC}"
+    if command -v npx &> /dev/null; then
+        (cd frontend && npx tsc --noEmit)
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}Frontend TypeScript verification passed!${NC}"
+        else
+            echo -e "${RED}Frontend TypeScript verification failed!${NC}"
+            exit 1
+        fi
+    fi
+fi
+
 echo -e "Output location: ${YELLOW}$OUTPUT_DIR/${NC}"
 echo ""
 echo -e "${GREEN}Next steps:${NC}"
