@@ -24,10 +24,12 @@ const streamStoreMocks = vi.hoisted(() => ({
 
 const eventHistoryMocks = vi.hoisted(() => ({
   getStreamHistory: vi.fn(),
+  getStreamClaimEvents: vi.fn(),
   getAllEvents: vi.fn(),
   getGlobalEvents: vi.fn(),
   countAllEvents: vi.fn(),
   countStreamEvents: vi.fn(),
+  countStreamClaimEvents: vi.fn(),
   recordEvent: vi.fn(),
   getStreamEventSummary: vi.fn(),
 }));
@@ -233,7 +235,9 @@ beforeEach(() => {
   eventHistoryMocks.getGlobalEvents.mockReset();
   eventHistoryMocks.countAllEvents.mockReset();
   eventHistoryMocks.countStreamEvents.mockReset();
+  eventHistoryMocks.countStreamClaimEvents.mockReset();
   eventHistoryMocks.getStreamHistory.mockReset();
+  eventHistoryMocks.getStreamClaimEvents.mockReset();
   eventHistoryMocks.getStreamEventSummary.mockReset();
   eventHistoryMocks.recordEvent.mockReset();
 });
@@ -780,6 +784,63 @@ describe("GET /api/events", () => {
       timestamp: 400,
       actor: "GSENDER",
       amount: 50,
+    });
+  });
+});
+
+describe("GET /api/streams/:id/claim-history", () => {
+  it("returns 404 for non-existent stream", async () => {
+    streamStoreMocks.getStream.mockReturnValue(null);
+
+    const response = await request(app).get("/api/streams/nonexistent/claim-history");
+
+    expect(response.status).toBe(404);
+    expect(response.body.error).toBe("Stream not found.");
+  });
+
+  it("returns paginated claim events with tx_hash and Stellar Explorer links", async () => {
+    const mockStream = {
+      id: "stream-123",
+      sender: "GSENDER...",
+      recipient: "GRECIPIENT...",
+      totalAmount: 1000,
+      durationSeconds: 3600,
+      startAt: 1000,
+      createdAt: 1000,
+    };
+    streamStoreMocks.getStream.mockReturnValue(mockStream);
+    eventHistoryMocks.countStreamClaimEvents.mockReturnValue(1);
+    eventHistoryMocks.getStreamClaimEvents.mockReturnValue([
+      {
+        id: 1,
+        streamId: "stream-123",
+        eventType: "claimed",
+        timestamp: 1500,
+        actor: "GRECIPIENT...",
+        amount: 250,
+        metadata: { tx_hash: "abcd1234txhash" },
+      },
+    ]);
+
+    const response = await request(app).get("/api/streams/stream-123/claim-history");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      data: [
+        {
+          claim_id: 1,
+          amount: 250,
+          claimed_at: 1500,
+          tx_hash: "abcd1234txhash",
+          recipient: "GRECIPIENT...",
+          explorer_url: "https://stellar.expert/explorer/testnet/tx/abcd1234txhash",
+          stellar_explorer_url: "https://stellar.expert/explorer/testnet/tx/abcd1234txhash",
+        },
+      ],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+      hasMore: false,
     });
   });
 });

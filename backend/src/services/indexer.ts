@@ -439,7 +439,10 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           // actor == recipient for Claimed events
           value.actor ?? value.recipient,
           value.amount,
-          { claimed_amount: value.claimed_amount },
+          {
+            claimed_amount: value.claimed_amount,
+            tx_hash: (event as any).txHash ?? (event as any).tx_hash ?? (event as any).transactionHash,
+          },
           event.ledger,
         );
         break;

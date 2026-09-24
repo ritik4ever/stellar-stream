@@ -90,6 +90,17 @@ export function getStreamHistory(streamId: string, limit = 20, offset = 0, order
   return rows.map(rowToEvent);
 }
 
+export function getStreamClaimEvents(streamId: string, limit = 20, offset = 0, order: 'asc' | 'desc' = 'desc'): StreamEvent[] {
+  const db = getDb();
+  const orderClause = order === 'asc' ? 'ASC' : 'DESC';
+  const rows = db
+    .prepare(
+      `SELECT * FROM stream_events WHERE stream_id = ? AND event_type = 'claimed' ORDER BY timestamp ${orderClause}, id ${orderClause} LIMIT ? OFFSET ?`,
+    )
+    .all(streamId, limit, offset) as EventRow[];
+  return rows.map(rowToEvent);
+}
+
 export function getAllEvents(limit = 100, offset = 0, cursor?: number): StreamEvent[] {
   const db = getDb();
   let query = `SELECT * FROM stream_events`;
@@ -187,6 +198,14 @@ export function countStreamEvents(streamId: string): number {
   const db = getDb();
   const row = db
     .prepare(`SELECT COUNT(*) as count FROM stream_events WHERE stream_id = ?`)
+    .get(streamId) as { count: number };
+  return row.count;
+}
+
+export function countStreamClaimEvents(streamId: string): number {
+  const db = getDb();
+  const row = db
+    .prepare(`SELECT COUNT(*) as count FROM stream_events WHERE stream_id = ? AND event_type = 'claimed'`)
     .get(streamId) as { count: number };
   return row.count;
 }

@@ -188,4 +188,24 @@ describe("eventHistory", () => {
       expect(historyB[0].timestamp).toBe(500);
     });
   });
+
+  describe("getStreamClaimEvents & countStreamClaimEvents", () => {
+    it("returns only claim events for a stream and counts them correctly", async () => {
+      const { recordEvent, getStreamClaimEvents, countStreamClaimEvents } = await import("./eventHistory");
+
+      recordEvent("stream-claim-test", "created", 1000, "SENDER", 500);
+      recordEvent("stream-claim-test", "claimed", 2000, "RECIPIENT", 100, { tx_hash: "0xhash1" });
+      recordEvent("stream-claim-test", "paused", 2500, "SENDER");
+      recordEvent("stream-claim-test", "claimed", 3000, "RECIPIENT", 150, { tx_hash: "0xhash2" });
+
+      const claimEvents = getStreamClaimEvents("stream-claim-test", 20, 0, "desc");
+      const count = countStreamClaimEvents("stream-claim-test");
+
+      expect(count).toBe(2);
+      expect(claimEvents).toHaveLength(2);
+      expect(claimEvents.every((e) => e.eventType === "claimed")).toBe(true);
+      expect(claimEvents[0].amount).toBe(150);
+      expect(claimEvents[1].amount).toBe(100);
+    });
+  });
 });
