@@ -618,35 +618,81 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
   res.json(result);
 });
 
+/**
+ * GET /api/streams/search
+ *
+ * Dedicated full-text search endpoint.
+ *
+ * Query parameters
+ * ----------------
+ * q        (required) Non-empty search term.  Case-insensitive substring match
+ *           across stream id, sender, recipient, and assetCode.
+ * asset    (optional) Exact asset-code match (case-insensitive, 1-12 alphanumeric
+ *           characters).  When supplied, results are AND-filtered: only streams
+ *           that match BOTH `q` AND the given asset code are returned.
+ *
+ * Boundary behaviour
+ * ------------------
+ * • Missing or empty `q`              → 400 VALIDATION_ERROR
+ * • `asset` with invalid format       → 400 VALIDATION_ERROR
+ * • Valid `q` that matches nothing    → 200, data:[], total:0
+ * • Valid `q` + `asset` combo         → 200, intersection of both filters
+ */
 app.get("/api/streams/search", readLimiter, (req: Request, res: Response) => {
-  const q = z.string().min(1, "search query must not be empty").safeParse(req.query.q);
-  if (!q.success) {
-    sendValidationError(req, res, q.error.issues);
+  // --- validate q ---
+  const qResult = z.string().min(1, "search query must not be empty").safeParse(req.query.q);
+  if (!qResult.success) {
+    sendValidationError(req, res, qResult.error.issues);
+    return;
+  }
+
+  // --- validate optional asset filter ---
+  const ASSET_CODE_REGEX = /^[A-Za-z0-9]{1,12}$/;
+  const assetResult = z
+    .string()
+    .regex(ASSET_CODE_REGEX, "asset must be 1–12 alphanumeric characters (e.g. USDC, XLM)")
+    .optional()
+    .safeParse(req.query.asset !== undefined ? String(req.query.asset) : undefined);
+  if (!assetResult.success) {
+    sendValidationError(req, res, assetResult.error.issues);
     return;
   }
 
   try {
-    const streamIds = searchStreamsFts(q.data);
     const now = nowInSeconds();
-    const results = streamIds
+    // Step 1: FTS scan — returns matching stream IDs ordered newest-first
+    const streamIds = searchStreamsFts(qResult.data);
+
+    // Step 2: Hydrate stream records and compute progress
+    let results = streamIds
       .map((id) => getStream(id))
-      .filter((s) => s !== null)
+      .filter((s): s is NonNullable<typeof s> => s !== null)
       .map((s) => ({
         ...s,
-        progress: calculateProgress(s!, now),
+        progress: calculateProgress(s, now),
       }));
+
+    // Step 3: AND-filter by asset code (case-insensitive exact match)
+    const assetFilter = assetResult.data?.toUpperCase();
+    if (assetFilter) {
+      results = results.filter(
+        (s) => s.assetCode.toUpperCase() === assetFilter,
+      );
+    }
 
     res.set("Cache-Control", "max-age=5");
     res.json({
       data: results,
       total: results.length,
-      query: q.data,
+      query: qResult.data,
+      ...(assetFilter ? { asset: assetFilter } : {}),
     });
   } catch (err) {
     logger.error({ err }, "search failed");
     sendApiError(req, res, 500, "Search failed.", { code: "SEARCH_ERROR" });
   }
 });
+
 
 app.get("/api/events", readLimiter, (req: Request, res: Response) => {
   const parsedQuery = listEventsQuerySchema.safeParse(req.query);
