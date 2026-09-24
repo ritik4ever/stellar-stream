@@ -129,21 +129,11 @@ async function waitForFinalTransactionStatus(
   }
 }
 
-/**
- * Claim vested tokens from a stream.
- *
- * @param streamId       - Numeric stream ID.
- * @param recipientAddress - Stellar public key of the recipient (must match stream).
- * @param amount         - Claimable amount as reported by the backend (for display only;
- *                         the contract determines the actual claimable amount on-chain).
- * @param assetCode      - Asset code used in the UI result.
- */
-export async function claimWithFreighter(
+async function buildClaimTransaction(
   streamId: string,
   recipientAddress: string,
   amount: number,
-  assetCode = "tokens",
-): Promise<ClaimResponse> {
+) {
   if (!CONTRACT_ID) {
     throw new SorobanClaimError(
       "Missing VITE_CONTRACT_ID; cannot submit Soroban claim.",
@@ -175,6 +165,30 @@ export async function claimWithFreighter(
     )
     .setTimeout(30)
     .build();
+
+  return { server, transaction };
+}
+
+/**
+ * Claim vested tokens from a stream.
+ *
+ * @param streamId       - Numeric stream ID.
+ * @param recipientAddress - Stellar public key of the recipient (must match stream).
+ * @param amount         - Claimable amount as reported by the backend (for display only;
+ *                         the contract determines the actual claimable amount on-chain).
+ * @param assetCode      - Asset code used in the UI result.
+ */
+export async function claimWithFreighter(
+  streamId: string,
+  recipientAddress: string,
+  amount: number,
+  assetCode = "tokens",
+): Promise<ClaimResponse> {
+  const { server, transaction } = await buildClaimTransaction(
+    streamId,
+    recipientAddress,
+    amount,
+  );
 
   const preparedTransaction = await server.prepareTransaction(transaction);
   const signed = await (freighter as any).signTransaction(
@@ -266,4 +280,36 @@ export async function getClaimableBatch(
   }
 
   return response.json() as Promise<ClaimableBatchResponse>;
+}
+
+export interface ClaimFeeEstimate {
+  feeStroops: string;
+  feeXlm: number;
+}
+
+const STROOPS_PER_XLM = 10_000_000;
+
+/**
+ * Estimate the network fee for claiming, without signing or submitting
+ * anything. Uses Soroban simulation (prepareTransaction) to compute the
+ * resource fee for the `claim` invocation plus the base network fee.
+ */
+export async function estimateClaimFee(
+  streamId: string,
+  recipientAddress: string,
+  amount: number,
+): Promise<ClaimFeeEstimate> {
+  const { server, transaction } = await buildClaimTransaction(
+    streamId,
+    recipientAddress,
+    amount,
+  );
+  
+  const prepared = await server.prepareTransaction(transaction);
+  const feeStroops = prepared.fee ?? DEFAULT_FEE_STROOPS;
+  
+  return {
+    feeStroops,
+    feeXlm: Number(feeStroops) / STROOPS_PER_XLM,
+  };
 }

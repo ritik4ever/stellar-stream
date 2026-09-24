@@ -1,0 +1,71 @@
+name: Backend Memory Leak Detection
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+
+jobs:
+  memory-leak-check:
+    name: Heap growth under load (clinic.js doctor)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Ensure lsof is available
+        run: sudo apt-get update && sudo apt-get install -y lsof
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Install clinic.js
+        working-directory: backend
+        run: npm install --no-save clinic
+
+      - name: Create CI env file
+        run: |
+          cat > backend/.env <<'EOF'
+          PORT=3001
+          SOROBAN_DISABLED=true
+          ALLOWED_ASSETS=USDC,XLM
+          EOF
+
+      - name: Baseline run — real backend under load
+        working-directory: backend
+        run: >
+          node scripts/memory-leak-check.js
+          --target=dist/index.js --port=3001 --duration=300
+          --max-growth-mb=50 --report-dir=.clinic/baseline
+
+      - name: Injected leak — verify detection works
+        working-directory: backend
+        run: >
+          node scripts/memory-leak-check.js
+          --target=scripts/fixtures/leaky-server.js --port=3002 --duration=60
+          --max-growth-mb=50 --report-dir=.clinic/leak-fixture --expect-failure
+
+      - name: Upload clinic.js reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clinic-memory-report
+          path: backend/.clinic/

@@ -33,6 +33,17 @@ export const totalAmountSchema = z.coerce
   .finite("Total amount must be a valid number.")
   .positive("Amount must be greater than zero.");
 
+export function createClaimAmountSchema(maxClaimable: number) {
+  return z.coerce
+    .number({ invalid_type_error: "Enter a valid amount." })
+    .finite("Enter a valid amount.")
+    .positive("Amount must be greater than zero.")
+    .max(
+      maxClaimable,
+      `Amount cannot exceed the claimable balance of ${maxClaimable}.`,
+    );
+}
+
 export const durationSecondsSchema = z.coerce
   .number()
   .int("durationSeconds must be a whole number of seconds.")

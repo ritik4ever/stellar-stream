@@ -5,6 +5,7 @@ import { CopyableAddress } from "./CopyableAddress";
 import { useClaimStream, ClaimState } from "../hooks/useClaimStream";
 import { useClaimBatch, type BatchClaimInput } from "../hooks/useClaimBatch";
 import { ClaimBatchModal } from "./ClaimBatchModal";
+import { ClaimModal } from "./ClaimModal";
 import { ClaimResult } from "../services/soroban";
 
 interface RecipientDashboardProps {
@@ -141,6 +142,7 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
   } | null>(null);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [pendingBatchInputs, setPendingBatchInputs] = useState<BatchClaimInput[]>([]);
+  const [claimModalStream, setClaimModalStream] = useState<Stream | null>(null);
 
   // Auto-dismiss toast after 5 s
   useEffect(() => {
@@ -208,6 +210,15 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
     handleClaimSuccess,
     handleClaimFailure,
   );
+
+  // Auto-close single claim modal on resolution
+  useEffect(() => {
+    if (!claimModalStream) return;
+    if (claimState.streamId !== claimModalStream.id) return;
+    if (claimState.status === "confirmed" || claimState.status === "failed") {
+      setClaimModalStream(null);
+    }
+  }, [claimState, claimModalStream]);
 
   // Load streams on mount / address change
   useEffect(() => {
@@ -352,6 +363,25 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
         />
       )}
 
+      {claimModalStream && recipientAddress && (
+        <ClaimModal
+          streamId={claimModalStream.id}
+          recipientAddress={recipientAddress}
+          claimableAmount={claimModalStream.progress.vestedAmount}
+          assetCode={claimModalStream.assetCode}
+          isSubmitting={isPending && claimState.streamId === claimModalStream.id}
+          onConfirm={(amount) =>
+            claim({
+              streamId: claimModalStream.id,
+              recipientAddress,
+              amount,
+              assetCode: claimModalStream.assetCode,
+            })
+          }
+          onClose={() => setClaimModalStream(null)}
+        />
+      )}
+
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Recipient Dashboard</h2>
         <p className="muted recipient-dashboard-subtitle">
@@ -473,14 +503,7 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
                           assetCode={stream.assetCode}
                           claimState={claimState}
                           walletConnected={Boolean(recipientAddress)}
-                          onClaim={() =>
-                            claim({
-                              streamId: stream.id,
-                              recipientAddress: recipientAddress,
-                              amount: stream.progress.vestedAmount,
-                              assetCode: stream.assetCode,
-                            })
-                          }
+                          onClaim={() => setClaimModalStream(stream)}
                         />
                       </td>
                     </tr>
