@@ -19,6 +19,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
+import { VestingBar } from "./VestingBar";
 
 interface SenderDashboardProps {
   /** Connected wallet address (sender account). When null, user must connect. */
@@ -661,19 +662,7 @@ export function SenderDashboard({
                                   {stream.progress.percentComplete}%
                                 </strong>
                               </div>
-                              <div
-                                className="progress-bar"
-                                aria-hidden
-                              >
-                                <div
-                                  style={{
-                                    width: `${Math.min(
-                                      stream.progress.percentComplete,
-                                      100
-                                    )}%`,
-                                  }}
-                                />
-                              </div>
+                              <VestingBar stream={stream} />
                             </td>
                             <td>
                               <div className="action-cell">

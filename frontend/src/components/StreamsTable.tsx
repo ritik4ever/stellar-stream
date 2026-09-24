@@ -22,6 +22,7 @@ import {
   type OptionalStreamColumn,
 } from "../hooks/useStreamTableColumns";
 import { useWebSocket } from "../hooks/useWebSocket";
+import { VestingBar } from "./VestingBar";
 
 interface StreamsTableProps {
   streams: Stream[];
@@ -728,13 +729,7 @@ const StreamRow = memo(function StreamRow({
               Vested: {stream.progress.vestedAmount.toFixed(2)} {stream.assetCode}
             </span>
           </div>
-          <div className="progress-bar" aria-hidden>
-            <div
-              style={{
-                width: `${Math.min(stream.progress.percentComplete, 100)}%`,
-              }}
-            />
-          </div>
+          <VestingBar stream={stream} />
         </td>
         <td>
           <div className="status-cell">
