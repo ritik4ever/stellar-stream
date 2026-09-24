@@ -1747,6 +1747,76 @@ describe("Backend Integration Tests", () => {
         expect(response.body.page).toBe(1);
         expect(response.body.pageSize).toBe(2);
       });
+
+      it("should filter by actor", async () => {
+        const response = await request(app)
+          .get("/api/events")
+          .query({ actor: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF" });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(4);
+        expect(response.body.total).toBe(4);
+        response.body.data.forEach((e: any) => {
+          expect(e.actor).toBe("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF");
+        });
+      });
+
+      it("should filter by to timestamp", async () => {
+        const now = Math.floor(Date.now() / 1000);
+        // Events were inserted at now+1, now+2, now+3 (created) and now+100 (canceled)
+        // Filtering to now+50 should only return the 3 created events
+        const response = await request(app)
+          .get("/api/events")
+          .query({ to: now + 50 });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(3);
+        expect(response.body.data.every((e: any) => e.eventType === "created")).toBe(true);
+      });
+
+      it("should combine actor and to filters", async () => {
+        const now = Math.floor(Date.now() / 1000);
+        // Only the canceled event has timestamp > now+50
+        const response = await request(app)
+          .get("/api/events")
+          .query({ actor: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", to: now + 50 });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(3);
+        response.body.data.forEach((e: any) => {
+          expect(e.actor).toBe("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF");
+          expect(e.timestamp).toBeLessThanOrEqual(now + 50);
+        });
+      });
+
+      it("should combine all filters: eventType, streamId, actor, since, and to", async () => {
+        const now = Math.floor(Date.now() / 1000);
+        const response = await request(app)
+          .get("/api/events")
+          .query({
+            eventType: "created",
+            streamId: "1",
+            actor: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+            since: now,
+            to: now + 50,
+          });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.total).toBe(1);
+        expect(response.body.data[0].eventType).toBe("created");
+        expect(response.body.data[0].streamId).toBe("1");
+      });
+
+      it("should return empty result for non-existent actor", async () => {
+        const response = await request(app)
+          .get("/api/events")
+          .query({ actor: "GNONEXISTENT" });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toEqual([]);
+        expect(response.body.total).toBe(0);
+      });
     });
   });
 

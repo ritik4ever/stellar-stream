@@ -36,9 +36,11 @@ vi.mock("./services/streamStore", () => streamStoreMocks);
 vi.mock("./services/eventHistory", () => eventHistoryMocks);
 vi.mock("./services/auth", () => ({
   authMiddleware: vi.fn((req: any, res: any, next: any) => next()),
+  adminJwtAuth: vi.fn((req: any, res: any, next: any) => next()),
   generateChallenge: vi.fn(),
   refreshToken: vi.fn(),
   verifyChallengeAndIssueToken: vi.fn(),
+  getJwtSecret: vi.fn(() => "test_secret"),
 }));
 
 const TEST_JWT_SECRET = "test_secret_for_integration";
@@ -686,7 +688,7 @@ describe("GET /api/events", () => {
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
-    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith("created");
+    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith("created", undefined, undefined, undefined, undefined);
 
   });
 
@@ -781,6 +783,89 @@ describe("GET /api/events", () => {
       actor: "GSENDER",
       amount: 50,
     });
+  });
+
+  it("filters by actor – passes it to getGlobalEvents and countAllEvents", () => {
+    const actorEvents = sampleEvents.filter((e) => e.actor === "GSENDER");
+    eventHistoryMocks.countAllEvents.mockReturnValue(actorEvents.length);
+    eventHistoryMocks.getGlobalEvents.mockReturnValue(actorEvents);
+
+    const { status, body } = invokeGlobalEventsRoute({ actor: "GSENDER" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(4);
+    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith(
+      undefined, undefined, undefined, "GSENDER", undefined,
+    );
+    expect(eventHistoryMocks.getGlobalEvents).toHaveBeenCalledWith(
+      expect.any(Number), expect.any(Number), undefined, undefined, undefined, undefined, "GSENDER", undefined,
+    );
+  });
+
+  it("filters by to timestamp – passes it to getGlobalEvents and countAllEvents", () => {
+    const toEvents = sampleEvents.filter((e) => e.timestamp <= 300);
+    eventHistoryMocks.countAllEvents.mockReturnValue(toEvents.length);
+    eventHistoryMocks.getGlobalEvents.mockReturnValue(toEvents);
+
+    const { status, body } = invokeGlobalEventsRoute({ to: "300" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(3);
+    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith(
+      undefined, undefined, undefined, undefined, 300,
+    );
+    expect(eventHistoryMocks.getGlobalEvents).toHaveBeenCalledWith(
+      expect.any(Number), expect.any(Number), undefined, undefined, undefined, undefined, undefined, 300,
+    );
+  });
+
+  it("combines actor and to filters", () => {
+    const filteredEvents = sampleEvents.filter(
+      (e) => e.actor === "GSENDER" && e.timestamp <= 300,
+    );
+    eventHistoryMocks.countAllEvents.mockReturnValue(filteredEvents.length);
+    eventHistoryMocks.getGlobalEvents.mockReturnValue(filteredEvents);
+
+    const { status, body } = invokeGlobalEventsRoute({ actor: "GSENDER", to: "300" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(3);
+    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith(
+      undefined, undefined, undefined, "GSENDER", 300,
+    );
+  });
+
+  it("combines all filters: eventType, streamId, actor, since, and to", () => {
+    eventHistoryMocks.countAllEvents.mockReturnValue(1);
+    eventHistoryMocks.getGlobalEvents.mockReturnValue([sampleEvents[0]]);
+
+    const { status, body } = invokeGlobalEventsRoute({
+      eventType: "claimed",
+      streamId: "stream-1",
+      actor: "GSENDER",
+      since: "350",
+      to: "450",
+    });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(1);
+    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith(
+      "claimed", "stream-1", 350, "GSENDER", 450,
+    );
+    expect(eventHistoryMocks.getGlobalEvents).toHaveBeenCalledWith(
+      expect.any(Number), expect.any(Number), "claimed", undefined, "stream-1", 350, "GSENDER", 450,
+    );
+  });
+
+  it("returns empty result for no matches with correct metadata", () => {
+    eventHistoryMocks.countAllEvents.mockReturnValue(0);
+    eventHistoryMocks.getGlobalEvents.mockReturnValue([]);
+
+    const { status, body } = invokeGlobalEventsRoute({ actor: "GNONEXISTENT" });
+
+    expect(status).toBe(200);
+    expect(body.data).toEqual([]);
+    expect(body.total).toBe(0);
   });
 });
 

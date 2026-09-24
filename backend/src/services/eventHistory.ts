@@ -114,6 +114,8 @@ export function getGlobalEvents(
   cursor?: number,
   streamId?: string,
   since?: number,
+  actor?: string,
+  to?: number,
 ): StreamEvent[] {
   const db = getDb();
   const conditions: string[] = [];
@@ -139,6 +141,16 @@ export function getGlobalEvents(
     params.push(since);
   }
 
+  if (to !== undefined) {
+    conditions.push("timestamp <= ?");
+    params.push(to);
+  }
+
+  if (actor) {
+    conditions.push("actor = ?");
+    params.push(actor);
+  }
+
   let query = "SELECT * FROM stream_events";
   if (conditions.length > 0) {
     query += " WHERE " + conditions.join(" AND ");
@@ -154,6 +166,8 @@ export function countAllEvents(
   eventType?: StreamEventType,
   streamId?: string,
   since?: number,
+  actor?: string,
+  to?: number,
 ): number {
   const db = getDb();
   const conditions: string[] = [];
@@ -172,6 +186,16 @@ export function countAllEvents(
   if (since !== undefined) {
     conditions.push("timestamp > ?");
     params.push(since);
+  }
+
+  if (to !== undefined) {
+    conditions.push("timestamp <= ?");
+    params.push(to);
+  }
+
+  if (actor) {
+    conditions.push("actor = ?");
+    params.push(actor);
   }
 
   let query = "SELECT COUNT(*) as count FROM stream_events";
