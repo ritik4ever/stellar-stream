@@ -35,13 +35,24 @@ export const triggerWebhook = async (event: string, data: any): Promise<void> =>
 
   try {
     const db = getDb();
+    const now = Math.floor(Date.now() / 1000);
+
+    const existing = db.prepare(`
+      SELECT id FROM webhook_deliveries
+      WHERE stream_id = ? AND event = ? AND created_at >= ?
+      LIMIT 1
+    `).get(streamId, event, now - 30);
+
+    if (existing) {
+      logger.info({ event, streamId }, "webhook delivery skipped duplicate");
+      return;
+    }
+
     const stmt = db.prepare(`
       INSERT INTO webhook_deliveries (stream_id, event, payload, attempt, max_attempts, status, next_retry_at, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    // Queue for immediate delivery relative to the worker's polling cycle
-    const now = Math.floor(Date.now() / 1000);
     stmt.run(
       streamId,
       event,

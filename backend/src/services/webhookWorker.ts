@@ -49,8 +49,9 @@ export const processWebhookQueue = async () => {
         const timestamp = new Date().toISOString();
         const body = {
           event,
-          payload: parsedPayload,
+          stream_id: delivery.stream_id,
           timestamp,
+          data: parsedPayload,
         };
         const bodyString = JSON.stringify(body);
         const headers = getWebhookHeaders(

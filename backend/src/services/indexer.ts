@@ -6,6 +6,7 @@ import {
   scValToNative,
 } from "@stellar/stellar-sdk";
 import { recordEventWithDb } from "./eventHistory";
+import { triggerWebhook } from "./webhook";
 import { getDb } from "./db";
 import {
   eventsIndexedTotal,
@@ -428,6 +429,13 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           },
           event.ledger,
         );
+        triggerWebhook("created", {
+          stream_id: value.stream_id.toString(),
+          sender: value.actor ?? value.sender,
+          recipient: value.recipient,
+          total_amount: value.total_amount,
+          asset_code: value.token,
+        });
         break;
 
       case "Claimed":
@@ -442,6 +450,12 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           { claimed_amount: value.claimed_amount },
           event.ledger,
         );
+        triggerWebhook("claimed", {
+          stream_id: value.stream_id.toString(),
+          actor: value.actor ?? value.recipient,
+          amount: value.amount,
+          claimed_amount: value.claimed_amount,
+        });
         break;
 
       case "Completed":
@@ -455,6 +469,11 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           undefined,
           event.ledger,
         );
+        triggerWebhook("completed", {
+          stream_id: value.stream_id.toString(),
+          actor: value.actor,
+          total_amount: value.total_amount,
+        });
         break;
 
       case "Canceled":
@@ -469,6 +488,11 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           undefined,
           event.ledger,
         );
+        triggerWebhook("canceled", {
+          stream_id: value.stream_id.toString(),
+          sender: value.actor ?? value.sender,
+          refunded_amount: value.refunded_amount,
+        });
         break;
 
       case "Paused":
@@ -483,6 +507,11 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           { paused_at: value.paused_at },
           event.ledger,
         );
+        triggerWebhook("paused", {
+          stream_id: value.stream_id.toString(),
+          sender: value.actor ?? value.sender,
+          paused_at: value.paused_at,
+        });
         break;
 
       case "Resumed":
@@ -497,6 +526,11 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           { resumed_at: value.resumed_at },
           event.ledger,
         );
+        triggerWebhook("resumed", {
+          stream_id: value.stream_id.toString(),
+          sender: value.actor ?? value.sender,
+          resumed_at: value.resumed_at,
+        });
         break;
 
       case "Transfer":
