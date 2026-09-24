@@ -32,6 +32,7 @@ export interface FieldErrors {
  * Represents the raw string values from the stream creation form.
  */
 export interface FormValues {
+  streamType: string;
   sender: string;
   recipient: string;
   assetCode: string;
