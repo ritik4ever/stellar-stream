@@ -29,7 +29,8 @@ export function up(db: Database.Database): void {
         ON streams(start_at);
   `);
 
-  console.log("[migration] 0002_add_stream_indexes: indexes applied.");
+  // Migration logged via stderr (pino logger not available in migration context)
+  process.stderr.write("[migration] 0002_add_stream_indexes: indexes applied.\n");
 }
 
 // ── Allow running directly: ts-node src/migrations/0002_add_stream_indexes.ts

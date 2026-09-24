@@ -199,9 +199,9 @@ export function validateEnv(): ValidatedConfig {
     if (process.env.STELLAR_CONTRACT_ID) {
       const contractIdValidation = stellarAccountIdSchema.safeParse(process.env.STELLAR_CONTRACT_ID);
       if (!contractIdValidation.success) {
-        console.error("❌ STELLAR_CONTRACT_ID validation failed:");
+        logger.error("STELLAR_CONTRACT_ID validation failed");
         contractIdValidation.error.issues.forEach((issue: z.ZodIssue) => {
-          console.error(`   ${issue.message}`);
+          logger.error({ issue: issue.message }, "STELLAR_CONTRACT_ID validation issue");
         });
         process.exit(1);
       }
