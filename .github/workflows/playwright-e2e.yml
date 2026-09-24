@@ -30,6 +30,12 @@ jobs:
         working-directory: frontend
         run: npx playwright install chromium
 
+      - name: Create frontend env file for CI
+        run: |
+          cat >> frontend/.env <<'EOF'
+          VITE_E2E_MOCK_FREIGHTER=true
+          EOF
+
       - name: Create backend env file for CI
         run: |
           cat > backend/.env <<'EOF'
