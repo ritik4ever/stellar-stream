@@ -88,7 +88,7 @@ Use the **Friendbot** service to fund a testnet account:
 ## For Recipients
 
 ### How do I claim funds from a stream?
-In the dashboard, open the stream and click "Claim." Under the hood, the frontend fetches the current claimable amount from `GET /api/streams/:id`, then asks your connected Freighter wallet to sign a `claim(streamId, amount)` transaction, which is submitted to the Soroban contract. Once confirmed on-chain, the indexer picks up the `Claimed` event and updates the stream's history.
+In the dashboard, open the stream and click "Claim." Under the hood, the frontend fetches the current claimable amount from `GET /api/streams/:id`, then asks your connected Freighter wallet to sign a `claim(streamId, recipientAddress, amount)` transaction, which is submitted to the Soroban contract. Once confirmed on-chain, the indexer picks up the `Claimed` event and updates the stream's history.
 
 ### How much of a stream can I claim right now?
 Claimable balance grows continuously and linearly between the stream's start and end times (see [How does the vesting math work?](#how-does-the-vesting-math-work)). You can check the live claimable amount via `GET /api/streams/:id`, or read it directly from the contract using `claimable(stream_id, at_time)`.
@@ -118,6 +118,8 @@ $$A_{vested} = A_{total} \times R$$
 
 $$A_{remaining} = A_{total} - A_{vested}$$
 
+This is the no-cliff case (`cliffSeconds = 0`). When a cliff is set, $A_{vested} = 0$ for any $t < t_{start} + \text{cliffSeconds}$ — the cliff withholds payout but doesn't reset the clock, so once it passes, vesting still accrues from $t_{start}$ using the formula above. See [Section 2.3 of `docs/STREAM_MATH.md`](docs/STREAM_MATH.md#23-the-cliff) for the full cliff-adjusted derivation.
+
 See the full derivation, including cliff handling, in [`docs/STREAM_MATH.md`](docs/STREAM_MATH.md) and the [README's Stream Math Model](README.md#3-stream-math-model).
 
 ### What are the possible stream statuses?
@@ -141,11 +143,13 @@ The easiest way is to use the root-level scripts:
 # Install all dependencies
 npm run install:all
 
-# Start frontend and backend in development mode
+# Start the backend (long-running — leave this terminal open)
 npm run dev:backend
+
+# In a second terminal, start the frontend
 npm run dev:frontend
 ```
-See the [README.md](README.md#6-run-locally) for Docker Compose and manual setup alternatives.
+Both commands start long-running dev servers, so run them in separate terminals. See the [README.md](README.md#6-run-locally) for Docker Compose and manual setup alternatives.
 
 ### How do I run tests?
 - **Backend:** `cd backend && npm test`. See [TESTING.md](backend/TESTING.md) for integration test details.
@@ -208,7 +212,7 @@ The indexer circuit breaker opens when it encounters 5 consecutive failures whil
 The frontend uses polling (and WebSockets in newer flows) for near-real-time updates. If updates aren't appearing:
 1. Open Browser DevTools → **Network** tab.
 2. Filter by **WS** (WebSockets).
-3. Check if the connection to `ws://localhost:3001` is successful.
+3. Check if the connection to `ws://localhost:3001/api/ws` (adjust the port if you've changed `PORT` in `backend/.env`) is successful.
 4. Look for messages in the **Frames** or **Messages** sub-tab.
 5. Check [useWebSocket.ts](frontend/src/hooks/useWebSocket.ts) for reconnection logic.
 
