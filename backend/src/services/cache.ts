@@ -28,7 +28,7 @@ class InMemoryCache implements CacheAdapter {
         return entry.data;
     }
 
-    async set<T>(key: string, value: T, ttlSeconds = 5): Promise<void> {
+    async set<T>(key: string, value: T, ttlSeconds = 30): Promise<void> {
         this.cache.set(key, {
             data: value,
             expiresAt: Date.now() + ttlSeconds * 1000,
@@ -100,7 +100,7 @@ class RedisCache implements CacheAdapter {
         }
     }
 
-    async set<T>(key: string, value: T, ttlSeconds = 5): Promise<void> {
+    async set<T>(key: string, value: T, ttlSeconds = 30): Promise<void> {
         try {
             await this.redis.setex(key, ttlSeconds, JSON.stringify(value));
         } catch (err) {
@@ -110,7 +110,7 @@ class RedisCache implements CacheAdapter {
 
     async del(pattern: string): Promise<number> {
         try {
-            const keys = await this.redis.keys(`*${pattern}*`);
+            const keys = await this.redis.keys(`*${pattern}*`,x);
             if (keys.length === 0) return 0;
             return await this.redis.del(...keys);
         } catch (err) {

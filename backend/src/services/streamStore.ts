@@ -169,6 +169,9 @@ function upsertStream(record: StreamRecord): void {
     metadata: record.metadata ? JSON.stringify(record.metadata) : null,
   });
   syncFtsIndex(record.id, record.sender, record.recipient, record.assetCode);
+  getCache().del(`stream:${record.id}`).catch(() => {});
+  getCache().del("streams:list").catch(() => {});
+  getCache().del("streams:nextId").catch(() => {});
 }
 
 function listLocalStreamIds(): Set<string> {
@@ -314,6 +317,11 @@ async function fetchNextOnChainStreamId(
   contract: Contract,
   sourceAccount: Account,
 ): Promise<number | null> {
+  const cacheKey = "streams:nextId";
+  const cached = await getCached<number>(cacheKey);
+  if (cached !== null) {
+    return cached;
+  }
   const simRes = await simulateContractCall(
     contract,
     sourceAccount,
@@ -325,7 +333,9 @@ async function fetchNextOnChainStreamId(
     return null;
   }
 
-  return Number(scValToNative(simRes.result.retval));
+  const nextId = Number(scValToNative(simRes.result.retval));
+  await setCached(cacheKey, nextId, 30);
+  return nextId;
 }
 
 async function fetchOnChainStreamRecord(
@@ -391,7 +401,7 @@ async function fetchOnChainStreamRecord(
     metadata,
   };
 
-  await setCached(cacheKey, result, 5);
+  await setCached(cacheKey, result, 30);
   return result;
 }
 
