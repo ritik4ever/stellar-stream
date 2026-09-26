@@ -190,6 +190,18 @@ cargo build -p stellar-stream-contract --release
 
 ## PR Checklist
 
+### Dependency update verification
+
+After changing the Stellar SDK, frontend dependencies, or an npm lockfile, run this from the repository root:
+
+```bash
+npm run verify:dependencies
+```
+
+The command checks the backend and frontend manifest/lockfile pairs. For each valid pair it runs `npm ci`, the CI typecheck, lint and test commands (including coverage), the build, and `npm audit --package-lock-only --audit-level=high`. It prints `PASS`, `FAIL`, or `SKIP` for each check and exits with code 1 if any check fails. `npm ci` removes the corresponding `node_modules`, so save any local changes there first. An npm registry connection is needed for a fresh install and the audit.
+
+Treat a failed clean install, typecheck, lint, test, build, or high/critical audit as a failed verification report. An audit service error is also a failure, but it is not evidence of a vulnerability; rerun it when the service is available. Inspect findings with `cd backend && npm audit` or `cd frontend && npm audit`. If only the manifest and lockfile disagree, the command still audits the existing lockfile; those findings describe locked packages, which may differ from the intended manifest. Fix any mismatch before retrying; regenerate the affected lockfile with npm and commit it alongside the manifest. The current frontend manifest and lockfile are empty, so the command reports that existing failure until they are repaired.
+
 Before submitting a pull request, ensure your changes meet the following criteria:
 
 ### Code Quality
