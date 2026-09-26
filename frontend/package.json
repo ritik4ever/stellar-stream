@@ -23,6 +23,14 @@
         "recharts": "^3.7.0",
         "zod": "^4.3.6"
     },
+    "overrides": {
+        "@stellar/stellar-sdk": {
+            "toml": "5.0.0"
+        },
+        "@storybook/addon-actions": {
+            "uuid": "11.1.1"
+        }
+    },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
         "@playwright/test": "^1.60.0",

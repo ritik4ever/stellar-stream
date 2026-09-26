@@ -22,11 +22,15 @@ notes and the lockfile diff, especially for `@stellar/stellar-sdk` and
 `@stellar/freighter-api`, because the wallet and Soroban integration depend on
 their APIs. Commit both dependency files with the change.
 
-## Current SDK audit constraint
+## Scoped security overrides
 
-As checked on September 26, 2026, the frontend production audit still reports
-`toml` through Stellar SDK 14. The available npm audit fix upgrades the SDK to
-17, which requires Node.js 22 or later; frontend CI currently runs Node.js 20.
-Treat that SDK upgrade as a separate compatibility change with a Node version
-decision and wallet/Soroban regression tests. Do not use `npm audit fix --force`
-for a routine lockfile refresh.
+Stellar SDK 14 requests `toml` 3, which has known advisories. The manifest
+overrides only that SDK's parser to `toml` 5.0.0, which supports Node.js 20.
+The SDK resolver compatibility test exercises a real `stellar.toml` response.
+Storybook's action addon similarly receives `uuid` 11.1.1 to resolve its
+development dependency advisory. Review these overrides when upgrading either
+parent package; remove them once the parent package uses a patched version.
+
+After any dependency change, run both `npm audit --omit=dev` and `npm audit`
+to check production and development dependencies. Do not use
+`npm audit fix --force` for a routine lockfile refresh.
