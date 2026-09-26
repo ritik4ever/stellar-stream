@@ -1,0 +1,2 @@
+ALTER TABLE streams ADD COLUMN tags TEXT;
+ALTER TABLE stream_archive ADD COLUMN tags TEXT;
