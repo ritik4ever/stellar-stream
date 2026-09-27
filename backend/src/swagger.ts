@@ -750,6 +750,42 @@ export const swaggerDocument = {
               enum: ["asc", "desc"],
             },
           },
+          {
+            name: "minAmount",
+            in: "query",
+            required: false,
+            description:
+              "Filter streams whose totalAmount is greater than or equal to this value (inclusive). " +
+              "Combines with AND logic alongside all other filters.",
+            schema: {
+              type: "number",
+              minimum: 0,
+            },
+          },
+          {
+            name: "maxAmount",
+            in: "query",
+            required: false,
+            description:
+              "Filter streams whose totalAmount is less than or equal to this value (inclusive). " +
+              "Combines with AND logic alongside all other filters.",
+            schema: {
+              type: "number",
+              minimum: 0,
+            },
+          },
+          {
+            name: "include_archived",
+            in: "query",
+            required: false,
+            description:
+              "When set to 'true', includes soft-deleted (archived) streams in results. " +
+              "Defaults to false (archived streams are excluded).",
+            schema: {
+              type: "string",
+              enum: ["true", "false"],
+            },
+          },
         ],
         responses: {
           "200": {
