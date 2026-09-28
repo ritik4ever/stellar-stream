@@ -8,6 +8,8 @@ import Database from "better-sqlite3";
 const mockEventsIndexedTotal = vi.hoisted(() => ({ inc: vi.fn() }));
 const mockLedgersScannedTotal = vi.hoisted(() => ({ inc: vi.fn() }));
 const mockLastIndexedLedger = vi.hoisted(() => ({ set: vi.fn() }));
+const mockIndexerLatestLedger = vi.hoisted(() => ({ set: vi.fn() }));
+const mockIndexerLedgerLag = vi.hoisted(() => ({ set: vi.fn() }));
 const mockIndexerErrorsTotal = vi.hoisted(() => ({ inc: vi.fn() }));
 const mockIndexerCircuitState = vi.hoisted(() => ({ set: vi.fn() }));
 
@@ -15,6 +17,8 @@ vi.mock("./metrics", () => ({
   eventsIndexedTotal: mockEventsIndexedTotal,
   ledgersScannedTotal: mockLedgersScannedTotal,
   lastIndexedLedger: mockLastIndexedLedger,
+  indexerLatestLedger: mockIndexerLatestLedger,
+  indexerLedgerLag: mockIndexerLedgerLag,
   indexerErrorsTotal: mockIndexerErrorsTotal,
   indexerCircuitState: mockIndexerCircuitState,
 }));
@@ -31,17 +35,23 @@ let mockGetEvents = vi.fn();
 vi.mock("@stellar/stellar-sdk", () => ({
   Contract: vi.fn(),
   rpc: {
-    Server: vi.fn().mockImplementation(() => ({
-      getLatestLedger: mockGetLatestLedger,
-      getEvents: mockGetEvents,
-    })),
+    Server: vi.fn().mockImplementation(function () {
+      return {
+        getLatestLedger: mockGetLatestLedger,
+        getEvents: mockGetEvents,
+      };
+    }),
   },
   TransactionBuilder: vi.fn(),
   Networks: { TESTNET: "Test SDF Network ; September 2015" },
   scValToNative: (v: any) => v,
 }));
 
-import { initIndexer, startIndexer, stopIndexer } from "./indexer";
+import { initIndexer, startIndexer, stopIndexer, resetIndexerState } from "./indexer";
+
+beforeEach(() => {
+  resetIndexerState();
+});
 
 function makeClaimedEvent(opts: {
   streamId?: string | number;

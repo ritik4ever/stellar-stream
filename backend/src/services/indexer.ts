@@ -11,6 +11,8 @@ import {
   eventsIndexedTotal,
   ledgersScannedTotal,
   lastIndexedLedger,
+  indexerLatestLedger,
+  indexerLedgerLag,
   indexerErrorsTotal,
   indexerCircuitState,
 } from "./metrics";
@@ -132,26 +134,22 @@ function loadCheckpoint(db: any): void {
 }
 
 function saveCheckpoint(db: any, ledgerSequence: number): void {
-  try {
-    db.transaction(() => {
-      const existing = db
-        .prepare(`SELECT id FROM ${INDEXER_CURSOR_TABLE} WHERE id = @id`)
-        .get({ id: CHECKPOINT_ROW_ID }) as { id: number } | undefined;
+  db.transaction(() => {
+    const existing = db
+      .prepare(`SELECT id FROM ${INDEXER_CURSOR_TABLE} WHERE id = @id`)
+      .get({ id: CHECKPOINT_ROW_ID }) as { id: number } | undefined;
 
-      if (existing) {
-        db.prepare(
-          `UPDATE ${INDEXER_CURSOR_TABLE} SET last_ledger_sequence = @ledger WHERE id = @id`,
-        ).run({ ledger: ledgerSequence, id: CHECKPOINT_ROW_ID });
-      } else {
-        db.prepare(
-          `INSERT INTO ${INDEXER_CURSOR_TABLE} (id, last_ledger_sequence) VALUES (@id, @ledger)`,
-        ).run({ id: CHECKPOINT_ROW_ID, ledger: ledgerSequence });
-      }
-    })();
-    logger.debug({ ledgerSequence }, "checkpoint saved to database");
-  } catch (err) {
-    logger.error({ err }, "failed to save indexer checkpoint");
-  }
+    if (existing) {
+      db.prepare(
+        `UPDATE ${INDEXER_CURSOR_TABLE} SET last_ledger_sequence = @ledger WHERE id = @id`,
+      ).run({ ledger: ledgerSequence, id: CHECKPOINT_ROW_ID });
+    } else {
+      db.prepare(
+        `INSERT INTO ${INDEXER_CURSOR_TABLE} (id, last_ledger_sequence) VALUES (@id, @ledger)`,
+      ).run({ id: CHECKPOINT_ROW_ID, ledger: ledgerSequence });
+    }
+  })();
+  logger.debug({ ledgerSequence }, "checkpoint saved to database");
 }
 
 export function initIndexer(
@@ -186,6 +184,8 @@ export function initIndexer(
     lastProcessedLedger = indexerStartLedger;
     logger.info({ lastProcessedLedger }, "applied INDEXER_START_LEDGER override to checkpoint");
   }
+
+  lastIndexedLedger.set(lastProcessedLedger);
 }
 
 function ensureIndexerCursorTable(db: any): void {
@@ -266,6 +266,8 @@ async function indexEvents(): Promise<void> {
     const db = getDb();
     const latestLedger = await rpcServer.getLatestLedger();
     const currentLedger = latestLedger.sequence;
+    indexerLatestLedger.set(currentLedger);
+    indexerLedgerLag.set(Math.max(0, currentLedger - lastProcessedLedger));
 
     if (currentLedger <= lastProcessedLedger) {
       circuitBreaker.onSuccess();
@@ -310,20 +312,19 @@ async function indexEventsWithFallback(db: any, currentLedger: number): Promise<
   const startLedgerForMetrics = lastProcessedLedger;
   const eventCount = events.events?.length ?? 0;
 
-  if (eventCount === 0) {
-    return;
+  if (eventCount > 0) {
+    db.transaction(() => {
+      for (const event of events.events || []) {
+        processEvent(db, event);
+        eventsIndexedTotal.inc();
+      }
+    })();
   }
 
-  db.transaction(() => {
-    for (const event of events.events || []) {
-      processEvent(db, event);
-      eventsIndexedTotal.inc();
-    }
-
-    lastProcessedLedger = currentLedger;
-  })();
-
-  saveCheckpoint(db, lastProcessedLedger);
+  saveCheckpoint(db, currentLedger);
+  lastProcessedLedger = currentLedger;
+  lastIndexedLedger.set(lastProcessedLedger);
+  indexerLedgerLag.set(Math.max(0, currentLedger - lastProcessedLedger));
   ledgersScannedTotal.inc(lastProcessedLedger - startLedgerForMetrics);
 }
 
@@ -331,7 +332,6 @@ async function indexEventsWithCursorPagination(db: any, currentLedger: number): 
   const startLedger = lastProcessedLedger + 1;
   let cursor: string | undefined;
   let maxLedgerSeen = lastProcessedLedger;
-  let totalProcessed = 0;
   const startLedgerForMetrics = lastProcessedLedger;
 
   while (true) {
@@ -378,7 +378,6 @@ async function indexEventsWithCursorPagination(db: any, currentLedger: number): 
       for (const event of events) {
         processEvent(db, event);
         eventsIndexedTotal.inc();
-        totalProcessed++;
 
         if (event.ledger > maxLedgerSeen) {
           maxLedgerSeen = event.ledger;
@@ -393,11 +392,12 @@ async function indexEventsWithCursorPagination(db: any, currentLedger: number): 
     }
   }
 
-  if (totalProcessed > 0) {
-    lastProcessedLedger = Math.max(lastProcessedLedger, maxLedgerSeen);
-    saveCheckpoint(db, lastProcessedLedger);
-    ledgersScannedTotal.inc(lastProcessedLedger - startLedgerForMetrics);
-  }
+  const checkpoint = Math.max(currentLedger, maxLedgerSeen);
+  saveCheckpoint(db, checkpoint);
+  lastProcessedLedger = checkpoint;
+  lastIndexedLedger.set(lastProcessedLedger);
+  indexerLedgerLag.set(Math.max(0, currentLedger - lastProcessedLedger));
+  ledgersScannedTotal.inc(lastProcessedLedger - startLedgerForMetrics);
 }
 
 function processEvent(db: any, event: rpc.Api.EventResponse): void {

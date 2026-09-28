@@ -20,6 +20,18 @@ export const lastIndexedLedger = new Gauge({
   registers: [register],
 });
 
+export const indexerLatestLedger = new Gauge({
+  name: "indexer_latest_ledger",
+  help: "Sequence number of the latest ledger observed from Stellar RPC",
+  registers: [register],
+});
+
+export const indexerLedgerLag = new Gauge({
+  name: "indexer_ledger_lag",
+  help: "Difference between the latest RPC ledger and the persisted indexer checkpoint",
+  registers: [register],
+});
+
 export const indexerErrorsTotal = new Counter({
   name: "indexer_errors_total",
   help: "Total number of errors encountered during indexer polls",

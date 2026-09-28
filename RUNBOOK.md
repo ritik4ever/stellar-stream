@@ -127,23 +127,24 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
 ### Indexer Falls Behind
 **Symptoms:**
 - Stream statuses in the dashboard are stale (e.g., a completed stream still shows "active").
-- Backend logs show `lastLedger` lagging behind the current Stellar network ledger sequence.
-- Alert: `indexer_lag_seconds` exceeds threshold (configurable, default 300s).
+- `indexer_latest_ledger` advances while `last_indexed_ledger` does not, and `indexer_ledger_lag` rises.
+- `indexer_errors_total` increases or `indexer_circuit_state` is `1` (HALF_OPEN) or `2` (OPEN).
 
 **Diagnosis:**
-1. Check the current indexer cursor position:
+1. Read indexer metrics (add configured metrics authentication if enabled):
    ```bash
-   sqlite3 backend/data/streams.db "SELECT key, value FROM indexer_cursor;"
+   curl -s http://localhost:3001/metrics | grep -E '^(indexer_latest_ledger|last_indexed_ledger|indexer_ledger_lag|indexer_errors_total|indexer_circuit_state)'
    ```
-2. Compare with the latest Stellar ledger sequence (using the RPC endpoint):
+2. Compare the reported head with a direct `getLatestLedger` call to the configured RPC endpoint. If the direct call succeeds and the RPC-head gauge advances, RPC is reachable; if the direct call fails or times out, treat this as an RPC/provider connectivity incident.
    ```bash
    curl -s <STELLAR_RPC_URL> -X POST \
      -H "Content-Type: application/json" \
      -d '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger"}' | \
      jq '.result.sequence'
    ```
-3. Check backend logs for indexer errors:
+3. Check the persisted retry boundary and recent indexer errors:
    ```bash
+   sqlite3 backend/data/streams.db "SELECT last_ledger_sequence FROM indexer_cursor WHERE id = 1;"
    journalctl -u stellar-stream-backend --since "10 minutes ago" | grep -i indexer
    ```
    Or if running via PM2:
@@ -152,25 +153,16 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
    ```
 
 **Remediation:**
-1. **Network issue:** Verify the backend can reach the Stellar RPC endpoint:
+1. **RPC rate limit or disconnection:** Do not issue repeated manual event requests or repeatedly restart the service. The indexer makes one normal poll attempt per configured polling interval (default 10 seconds), opens its circuit after 5 consecutive poll failures, waits `CIRCUIT_BREAKER_TIMEOUT_MS` (default 60 seconds), then makes a single half-open probe. A failed probe reopens the circuit; a successful probe closes it. There is no separate immediate retry, `Retry-After` handling, or provider failover.
+2. Verify RPC availability and provider rate-limit status, then restore network access or reduce competing RPC traffic. Preserve the database and `indexer_cursor`; the next scheduled poll/probe retries from the last persisted checkpoint. A partially fetched cursor page is safe to replay: event writes are idempotent, and the checkpoint advances only after the full scan and checkpoint write succeed.
    ```bash
-   curl -s --max-time 5 <STELLAR_RPC_URL>/health
+   curl -s --max-time 10 <STELLAR_RPC_URL> -X POST \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger"}'
    ```
-   If unreachable, check firewall rules and RPC provider status.
-2. **Backoff stuck:** Restart the backend to reset the indexer's exponential backoff:
-   ```bash
-   pm2 restart stellar-stream-backend
-   ```
-   Or if using systemd:
-   ```bash
-   systemctl restart stellar-stream-backend
-   ```
-3. **Force re-index from a specific ledger** (use with caution—this may process duplicate events):
-   ```bash
-   export INDEXER_START_LEDGER=<LEDGER_SEQUENCE>
-   pm2 restart stellar-stream-backend
-   ```
-4. **Persistent lag:** If the indexer consistently falls behind, reduce the polling interval by setting `INDEXER_POLL_INTERVAL_MS` to a lower value (e.g., `5000` for 5 seconds) in the backend `.env`.
+3. **Lag continues to rise while RPC is healthy:** Confirm the RPC head is advancing, `indexer_errors_total` is flat, and the database is writable. Let complete polls proceed; a successful scan of a range with no contract events still advances the checkpoint. Avoid lowering the polling interval during a rate-limit incident.
+4. **Verify recovery:** Require `indexer_circuit_state` to return to `0` (CLOSED), `last_indexed_ledger` to catch up to the observed RPC head, and `indexer_ledger_lag` to reach `0` after a complete poll. Confirm the database cursor matches the indexed-ledger gauge and that indexer errors remain flat for at least two poll intervals.
+5. **Stop and roll back if recovery is not verified:** If lag still grows after two circuit-breaker timeouts with RPC healthy, or the RPC remains unavailable, stop the backend, preserve the database/cursor, and restore the last known-good RPC URL and deployment configuration before restarting once. If that does not restore the checks above, leave the service stopped and escalate to the RPC provider/on-call maintainer. Do not delete the database, rewind `indexer_cursor`, or set `INDEXER_START_LEDGER` as a recovery shortcut.
 
 ---
 

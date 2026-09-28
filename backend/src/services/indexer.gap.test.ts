@@ -25,10 +25,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
 
 // ── Stub metrics ─────────────────────────────────────────────────────────────
+const { mockLastIndexedLedger, mockIndexerLatestLedger, mockIndexerLedgerLag } = vi.hoisted(() => ({
+  mockLastIndexedLedger: { set: vi.fn() },
+  mockIndexerLatestLedger: { set: vi.fn() },
+  mockIndexerLedgerLag: { set: vi.fn() },
+}));
+
 vi.mock("./metrics", () => ({
   eventsIndexedTotal: { inc: vi.fn() },
   ledgersScannedTotal: { inc: vi.fn() },
-  lastIndexedLedger: { set: vi.fn() },
+  lastIndexedLedger: mockLastIndexedLedger,
+  indexerLatestLedger: mockIndexerLatestLedger,
+  indexerLedgerLag: mockIndexerLedgerLag,
   indexerErrorsTotal: { inc: vi.fn() },
   indexerCircuitState: { set: vi.fn() },
 }));
@@ -58,10 +66,12 @@ vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
     scValToNative: (v: any) => v,
     rpc: {
       ...actual.rpc,
-      Server: vi.fn().mockImplementation(() => ({
-        getLatestLedger: mockGetLatestLedger,
-        getEvents: mockGetEvents,
-      })),
+      Server: vi.fn().mockImplementation(function () {
+        return {
+          getLatestLedger: mockGetLatestLedger,
+          getEvents: mockGetEvents,
+        };
+      }),
     },
   };
 });
@@ -293,6 +303,9 @@ describe("gap-fill: cursor persistence (checkpoint)", () => {
     await runOnePoll(cid);
 
     expect(readCursor()).toBe(1050);
+    expect(mockLastIndexedLedger.set).toHaveBeenLastCalledWith(1050);
+    expect(mockIndexerLatestLedger.set).toHaveBeenLastCalledWith(1050);
+    expect(mockIndexerLedgerLag.set).toHaveBeenLastCalledWith(0);
   });
 
   it("does NOT advance the cursor when getEvents throws", async () => {
@@ -338,6 +351,22 @@ describe("gap-fill: cursor persistence (checkpoint)", () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe("gap-fill: partial progress on mid-gap RPC failure", () => {
+  it("keeps the persisted cursor unchanged when a later event page fails", async () => {
+    const cid = nextContractId();
+    setupDb(1000);
+
+    mockGetLatestLedger.mockResolvedValue({ sequence: 1050 });
+    mockGetEvents
+      .mockResolvedValueOnce({ events: [makeCreatedEvent("1", 1010)], cursor: "page-2" })
+      .mockRejectedValue(new Error("RPC rate limited"));
+
+    await runOnePoll(cid);
+
+    expect(readCursor()).toBe(1000);
+    expect(mockGetEvents.mock.calls[0][0].startLedger).toBe(1001);
+    expect(mockGetEvents.mock.calls.some(([request]) => request.cursor === "page-2")).toBe(true);
+  });
+
   it("checkpoints at last successful ledger when RPC fails mid-gap", async () => {
     const cid = nextContractId();
     setupDb(1000);
