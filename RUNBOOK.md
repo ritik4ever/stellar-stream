@@ -13,7 +13,8 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 7. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
 8. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
 9. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
-10. [Contract Invocation Timeout](#contract-invocation-timeout)
+10. [SQLite Restore Outcome Signal](#sqlite-restore-outcome-signal)
+11. [Contract Invocation Timeout](#contract-invocation-timeout)
 
 ---
 
@@ -295,6 +296,41 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
    ls -lh backend/data/streams.db*
    sqlite3 backend/data/streams.db "PRAGMA wal_checkpoint;"
    ```
+
+---
+
+### SQLite Restore Outcome Signal
+**Symptoms:**
+- Alert on the `sqlite_restore_outcome` Prometheus gauge changing to `1` or `2`.
+- `GET /api/db/restore-monitoring` returns `outcome: "transient_delay"` or `outcome: "blocked"`.
+- A `streams.db` snapshot from a prior point in time was restored, or a snapshot written by a different build was put in place.
+
+The signal is a **record of the schema check performed when the database was opened** — the point at which a restore takes effect. It compares the versions in the database's `schema_migrations` table with the migrations the running code ships.
+
+**Outcome meanings:**
+
+| Outcome | Gauge value | Meaning | Owner action |
+| --- | --- | --- | --- |
+| `success` | 0 | The restored schema matches the running code. | None. |
+| `transient_delay` | 1 | The restored schema is behind the running code; the pending migrations clear automatically. | None — startup applies them. Restart the backend once and re-read the signal if it does not fall back to `success`. |
+| `blocked` | 2 | The restored schema is ahead of the running code; forward-only migrations cannot reconcile it. | Deploy the code version that wrote the snapshot, or restore a snapshot taken with the running build, then confirm the signal returns to `success`. |
+
+**Diagnosis:**
+1. Read the signal. It reports counts and state only — never the database path, migration names, payloads, or stream IDs, so it is safe to paste into an incident channel:
+   ```bash
+   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
+     http://localhost:3001/api/db/restore-monitoring | jq
+   ```
+2. Cross-check the Prometheus gauge from the scrape:
+   ```bash
+   curl -s http://localhost:3001/metrics | grep -E "^sqlite_restore_outcome"
+   ```
+
+**Remediation:**
+1. `success` — the restore is at the current schema version. Confirm the expected stream and event counts before reopening traffic (see [Reset SQLite Database](#reset-sqlite-database)).
+2. `transient_delay` — the snapshot was taken before the running build. Startup applied the pending migrations; no data is at risk and no manual step is required. The recorded value returns to `success` on the next service start, once the database is no longer behind.
+3. `blocked` — the snapshot was written by a newer build. Do not start the service against the future schema. Deploy the code version that wrote the snapshot, or restore the snapshot taken with the running build, then confirm the signal returns to `success`.
+4. Never hand-edit `schema_migrations` to clear the signal: the recorded versions must describe the schema actually present in the file.
 
 ---
 

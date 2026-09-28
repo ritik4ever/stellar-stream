@@ -8,7 +8,7 @@ import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
 import { z } from "zod";
 import { createServer } from "http";
-import { searchStreamsFts, getAllowedAssets, addAllowedAsset, removeAllowedAsset } from "./services/db";
+import { searchStreamsFts, getAllowedAssets, addAllowedAsset, removeAllowedAsset, getDb } from "./services/db";
 import { initWebSocket } from "./services/websocket";
 import {
   normalizeUnknownApiError,
@@ -44,6 +44,11 @@ import { startStreamProgressBroadcaster } from "./services/streamProgressBroadca
 import { startWebhookWorker } from "./services/webhookWorker";
 import { startDeadLetterPruningJob } from "./services/webhookDeadLetterPruningJob";
 import { getWebhookOutcomeSignal, refreshWebhookMetrics } from "./services/webhookMonitor";
+import {
+  getLiveRestoreOutcomeSignal,
+  getRecordedRestoreOutcome,
+  refreshRestoreMetrics,
+} from "./services/dbRestoreOutcome";
 import {
   clearDeadLetters,
   getDeadLetters,
@@ -421,6 +426,14 @@ app.get("/metrics", async (_req: Request, res: Response) => {
     refreshWebhookMetrics();
   } catch (error) {
     logger.warn({ err: error }, "failed to refresh webhook monitoring metrics");
+  }
+
+  // Publish the recorded SQLite restore outcome so alert rules can key off it
+  // without reading the monitoring endpoint.
+  try {
+    refreshRestoreMetrics();
+  } catch (error) {
+    logger.warn({ err: error }, "failed to refresh SQLite restore metrics");
   }
 
   const output = await register.metrics();
@@ -1943,6 +1956,42 @@ app.get(
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to compute webhook monitoring outcome.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        {
+          code: normalizedError.code ?? "INTERNAL_ERROR",
+        },
+      );
+    }
+  },
+);
+
+// GET /api/db/restore-monitoring — coarse schema-restore health for the
+// SQLite database. Counts and state only: it never returns the database path,
+// migration names, or any user data. It reports the outcome recorded when the
+// database was last opened, falling back to a live check.
+app.get(
+  "/api/db/restore-monitoring",
+  authMiddleware,
+  (req: Request, res: Response) => {
+    try {
+      const signal = getRecordedRestoreOutcome() ?? getLiveRestoreOutcomeSignal(getDb());
+      res.set("Cache-Control", "no-store");
+      res.json({
+        outcome: signal.outcome,
+        outcomeCode: signal.outcomeCode,
+        detail: signal.detail,
+        counts: signal.counts,
+      });
+    } catch (error: any) {
+      logger.error({ err: error }, "failed to compute SQLite restore outcome");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to compute SQLite restore outcome.",
       );
       sendApiError(
         req,
