@@ -20,6 +20,18 @@ export const lastIndexedLedger = new Gauge({
   registers: [register],
 });
 
+export const indexerLatestLedger = new Gauge({
+  name: "indexer_latest_ledger",
+  help: "Sequence number of the latest ledger observed from Stellar RPC",
+  registers: [register],
+});
+
+export const indexerLedgerLag = new Gauge({
+  name: "indexer_ledger_lag",
+  help: "Difference between the latest RPC ledger and the persisted indexer checkpoint",
+  registers: [register],
+});
+
 export const indexerErrorsTotal = new Counter({
   name: "indexer_errors_total",
   help: "Total number of errors encountered during indexer polls",
@@ -59,5 +71,11 @@ export const webhookDeadLetters = new Gauge({
 export const webhookOutcome = new Gauge({
   name: "webhook_outcome",
   help: "Webhook delivery health: 0=success, 1=transient_delay, 2=blocked",
+  registers: [register],
+});
+
+export const indexerOutcome = new Gauge({
+  name: "indexer_outcome",
+  help: "Indexer monitoring health: 0=success, 1=transient_delay, 2=blocked",
   registers: [register],
 });

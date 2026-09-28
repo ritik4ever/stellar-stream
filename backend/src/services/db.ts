@@ -1,6 +1,12 @@
 import Database from "better-sqlite3";
 import path from "path";
 import { runMigrations } from "./migrations";
+import {
+  getLiveRestoreOutcomeSignal,
+  recordRestoreOutcome,
+  refreshRestoreMetrics,
+} from "./dbRestoreOutcome";
+import { logger } from "../logger";
 
 const DB_PATH =
   process.env.DB_PATH || path.join(__dirname, "..", "..", "data", "streams.db");
@@ -331,6 +337,36 @@ function addColumnIfMissing(database: any, table: string, column: string, typeDe
   database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeDef}`);
 }
 
+/**
+ * Records the schema check performed when the database is opened — the point
+ * at which a restore from a prior point in time takes effect. Counts and state
+ * only: the signal never carries the database path, migration names, or user
+ * data, so it is safe to log, scrape, and paste into an incident channel.
+ *
+ * A database with no recorded schema yet (fresh install, not a restore) is
+ * skipped so the live signal reports `success` once migrations have run.
+ */
+function recordSqliteRestoreOutcome(database: any): void {
+  try {
+    const signal = getLiveRestoreOutcomeSignal(database);
+    if (signal.counts.applied === 0) {
+      return;
+    }
+    recordRestoreOutcome(signal);
+    refreshRestoreMetrics(signal);
+    if (signal.outcome === "blocked") {
+      logger.warn(
+        { restoreOutcome: signal },
+        "SQLite restore outcome: schema is ahead of the running code",
+      );
+    } else {
+      logger.info({ restoreOutcome: signal }, "SQLite restore outcome recorded");
+    }
+  } catch (error) {
+    logger.warn({ err: error }, "failed to record SQLite restore outcome");
+  }
+}
+
 export function initDb(): void {
   if (isPostgres()) {
     db = new PostgresDatabase(process.env.DATABASE_URL!);
@@ -347,6 +383,10 @@ export function initDb(): void {
     db.pragma("synchronous = NORMAL");
     db.pragma("busy_timeout = 5000");
     db.pragma("cache_size = -64000");
+
+    // Capture the restored schema before any pending migration runs, so the
+    // recorded outcome describes the snapshot the operator actually restored.
+    recordSqliteRestoreOutcome(db);
   }
 
   runMigrations(db);

@@ -18,8 +18,17 @@ const streamStoreMocks = vi.hoisted(() => ({
   initSoroban: vi.fn(),
   listStreams: vi.fn(),
   listStreamsBySender: vi.fn(),
+  nowInSeconds: vi.fn(() => 1000),
   syncStreams: vi.fn(),
   updateStreamStartAt: vi.fn(),
+}));
+
+const cacheMocks = vi.hoisted(() => ({
+  getCache: vi.fn(() => ({
+    get: vi.fn().mockResolvedValue(null),
+    set: vi.fn().mockResolvedValue(undefined),
+  })),
+  initCache: vi.fn(),
 }));
 
 const eventHistoryMocks = vi.hoisted(() => ({
@@ -34,8 +43,10 @@ const eventHistoryMocks = vi.hoisted(() => ({
 
 vi.mock("./services/streamStore", () => streamStoreMocks);
 vi.mock("./services/eventHistory", () => eventHistoryMocks);
+vi.mock("./services/cache", () => cacheMocks);
 vi.mock("./services/auth", () => ({
   authMiddleware: vi.fn((req: any, res: any, next: any) => next()),
+  adminJwtAuth: vi.fn((req: any, res: any, next: any) => next()),
   generateChallenge: vi.fn(),
   refreshToken: vi.fn(),
   verifyChallengeAndIssueToken: vi.fn(),
@@ -152,9 +163,9 @@ const progressById: Record<string, TestProgress> = {
   },
 };
 
-function invokeListStreamsRoute(
+async function invokeListStreamsRoute(
   query: Record<string, unknown> = {},
-): { status: number; body: any } {
+): Promise<{ status: number; body: any }> {
   const layer = (app as any)?._router?.stack?.find(
     (entry: any) => entry.route?.path === "/api/streams" && entry.route?.methods?.get,
   );
@@ -163,13 +174,18 @@ function invokeListStreamsRoute(
     throw new Error("GET /api/streams route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  // Find the actual route handler (skip rate-limiter layers)
+  const handlerLayer = layer.route.stack.find(
+    (l: any) => l.handle.length <= 2 && l.handle !== layer.route.stack[0].handle,
+  ) ?? layer.route.stack[layer.route.stack.length - 1];
+  const handler = handlerLayer.handle as (req: any, res: any) => void | Promise<void>;
 
   let statusCode = 200;
   let jsonBody: any;
 
   const req = { query, requestId: "test-request-id" };
   const res = {
+    set(_header: string, _value: string) { return this; },
     status(code: number) {
       statusCode = code;
       return this;
@@ -180,15 +196,15 @@ function invokeListStreamsRoute(
     },
   };
 
-  handler(req, res);
+  await handler(req, res);
 
   return { status: statusCode, body: jsonBody };
 }
 
-function invokeSenderStreamsRoute(
+async function invokeSenderStreamsRoute(
   accountId: string,
   query: Record<string, unknown> = {},
-): { status: number; body: any } {
+): Promise<{ status: number; body: any }> {
   const layer = (app as any)?._router?.stack?.find(
     (entry: any) => entry.route?.path === "/api/senders/:accountId/streams" && entry.route?.methods?.get,
   );
@@ -197,13 +213,17 @@ function invokeSenderStreamsRoute(
     throw new Error("GET /api/senders/:accountId/streams route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  const handlerLayer = layer.route.stack.find(
+    (l: any) => l.handle.length <= 2 && l.handle !== layer.route.stack[0].handle,
+  ) ?? layer.route.stack[layer.route.stack.length - 1];
+  const handler = handlerLayer.handle as (req: any, res: any) => void | Promise<void>;
 
   let statusCode = 200;
   let jsonBody: any;
 
   const req = { params: { accountId }, query, requestId: "test-request-id" };
   const res = {
+    set(_header: string, _value: string) { return this; },
     status(code: number) {
       statusCode = code;
       return this;
@@ -214,7 +234,7 @@ function invokeSenderStreamsRoute(
     },
   };
 
-  handler(req, res);
+  await handler(req, res);
 
   return { status: statusCode, body: jsonBody };
 }
@@ -230,6 +250,12 @@ beforeEach(() => {
   streamStoreMocks.listStreamsBySender.mockReset();
   streamStoreMocks.listStreamsBySender.mockImplementation((sender: string) => streams.filter(s => s.sender === sender));
 
+  // Reset cache mock to always return null (cache miss) so handlers run their full logic
+  cacheMocks.getCache.mockReturnValue({
+    get: vi.fn().mockResolvedValue(null),
+    set: vi.fn().mockResolvedValue(undefined),
+  });
+
   eventHistoryMocks.getGlobalEvents.mockReset();
   eventHistoryMocks.countAllEvents.mockReset();
   eventHistoryMocks.countStreamEvents.mockReset();
@@ -239,8 +265,8 @@ beforeEach(() => {
 });
 
 describe("GET /api/streams", () => {
-  it("returns all streams and metadata by default", () => {
-    const { status, body } = invokeListStreamsRoute();
+  it("returns all streams and metadata by default", async () => {
+    const { status, body } = await invokeListStreamsRoute();
 
     expect(status).toBe(200);
     expect(body.total).toBe(4);
@@ -249,32 +275,32 @@ describe("GET /api/streams", () => {
     expect(body.data.map((item: any) => item.id)).toEqual(["4", "3", "2", "1"]);
   });
 
-  it("filters by status", () => {
-    const { status, body } = invokeListStreamsRoute({ status: "active" });
+  it("filters by status", async () => {
+    const { status, body } = await invokeListStreamsRoute({ status: "active" });
 
     expect(status).toBe(200);
     expect(body.total).toBe(1);
     expect(body.data.map((item: any) => item.id)).toEqual(["4"]);
   });
 
-  it.skip("filters by sender exact match", () => {
-    const { status, body } = invokeListStreamsRoute({ sender: SENDER_A });
+  it.skip("filters by sender exact match", async () => {
+    const { status, body } = await invokeListStreamsRoute({ sender: SENDER_A });
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
     expect(body.data.map((item: any) => item.id)).toEqual(["4", "2"]);
   });
 
-  it.skip("filters by recipient exact match", () => {
-    const { status, body } = invokeListStreamsRoute({ recipient: RECIPIENT_1 });
+  it.skip("filters by recipient exact match", async () => {
+    const { status, body } = await invokeListStreamsRoute({ recipient: RECIPIENT_1 });
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
     expect(body.data.map((item: any) => item.id)).toEqual(["4", "1"]);
   });
 
-  it.skip("applies combined sender + recipient + status filtering", () => {
-    const { status, body } = invokeListStreamsRoute({
+  it.skip("applies combined sender + recipient + status filtering", async () => {
+    const { status, body } = await invokeListStreamsRoute({
       sender: SENDER_A,
       recipient: RECIPIENT_2,
       status: "scheduled",
@@ -285,8 +311,8 @@ describe("GET /api/streams", () => {
     expect(body.data.map((item: any) => item.id)).toEqual(["2"]);
   });
 
-  it("paginates when page and limit are provided", () => {
-    const { status, body } = invokeListStreamsRoute({ page: "2", limit: "2" });
+  it("paginates when page and limit are provided", async () => {
+    const { status, body } = await invokeListStreamsRoute({ page: "2", limit: "2" });
 
     expect(status).toBe(200);
     expect(body.total).toBe(4);
@@ -295,8 +321,8 @@ describe("GET /api/streams", () => {
     expect(body.data.map((item: any) => item.id)).toEqual(["2", "1"]);
   });
 
-  it("uses default limit when only page is provided", () => {
-    const { status, body } = invokeListStreamsRoute({ page: "2" });
+  it("uses default limit when only page is provided", async () => {
+    const { status, body } = await invokeListStreamsRoute({ page: "2" });
 
     expect(status).toBe(200);
     expect(body.total).toBe(4);
@@ -305,8 +331,8 @@ describe("GET /api/streams", () => {
     expect(body.data).toEqual([]);
   });
 
-  it("uses default page when only limit is provided", () => {
-    const { status, body } = invokeListStreamsRoute({ limit: "2" });
+  it("uses default page when only limit is provided", async () => {
+    const { status, body } = await invokeListStreamsRoute({ limit: "2" });
 
     expect(status).toBe(200);
     expect(body.total).toBe(4);
@@ -315,8 +341,8 @@ describe("GET /api/streams", () => {
     expect(body.data.map((item: any) => item.id)).toEqual(["4", "3"]);
   });
 
-  it("returns 400 for invalid status", () => {
-    const { status, body } = invokeListStreamsRoute({ status: "pending" });
+  it("returns 400 for invalid status", async () => {
+    const { status, body } = await invokeListStreamsRoute({ status: "pending" });
 
     expect(status).toBe(400);
     expect(body.error).toContain("status must be one of");
@@ -332,8 +358,8 @@ describe("GET /api/streams", () => {
     );
   });
 
-  it("returns 400 for invalid page", () => {
-    const { status, body } = invokeListStreamsRoute({ page: "0" });
+  it("returns 400 for invalid page", async () => {
+    const { status, body } = await invokeListStreamsRoute({ page: "0" });
 
     expect(status).toBe(400);
     expect(body.error).toContain("page must be greater than or equal to 1");
@@ -341,8 +367,8 @@ describe("GET /api/streams", () => {
     expect(body.requestId).toBe("test-request-id");
   });
 
-  it("returns 400 for invalid limit", () => {
-    const { status, body } = invokeListStreamsRoute({ limit: "101" });
+  it("returns 400 for invalid limit", async () => {
+    const { status, body } = await invokeListStreamsRoute({ limit: "101" });
 
     expect(status).toBe(400);
     expect(body.error).toContain("limit must be less than or equal to 100");
@@ -350,8 +376,8 @@ describe("GET /api/streams", () => {
     expect(body.requestId).toBe("test-request-id");
   });
 
-  it("returns empty data for out-of-range page with metadata intact", () => {
-    const { status, body } = invokeListStreamsRoute({
+  it("returns empty data for out-of-range page with metadata intact", async () => {
+    const { status, body } = await invokeListStreamsRoute({
       status: "active",
       page: "2",
       limit: "1",
@@ -365,42 +391,157 @@ describe("GET /api/streams", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Bug #728 regression: q + asset combined filtering (AND logic)
+// ---------------------------------------------------------------------------
+
+describe("GET /api/streams – q + asset filter combinations (bug #728)", () => {
+  // Extra test streams: ids 4 & 3 use USDC (from base fixture), id "XLM-1" uses XLM.
+  const xlmStream: TestStream = {
+    id: "XLM-1",
+    sender: SENDER_B,          // SENDER_B appears in USDC streams too (id "3")
+    recipient: RECIPIENT_1,
+    assetCode: "XLM",
+    totalAmount: 500,
+    durationSeconds: 200,
+    startAt: 100,
+    createdAt: 500,
+  };
+
+  const mixedStreams = [...streams, xlmStream];
+
+  const mixedProgressById: Record<string, TestProgress> = {
+    ...progressById,
+    "XLM-1": {
+      status: "active",
+      ratePerSecond: 2.5,
+      elapsedSeconds: 50,
+      vestedAmount: 125,
+      remainingAmount: 375,
+      percentComplete: 25,
+    },
+  };
+
+  beforeEach(() => {
+    streamStoreMocks.listStreams.mockReturnValue(mixedStreams);
+    streamStoreMocks.calculateProgress.mockImplementation(
+      (stream: TestStream) => mixedProgressById[stream.id],
+    );
+  });
+
+  it("q only – returns all streams matching q regardless of asset", async () => {
+    // SENDER_B has streams id "3" (USDC) and "XLM-1" (XLM).
+    // q=SENDER_B substring should match both.
+    const { status, body } = await invokeListStreamsRoute({ q: SENDER_B.slice(0, 8) });
+
+    expect(status).toBe(200);
+    expect(body.data.length).toBeGreaterThan(0);
+    for (const stream of body.data) {
+      const term = SENDER_B.slice(0, 8).toLowerCase();
+      const matchesSomething =
+        stream.id.toLowerCase().includes(term) ||
+        stream.sender.toLowerCase().includes(term) ||
+        stream.recipient.toLowerCase().includes(term) ||
+        stream.assetCode.toLowerCase().includes(term);
+      expect(matchesSomething).toBe(true);
+    }
+  });
+
+  it("asset only – returns only streams with the specified asset code", async () => {
+    const { status, body } = await invokeListStreamsRoute({ asset: "XLM" });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(1);
+    expect(body.data[0].id).toBe("XLM-1");
+    for (const stream of body.data) {
+      expect(stream.assetCode.toLowerCase()).toBe("xlm");
+    }
+  });
+
+  it("asset + q (AND) – returns only streams matching BOTH asset and q", async () => {
+    // asset=XLM filters to only "XLM-1"; q=SENDER_B prefix matches "XLM-1" sender.
+    const { status, body } = await invokeListStreamsRoute({
+      asset: "XLM",
+      q: SENDER_B.slice(0, 8),
+    });
+
+    expect(status).toBe(200);
+    expect(body.total).toBe(1);
+    expect(body.data[0].id).toBe("XLM-1");
+    expect(body.data[0].assetCode.toLowerCase()).toBe("xlm");
+  });
+
+  it("asset + q (AND) – q matching excluded assetCode returns empty (core bug #728 regression)", async () => {
+    // asset=XLM keeps only XLM streams.
+    // q="usdc" matches the assetCode of USDC streams, but those were already excluded by asset=XLM.
+    // Before the fix the q assetCode arm would re-admit USDC streams (bug).
+    // After the fix the assetCode arm is suppressed when asset is set → no results.
+    const { status, body } = await invokeListStreamsRoute({
+      asset: "XLM",
+      q: "usdc",
+    });
+
+    expect(status).toBe(200);
+    expect(body.data).toHaveLength(0);
+  });
+
+  it("asset + q (AND) – q matching sender still returns correct USDC streams", async () => {
+    // asset=USDC keeps only USDC streams.
+    // q=prefix of SENDER_A matches via sender field → USDC streams from SENDER_A returned.
+    const { status, body } = await invokeListStreamsRoute({
+      asset: "USDC",
+      q: SENDER_A.slice(0, 8),
+    });
+
+    expect(status).toBe(200);
+    expect(body.data.length).toBeGreaterThan(0);
+    for (const stream of body.data) {
+      expect(stream.assetCode.toLowerCase()).toBe("usdc");
+      const term = SENDER_A.slice(0, 8).toLowerCase();
+      const matchesSomething =
+        stream.id.toLowerCase().includes(term) ||
+        stream.sender.toLowerCase().includes(term) ||
+        stream.recipient.toLowerCase().includes(term);
+      expect(matchesSomething).toBe(true);
+    }
+  });
+});
+
 describe("GET /api/senders/:accountId/streams", () => {
-  it.skip("returns streams for a specific sender", () => {
-    const { status, body } = invokeSenderStreamsRoute(SENDER_A);
+  it.skip("returns streams for a specific sender", async () => {
+    const { status, body } = await invokeSenderStreamsRoute(SENDER_A);
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
     expect(body.data.every((s: any) => s.sender === SENDER_A)).toBe(true);
   });
 
-  it.skip("filters by status", () => {
-    const { status, body } = invokeSenderStreamsRoute(SENDER_A, { status: "active" });
+  it.skip("filters by status", async () => {
+    const { status, body } = await invokeSenderStreamsRoute(SENDER_A, { status: "active" });
 
     expect(status).toBe(200);
     expect(body.total).toBe(1);
     expect(body.data[0].id).toBe("4");
   });
 
-  it.skip("filters by asset", () => {
-    const { status, body } = invokeSenderStreamsRoute(SENDER_A, { asset: "USDC" });
+  it.skip("filters by asset", async () => {
+    const { status, body } = await invokeSenderStreamsRoute(SENDER_A, { asset: "USDC" });
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
   });
 
-  it("returns 400 for invalid account ID", () => {
-    const { status, body } = invokeSenderStreamsRoute("invalid_account");
+  it("returns 400 for invalid account ID", async () => {
+    const { status, body } = await invokeSenderStreamsRoute("invalid_account");
 
     expect(status).toBe(400);
-
     expect(body.statusCode).toBe(400);
     expect(body.requestId).toBe("test-request-id");
     expect(body.code).toBe("VALIDATION_ERROR");
   });
 
-  it.skip("paginates correctly", () => {
-    const { status, body } = invokeSenderStreamsRoute(SENDER_A, { limit: "1" });
+  it.skip("paginates correctly", async () => {
+    const { status, body } = await invokeSenderStreamsRoute(SENDER_A, { limit: "1" });
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
@@ -645,13 +786,16 @@ function invokeGlobalEventsRoute(
     throw new Error("GET /api/events route not found");
   }
 
-  const handler = layer.route.stack[0].handle as (req: any, res: any) => void;
+  // The /api/events handler is sync — use the last handler in the stack
+  const handlerLayer = layer.route.stack[layer.route.stack.length - 1];
+  const handler = handlerLayer.handle as (req: any, res: any) => void;
 
   let statusCode = 200;
   let jsonBody: any;
 
   const req = { query, requestId: "test-request-id" };
   const res = {
+    set(_header: string, _value: string) { return this; },
     status(code: number) { statusCode = code; return this; },
     json(payload: any) { jsonBody = payload; return this; },
   };

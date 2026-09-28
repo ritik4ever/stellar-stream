@@ -202,8 +202,15 @@ export async function verifyChallengeAndIssueToken(
 
     // Validate timestamp and nonce for replay attack prevention
     if (timestampOp?.value && nonceOp?.value) {
-      const timestampStr = timestampOp.value.toString('utf-8');
-      const nonce = nonceOp.value.toString('utf-8');
+      // The value can be either a Uint8Array directly or a DataValue/BytesValue object with a .value property
+      const timestampBytes = timestampOp.value instanceof Uint8Array
+        ? timestampOp.value
+        : timestampOp.value.value;
+      const nonceBytes = nonceOp.value instanceof Uint8Array
+        ? nonceOp.value
+        : nonceOp.value.value;
+      const timestampStr = Buffer.from(timestampBytes).toString('utf-8');
+      const nonce = Buffer.from(nonceBytes).toString('utf-8');
       
       if (!timestampStr || !nonce) {
         throw new Error("Invalid challenge format: missing timestamp or nonce");

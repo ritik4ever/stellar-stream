@@ -45,6 +45,10 @@ import { startWebhookWorker } from "./services/webhookWorker";
 import { startDeadLetterPruningJob } from "./services/webhookDeadLetterPruningJob";
 import { getWebhookOutcomeSignal, refreshWebhookMetrics } from "./services/webhookMonitor";
 import {
+  getIndexerOutcomeSignal,
+  refreshIndexerMetrics,
+} from "./services/indexerMonitor";
+import {
   clearDeadLetters,
   getDeadLetters,
   countDeadLetters,
@@ -423,6 +427,14 @@ app.get("/metrics", async (_req: Request, res: Response) => {
     logger.warn({ err: error }, "failed to refresh webhook monitoring metrics");
   }
 
+  // Same contract for the indexer outcome signal and
+  // GET /api/indexer/monitoring.
+  try {
+    refreshIndexerMetrics();
+  } catch (error) {
+    logger.warn({ err: error }, "failed to refresh indexer monitoring metrics");
+  }
+
   const output = await register.metrics();
   res.setHeader("Content-Type", "text/plain; version=0.0.4");
   res.send(output);
@@ -588,12 +600,17 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
   }
   if (query.q && query.q.length > 0) {
     const searchTerm = query.q.toLowerCase();
+    // When an explicit asset filter (asset or assetCode) is already applied,
+    // exclude the assetCode arm from the q search so that q cannot conflict
+    // with the asset constraint. All filters combine with AND logic.
+    const assetAlreadyFiltered =
+      !!query.asset || (!!query.assetCode && query.assetCode.length > 0);
     data = data.filter((stream) => {
       return (
         stream.id.toLowerCase().includes(searchTerm) ||
         stream.sender.toLowerCase().includes(searchTerm) ||
         stream.recipient.toLowerCase().includes(searchTerm) ||
-        stream.assetCode.toLowerCase().includes(searchTerm)
+        (!assetAlreadyFiltered && stream.assetCode.toLowerCase().includes(searchTerm))
       );
     });
   }
@@ -941,12 +958,17 @@ app.get(
     }
     if (query.q && query.q.length > 0) {
       const searchTerm = query.q.toLowerCase();
+      // When an explicit asset filter is already applied, exclude the assetCode
+      // arm from q so that q does not conflict with the asset constraint.
+      // All filters combine with AND logic.
+      const assetAlreadyFiltered =
+        !!query.asset || (!!query.assetCode && query.assetCode.length > 0);
       data = data.filter(
         (stream) =>
           stream.id.toLowerCase().includes(searchTerm) ||
           stream.sender.toLowerCase().includes(searchTerm) ||
           stream.recipient.toLowerCase().includes(searchTerm) ||
-          stream.assetCode.toLowerCase().includes(searchTerm),
+          (!assetAlreadyFiltered && stream.assetCode.toLowerCase().includes(searchTerm)),
       );
     }
     if (query.minAmount !== undefined) {
@@ -1025,12 +1047,17 @@ app.get(
     }
     if (query.q && query.q.length > 0) {
       const searchTerm = query.q.toLowerCase();
+      // When an explicit asset filter is already applied, exclude the assetCode
+      // arm from q so that q does not conflict with the asset constraint.
+      // All filters combine with AND logic.
+      const assetAlreadyFiltered =
+        !!query.asset || (!!query.assetCode && query.assetCode.length > 0);
       data = data.filter(
         (stream) =>
           stream.id.toLowerCase().includes(searchTerm) ||
           stream.sender.toLowerCase().includes(searchTerm) ||
           stream.recipient.toLowerCase().includes(searchTerm) ||
-          stream.assetCode.toLowerCase().includes(searchTerm),
+          (!assetAlreadyFiltered && stream.assetCode.toLowerCase().includes(searchTerm)),
       );
     }
     if (query.minAmount !== undefined) {
@@ -1180,12 +1207,17 @@ app.get(
     }
     if (query.q && query.q.length > 0) {
       const searchTerm = query.q.toLowerCase();
+      // When an explicit asset filter is already applied, exclude the assetCode
+      // arm from q so that q does not conflict with the asset constraint.
+      // All filters combine with AND logic.
+      const assetAlreadyFiltered =
+        !!query.asset || (!!query.assetCode && query.assetCode.length > 0);
       data = data.filter((stream) => {
         return (
           stream.id.toLowerCase().includes(searchTerm) ||
           stream.sender.toLowerCase().includes(searchTerm) ||
           stream.recipient.toLowerCase().includes(searchTerm) ||
-          stream.assetCode.toLowerCase().includes(searchTerm)
+          (!assetAlreadyFiltered && stream.assetCode.toLowerCase().includes(searchTerm))
         );
       });
     }
@@ -1261,12 +1293,16 @@ app.get(
     }
     if (query.q && query.q.length > 0) {
       const searchTerm = query.q.toLowerCase();
+      // When an explicit asset filter is already applied, exclude the assetCode
+      // arm from q so that q does not conflict with the asset constraint.
+      // All filters combine with AND logic.
+      const assetAlreadyFiltered = !!query.asset;
       data = data.filter((stream) => {
         return (
           stream.id.toLowerCase().includes(searchTerm) ||
           stream.sender.toLowerCase().includes(searchTerm) ||
           stream.recipient.toLowerCase().includes(searchTerm) ||
-          stream.assetCode.toLowerCase().includes(searchTerm)
+          (!assetAlreadyFiltered && stream.assetCode.toLowerCase().includes(searchTerm))
         );
       });
     }
@@ -1897,6 +1933,42 @@ app.get("/api/open-issues", async (req: Request, res: Response) => {
     );
   }
 });
+
+// GET /api/indexer/monitoring — coarse monitoring outcome for the event
+// indexer, focused on RPC rate limiting and disconnection. Ledgers, counts and
+// enumerated state only: it never returns the RPC URL, contract ID, credentials,
+// or a raw provider message.
+app.get(
+  "/api/indexer/monitoring",
+  authMiddleware,
+  (req: Request, res: Response) => {
+    try {
+      const signal = getIndexerOutcomeSignal();
+      res.set("Cache-Control", "no-store");
+      res.json({
+        outcome: signal.outcome,
+        outcomeCode: signal.outcomeCode,
+        detail: signal.detail,
+        state: signal.state,
+      });
+    } catch (error: any) {
+      logger.error({ err: error }, "failed to compute indexer monitoring outcome");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to compute indexer monitoring outcome.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        {
+          code: normalizedError.code ?? "INTERNAL_ERROR",
+        },
+      );
+    }
+  },
+);
 
 // GET /api/webhooks/monitoring — coarse delivery-health signal for the
 // outbound webhook pipeline. Counts and state only: it never returns the
