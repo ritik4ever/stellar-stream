@@ -10,10 +10,10 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 4. [Requeue Dead-Letter Webhooks](#requeue-dead-letter-webhooks)
 5. [Archive Old Streams Manually](#archive-old-streams-manually)
 6. [Indexer Falls Behind](#indexer-falls-behind)
-7. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
-8. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
-9. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
-10. [SQLite Restore Outcome Signal](#sqlite-restore-outcome-signal)
+7. [Indexer Monitoring Outcome Signal](#indexer-monitoring-outcome-signal)
+8. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
+9. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
+10. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
 11. [Contract Invocation Timeout](#contract-invocation-timeout)
 
 ---
@@ -130,6 +130,7 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
 - Stream statuses in the dashboard are stale (e.g., a completed stream still shows "active").
 - `indexer_latest_ledger` advances while `last_indexed_ledger` does not, and `indexer_ledger_lag` rises.
 - `indexer_errors_total` increases or `indexer_circuit_state` is `1` (HALF_OPEN) or `2` (OPEN).
+- `indexer_outcome` is `1` (transient_delay) or `2` (blocked) — see [Indexer Monitoring Outcome Signal](#indexer-monitoring-outcome-signal).
 
 **Diagnosis:**
 1. Read indexer metrics (add configured metrics authentication if enabled):
@@ -164,6 +165,56 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
 3. **Lag continues to rise while RPC is healthy:** Confirm the RPC head is advancing, `indexer_errors_total` is flat, and the database is writable. Let complete polls proceed; a successful scan of a range with no contract events still advances the checkpoint. Avoid lowering the polling interval during a rate-limit incident.
 4. **Verify recovery:** Require `indexer_circuit_state` to return to `0` (CLOSED), `last_indexed_ledger` to catch up to the observed RPC head, and `indexer_ledger_lag` to reach `0` after a complete poll. Confirm the database cursor matches the indexed-ledger gauge and that indexer errors remain flat for at least two poll intervals.
 5. **Stop and roll back if recovery is not verified:** If lag still grows after two circuit-breaker timeouts with RPC healthy, or the RPC remains unavailable, stop the backend, preserve the database/cursor, and restore the last known-good RPC URL and deployment configuration before restarting once. If that does not restore the checks above, leave the service stopped and escalate to the RPC provider/on-call maintainer. Do not delete the database, rewind `indexer_cursor`, or set `INDEXER_START_LEDGER` as a recovery shortcut.
+
+---
+
+### Indexer Monitoring Outcome Signal
+**Symptoms:**
+- Alert on the `indexer_outcome` Prometheus gauge changing from `0`.
+- `GET /api/indexer/monitoring` returns `outcome: "transient_delay"` or `outcome: "blocked"`.
+- `indexer_circuit_state` is `1` (HALF_OPEN) or `2` (OPEN).
+
+The signal collapses the indexer's poll health into three outcomes so the two cases
+(`lag increasing while RPC is healthy` and `RPC rate limit or disconnection`) map to
+an explicit owner action instead of raw counters.
+
+**Outcome meanings:**
+
+| Outcome | Gauge value | Meaning | Owner action |
+| --- | --- | --- | --- |
+| `success` | 0 | Circuit CLOSED, no consecutive poll failures; the checkpoint is current. A non-zero `ledgerLag` is expected between polls. | None. |
+| `transient_delay` | 1 | One or more consecutive polls failed with a retryable provider condition (rate limit or disconnection), or the breaker is HALF_OPEN probing recovery. The retry budget is intact. | None while `consecutiveFailures` stays below `failureThreshold` — the next scheduled poll retries. |
+| `blocked` | 2 | Consecutive failures reached the threshold and the circuit is OPEN, or work is outstanding with no RPC endpoint/contract configured. | Verify RPC availability and provider rate-limit status, restore network access or reduce competing RPC traffic; let the half-open probe recover. |
+
+**Diagnosis:**
+1. Read the signal. It reports ledgers, counts and enumerated state only — never the
+   RPC URL, contract ID, credentials, or a raw provider message, so it is safe to paste
+   into an incident channel:
+   ```bash
+   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
+     http://localhost:3001/api/indexer/monitoring | jq
+   ```
+2. Cross-check the raw gauges on the Prometheus scrape:
+   ```bash
+   curl -s http://localhost:3001/metrics | grep -E '^(indexer_outcome|indexer_circuit_state|indexer_ledger_lag|indexer_errors_total)'
+   ```
+
+**Remediation:**
+1. `blocked` with `state.circuitState` = `"OPEN"` — the indexer exhausted its retry
+   budget. Follow [Indexer Falls Behind](#indexer-falls-behind) remediation steps 1–2:
+   verify RPC availability and provider rate-limit status, restore network access or
+   reduce competing RPC traffic, and let the scheduled poll/half-open probe recover. Do
+   not restart the service in a loop.
+2. `blocked` with `state.rpcConfigured` = `false` and `state.ledgerLag > 0` — the service
+   is running without a Stellar RPC URL or contract ID. Set them and restart once.
+3. `transient_delay` — take no action while `consecutiveFailures` stays below
+   `failureThreshold`. If the count reaches the threshold the outcome moves to `blocked`;
+   see step 1. The `state.lastFailureKind` field separates `rate_limited` from
+   `disconnected` without exposing the provider message.
+4. `success` with a non-zero `state.ledgerLag` — expected between polls while the chain
+   advances; lag alone does not raise the outcome. If lag keeps growing while
+   `indexer_outcome` stays `0`, follow [Indexer Falls Behind](#indexer-falls-behind)
+   remediation step 3.
 
 ---
 
@@ -296,41 +347,6 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
    ls -lh backend/data/streams.db*
    sqlite3 backend/data/streams.db "PRAGMA wal_checkpoint;"
    ```
-
----
-
-### SQLite Restore Outcome Signal
-**Symptoms:**
-- Alert on the `sqlite_restore_outcome` Prometheus gauge changing to `1` or `2`.
-- `GET /api/db/restore-monitoring` returns `outcome: "transient_delay"` or `outcome: "blocked"`.
-- A `streams.db` snapshot from a prior point in time was restored, or a snapshot written by a different build was put in place.
-
-The signal is a **record of the schema check performed when the database was opened** — the point at which a restore takes effect. It compares the versions in the database's `schema_migrations` table with the migrations the running code ships.
-
-**Outcome meanings:**
-
-| Outcome | Gauge value | Meaning | Owner action |
-| --- | --- | --- | --- |
-| `success` | 0 | The restored schema matches the running code. | None. |
-| `transient_delay` | 1 | The restored schema is behind the running code; the pending migrations clear automatically. | None — startup applies them. Restart the backend once and re-read the signal if it does not fall back to `success`. |
-| `blocked` | 2 | The restored schema is ahead of the running code; forward-only migrations cannot reconcile it. | Deploy the code version that wrote the snapshot, or restore a snapshot taken with the running build, then confirm the signal returns to `success`. |
-
-**Diagnosis:**
-1. Read the signal. It reports counts and state only — never the database path, migration names, payloads, or stream IDs, so it is safe to paste into an incident channel:
-   ```bash
-   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
-     http://localhost:3001/api/db/restore-monitoring | jq
-   ```
-2. Cross-check the Prometheus gauge from the scrape:
-   ```bash
-   curl -s http://localhost:3001/metrics | grep -E "^sqlite_restore_outcome"
-   ```
-
-**Remediation:**
-1. `success` — the restore is at the current schema version. Confirm the expected stream and event counts before reopening traffic (see [Reset SQLite Database](#reset-sqlite-database)).
-2. `transient_delay` — the snapshot was taken before the running build. Startup applied the pending migrations; no data is at risk and no manual step is required. The recorded value returns to `success` on the next service start, once the database is no longer behind.
-3. `blocked` — the snapshot was written by a newer build. Do not start the service against the future schema. Deploy the code version that wrote the snapshot, or restore the snapshot taken with the running build, then confirm the signal returns to `success`.
-4. Never hand-edit `schema_migrations` to clear the signal: the recorded versions must describe the schema actually present in the file.
 
 ---
 

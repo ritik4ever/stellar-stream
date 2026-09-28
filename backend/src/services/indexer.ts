@@ -28,9 +28,84 @@ let lastProcessedLedger = 0;
 let indexerInterval: NodeJS.Timeout | null = null;
 let indexerStartLedger: number | null = null;
 let isIndexing = false;
+let lastObservedLedger: number | null = null;
+let lastFailureKind: IndexerRpcFailureKind | null = null;
 
 const INDEXER_CURSOR_TABLE = "indexer_cursor";
 const CHECKPOINT_ROW_ID = 1;
+
+/**
+ * Enumerated reason the most recent indexer poll failed.
+ *
+ * Raw provider errors are mapped to these coarse kinds so the monitoring
+ * outcome signal never has to carry an error message (which can embed an RPC
+ * URL, credential, or contract ID).
+ */
+export type IndexerRpcFailureKind =
+  | "rate_limited"
+  | "disconnected"
+  | "provider_error"
+  | "unknown";
+
+function extractStatusCode(err: unknown): number | undefined {
+  if (err && typeof err === "object") {
+    const e = err as Record<string, any>;
+    const raw = e["status"] ?? e["statusCode"] ?? e["response"]?.["status"];
+    return typeof raw === "number" ? raw : undefined;
+  }
+  return undefined;
+}
+
+function errorHaystack(err: unknown): string {
+  if (!err || typeof err !== "object") {
+    return String(err ?? "").toLowerCase();
+  }
+  const e = err as Record<string, any>;
+  return [e["message"], e["code"], e["name"]]
+    .filter((part) => part !== undefined && part !== null)
+    .map((part) => String(part))
+    .join(" ")
+    .toLowerCase();
+}
+
+/**
+ * Classifies an RPC failure into the coarse kinds surfaced by the indexer
+ * monitoring outcome. Deliberately returns a kind, never the original message,
+ * so callers cannot leak provider URLs or credentials by accident.
+ */
+export function classifyRpcFailure(err: unknown): IndexerRpcFailureKind {
+  const statusCode = extractStatusCode(err);
+  const text = errorHaystack(err);
+
+  if (
+    statusCode === 429 ||
+    text.includes("429") ||
+    text.includes("rate limit") ||
+    text.includes("too many requests") ||
+    text.includes("throttl")
+  ) {
+    return "rate_limited";
+  }
+
+  if (
+    statusCode === 503 ||
+    statusCode === 504 ||
+    text.includes("econnrefused") ||
+    text.includes("econnreset") ||
+    text.includes("etimedout") ||
+    text.includes("epipe") ||
+    text.includes("socket hang up") ||
+    text.includes("disconnect") ||
+    text.includes("network") ||
+    text.includes("timeout") ||
+    text.includes("fetch failed")
+  ) {
+    return "disconnected";
+  }
+
+  return statusCode === undefined ? "unknown" : "provider_error";
+}
+
 
 export enum CircuitState {
   CLOSED = "CLOSED",
@@ -87,6 +162,16 @@ export class CircuitBreaker {
     this.setState(CircuitState.CLOSED);
   }
 
+  /** Consecutive failures recorded since the last successful poll. */
+  public getFailureCount(): number {
+    return this.failureCount;
+  }
+
+  /** Number of consecutive failures that opens the circuit. */
+  public getFailureThreshold(): number {
+    return this.failureThreshold;
+  }
+
   private setState(newState: CircuitState): void {
     if (this.state !== newState) {
       logger.info({ from: this.state, to: newState }, "circuit breaker state changed");
@@ -105,6 +190,56 @@ const circuitBreaker = new CircuitBreaker(CIRCUIT_BREAKER_TIMEOUT_MS);
 
 export function getCircuitBreakerStatus(): CircuitState {
   return circuitBreaker.getState();
+}
+
+/**
+ * Secret-free view of the indexer's progress and RPC health, consumed by the
+ * monitoring outcome signal in `indexerMonitor.ts`. Carries ledgers, counts and
+ * enumerated state only — never the RPC URL, contract ID, or credentials.
+ */
+export interface IndexerMonitoringSnapshot {
+  /** Whether an RPC endpoint and contract are configured. */
+  rpcConfigured: boolean;
+  /** Highest ledger observed from RPC, or null if no poll has succeeded yet. */
+  latestLedger: number | null;
+  /** Persisted checkpoint (last fully processed ledger). */
+  indexedLedger: number;
+  /** Unprocessed ledger backlog, clamped at zero. */
+  ledgerLag: number;
+  /** Consecutive failed polls since the last success. */
+  consecutiveFailures: number;
+  /** Consecutive failures that open the circuit. */
+  failureThreshold: number;
+  /** Current circuit breaker state. */
+  circuitState: CircuitState;
+  /** Coarse kind of the last poll failure, or null after a success. */
+  lastFailureKind: IndexerRpcFailureKind | null;
+  /** Whether a poll is currently in flight. */
+  pollInFlight: boolean;
+}
+
+export function getIndexerMonitoringSnapshot(): IndexerMonitoringSnapshot {
+  const latestLedger = lastObservedLedger;
+  return {
+    rpcConfigured: Boolean(rpcServer && contractId),
+    latestLedger,
+    indexedLedger: lastProcessedLedger,
+    ledgerLag:
+      latestLedger === null
+        ? 0
+        : Math.max(0, latestLedger - lastProcessedLedger),
+    consecutiveFailures: circuitBreaker.getFailureCount(),
+    failureThreshold: circuitBreaker.getFailureThreshold(),
+    circuitState: circuitBreaker.getState(),
+    lastFailureKind,
+    pollInFlight: isIndexing,
+  };
+}
+
+/** Records a successful poll: clears the failure budget and the failure kind. */
+function recordPollSuccess(): void {
+  circuitBreaker.onSuccess();
+  lastFailureKind = null;
 }
 
 function isFallbackPollingEnabled(): boolean {
@@ -243,6 +378,8 @@ export function resetIndexerState(): void {
   lastProcessedLedger = 0;
   indexerInterval = null;
   indexerStartLedger = null;
+  lastObservedLedger = null;
+  lastFailureKind = null;
   circuitBreaker.reset();
 }
 
@@ -266,11 +403,12 @@ async function indexEvents(): Promise<void> {
     const db = getDb();
     const latestLedger = await rpcServer.getLatestLedger();
     const currentLedger = latestLedger.sequence;
+    lastObservedLedger = currentLedger;
     indexerLatestLedger.set(currentLedger);
     indexerLedgerLag.set(Math.max(0, currentLedger - lastProcessedLedger));
 
     if (currentLedger <= lastProcessedLedger) {
-      circuitBreaker.onSuccess();
+      recordPollSuccess();
       return;
     }
 
@@ -280,9 +418,10 @@ async function indexEvents(): Promise<void> {
       await indexEventsWithCursorPagination(db, currentLedger);
     }
 
-    circuitBreaker.onSuccess();
+    recordPollSuccess();
   } catch (err) {
     circuitBreaker.onFailure();
+    lastFailureKind = classifyRpcFailure(err);
     indexerErrorsTotal.inc();
     logger.error({ err }, "failed to index events");
   } finally {
