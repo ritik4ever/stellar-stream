@@ -13,8 +13,7 @@ import {
 } from "@stellar/stellar-sdk";
 import pLimit from "p-limit";
 import { initDb, getDb, syncFtsIndex } from "./db";
-import { recordEventWithDb } from "./eventHistory";
-import { streamHasEvent } from "./eventHistory";
+import { recordEventWithDb, getClaimedTotal, streamHasEvent } from "./eventHistory";
 import { triggerWebhook } from "./webhook";
 import { initCache, getCache } from "./cache";
 import { resetStatsCache } from "./stats";
@@ -809,8 +808,6 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
     const op = createStreamOperation(contractId, input, startAt);
 
     const txToSimulate = new TransactionBuilder(sourceAccount, {
-  const built = await rpcServer.prepareTransaction(
-    new TransactionBuilder(sourceAccount, {
       fee: "1000",
       networkPassphrase: netPass,
     })
@@ -1083,6 +1080,86 @@ export function getStreamById(id: string): StreamWithProgress | null {
     ...progress,
     archived_at: row.archived_at,
   };
+}
+
+export const MIN_COMPARE_STREAMS = 2;
+export const MAX_COMPARE_STREAMS = 5;
+
+export interface StreamComparison {
+  id: string;
+  sender: string;
+  recipient: string;
+  assetCode: string;
+  totalAmount: number;
+  vested: number;
+  claimed: number;
+  claimable: number;
+  status: StreamStatus;
+  elapsed_pct: number;
+  days_remaining: number;
+  startAt: number;
+  endAt: number;
+}
+
+const SECONDS_PER_DAY = 86_400;
+
+/**
+ * Builds a single side-by-side comparison entry for a stream.
+ *
+ * `vested`, `status` and `elapsed_pct` come from the same time-based progress
+ * calculation used by the rest of the API, `claimed` is the sum of recorded
+ * claim events, and `claimable` is the still-unclaimed part of `vested`.
+ * Passing an explicit `at` keeps every entry in a comparison consistent.
+ */
+export function buildStreamComparison(
+  stream: StreamRecord,
+  at = nowInSeconds(),
+): StreamComparison {
+  const progress = calculateProgress(stream, at);
+  const claimed = getClaimedTotal(stream.id);
+  const vested = progress.vestedAmount;
+  const claimable = Math.max(0, round(vested - claimed));
+  const endAt = stream.startAt + stream.durationSeconds + stream.pausedDuration;
+  const terminal = progress.status === "completed" || progress.status === "canceled";
+  const daysRemaining = terminal
+    ? 0
+    : Math.max(0, round((endAt - at) / SECONDS_PER_DAY));
+
+  return {
+    id: stream.id,
+    sender: stream.sender,
+    recipient: stream.recipient,
+    assetCode: stream.assetCode,
+    totalAmount: stream.totalAmount,
+    vested,
+    claimed,
+    claimable,
+    status: progress.status,
+    elapsed_pct: progress.percentComplete,
+    days_remaining: daysRemaining,
+    startAt: stream.startAt,
+    endAt,
+  };
+}
+
+/**
+ * Compares 2-5 streams at a single point in time so every entry is consistent.
+ * Throws a 404-tagged error naming the first unknown stream ID.
+ */
+export function compareStreams(
+  ids: string[],
+  at = nowInSeconds(),
+): StreamComparison[] {
+  return ids.map((id) => {
+    const stream = getStream(id);
+    if (!stream) {
+      const err: any = new Error(`Stream ${id} not found.`);
+      err.statusCode = 404;
+      err.code = "NOT_FOUND";
+      throw err;
+    }
+    return buildStreamComparison(stream, at);
+  });
 }
 
 export async function cancelStream(

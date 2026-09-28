@@ -1,5 +1,6 @@
 ---
 source: src/test.rs
+assertion_line: 713
 expression: event
 ---
 StreamCreated {
@@ -13,6 +14,8 @@ StreamCreated {
     total_amount: 1000,
     start_time: 100,
     end_time: 200,
+    cliff_seconds: 0,
+    vesting_type: String(linear),
     min_claim_interval_seconds: 0,
     metadata: None,
 }

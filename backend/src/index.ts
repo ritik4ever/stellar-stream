@@ -43,6 +43,7 @@ import { startArchiveJob } from "./services/archiveJob";
 import { startStreamProgressBroadcaster } from "./services/streamProgressBroadcaster";
 import { startWebhookWorker } from "./services/webhookWorker";
 import { startDeadLetterPruningJob } from "./services/webhookDeadLetterPruningJob";
+import { getWebhookOutcomeSignal, refreshWebhookMetrics } from "./services/webhookMonitor";
 import {
   clearDeadLetters,
   getDeadLetters,
@@ -52,6 +53,9 @@ import {
 import {
   archiveOldStreams,
   calculateProgress,
+  compareStreams,
+  MAX_COMPARE_STREAMS,
+  MIN_COMPARE_STREAMS,
   cancelStream,
   createStream,
   getStream,
@@ -411,6 +415,14 @@ app.get("/metrics", async (_req: Request, res: Response) => {
     }
   }
 
+  // Publish the coarse webhook health signal alongside the raw counters so
+  // the scrape and GET /api/webhooks/monitoring cannot disagree.
+  try {
+    refreshWebhookMetrics();
+  } catch (error) {
+    logger.warn({ err: error }, "failed to refresh webhook monitoring metrics");
+  }
+
   const output = await register.metrics();
   res.setHeader("Content-Type", "text/plain; version=0.0.4");
   res.send(output);
@@ -576,9 +588,9 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
   }
   if (query.q && query.q.length > 0) {
     const searchTerm = query.q.toLowerCase();
-    // When an explicit asset filter is active (asset or assetCode), skip the
-    // assetCode arm so that `q` cannot override/nullify the asset constraint.
-    // Both filters combine with AND logic: results must satisfy asset AND q.
+    // When an explicit asset filter (asset or assetCode) is already applied,
+    // exclude the assetCode arm from the q search so that q cannot conflict
+    // with the asset constraint. All filters combine with AND logic.
     const assetAlreadyFiltered =
       !!query.asset || (!!query.assetCode && query.assetCode.length > 0);
     data = data.filter((stream) => {
@@ -623,35 +635,81 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
   res.json(result);
 });
 
+/**
+ * GET /api/streams/search
+ *
+ * Dedicated full-text search endpoint.
+ *
+ * Query parameters
+ * ----------------
+ * q        (required) Non-empty search term.  Case-insensitive substring match
+ *           across stream id, sender, recipient, and assetCode.
+ * asset    (optional) Exact asset-code match (case-insensitive, 1-12 alphanumeric
+ *           characters).  When supplied, results are AND-filtered: only streams
+ *           that match BOTH `q` AND the given asset code are returned.
+ *
+ * Boundary behaviour
+ * ------------------
+ * • Missing or empty `q`              → 400 VALIDATION_ERROR
+ * • `asset` with invalid format       → 400 VALIDATION_ERROR
+ * • Valid `q` that matches nothing    → 200, data:[], total:0
+ * • Valid `q` + `asset` combo         → 200, intersection of both filters
+ */
 app.get("/api/streams/search", readLimiter, (req: Request, res: Response) => {
-  const q = z.string().min(1, "search query must not be empty").safeParse(req.query.q);
-  if (!q.success) {
-    sendValidationError(req, res, q.error.issues);
+  // --- validate q ---
+  const qResult = z.string().min(1, "search query must not be empty").safeParse(req.query.q);
+  if (!qResult.success) {
+    sendValidationError(req, res, qResult.error.issues);
+    return;
+  }
+
+  // --- validate optional asset filter ---
+  const ASSET_CODE_REGEX = /^[A-Za-z0-9]{1,12}$/;
+  const assetResult = z
+    .string()
+    .regex(ASSET_CODE_REGEX, "asset must be 1–12 alphanumeric characters (e.g. USDC, XLM)")
+    .optional()
+    .safeParse(req.query.asset !== undefined ? String(req.query.asset) : undefined);
+  if (!assetResult.success) {
+    sendValidationError(req, res, assetResult.error.issues);
     return;
   }
 
   try {
-    const streamIds = searchStreamsFts(q.data);
     const now = nowInSeconds();
-    const results = streamIds
+    // Step 1: FTS scan — returns matching stream IDs ordered newest-first
+    const streamIds = searchStreamsFts(qResult.data);
+
+    // Step 2: Hydrate stream records and compute progress
+    let results = streamIds
       .map((id) => getStream(id))
-      .filter((s) => s !== null)
+      .filter((s): s is NonNullable<typeof s> => s !== null)
       .map((s) => ({
         ...s,
-        progress: calculateProgress(s!, now),
+        progress: calculateProgress(s, now),
       }));
+
+    // Step 3: AND-filter by asset code (case-insensitive exact match)
+    const assetFilter = assetResult.data?.toUpperCase();
+    if (assetFilter) {
+      results = results.filter(
+        (s) => s.assetCode.toUpperCase() === assetFilter,
+      );
+    }
 
     res.set("Cache-Control", "max-age=5");
     res.json({
       data: results,
       total: results.length,
-      query: q.data,
+      query: qResult.data,
+      ...(assetFilter ? { asset: assetFilter } : {}),
     });
   } catch (err) {
     logger.error({ err }, "search failed");
     sendApiError(req, res, 500, "Search failed.", { code: "SEARCH_ERROR" });
   }
 });
+
 
 app.get("/api/events", readLimiter, (req: Request, res: Response) => {
   const parsedQuery = listEventsQuerySchema.safeParse(req.query);
@@ -888,8 +946,9 @@ app.get(
     }
     if (query.q && query.q.length > 0) {
       const searchTerm = query.q.toLowerCase();
-      // When an explicit asset filter is active, skip the assetCode arm so
-      // that `q` does not nullify the asset constraint (AND logic).
+      // When an explicit asset filter is already applied, exclude the assetCode
+      // arm from q so that q does not conflict with the asset constraint.
+      // All filters combine with AND logic.
       const assetAlreadyFiltered =
         !!query.asset || (!!query.assetCode && query.assetCode.length > 0);
       data = data.filter(
@@ -976,8 +1035,9 @@ app.get(
     }
     if (query.q && query.q.length > 0) {
       const searchTerm = query.q.toLowerCase();
-      // When an explicit asset filter is active, skip the assetCode arm so
-      // that `q` does not nullify the asset constraint (AND logic).
+      // When an explicit asset filter is already applied, exclude the assetCode
+      // arm from q so that q does not conflict with the asset constraint.
+      // All filters combine with AND logic.
       const assetAlreadyFiltered =
         !!query.asset || (!!query.assetCode && query.assetCode.length > 0);
       data = data.filter(
@@ -1009,6 +1069,62 @@ app.get(
     res.json({ data: paginatedData, total, page, limit });
   },
 );
+
+const compareStreamsQuerySchema = z.object({
+  ids: z
+    .string()
+    .trim()
+    .min(1, "ids must not be empty")
+    .transform((value) =>
+      value
+        .split(",")
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0),
+    )
+    .refine((ids) => ids.length >= MIN_COMPARE_STREAMS, {
+      message: `At least ${MIN_COMPARE_STREAMS} stream IDs are required.`,
+    })
+    .refine((ids) => ids.length <= MAX_COMPARE_STREAMS, {
+      message: `At most ${MAX_COMPARE_STREAMS} stream IDs are allowed.`,
+    }),
+});
+
+app.get("/api/streams/compare", readLimiter, (req: Request, res: Response) => {
+  const parsedQuery = compareStreamsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    sendValidationError(req, res, parsedQuery.error.issues);
+    return;
+  }
+
+  const ids = parsedQuery.data.ids;
+  for (const id of ids) {
+    const parsedId = parseStreamId(id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+  }
+
+  const at = nowInSeconds();
+  try {
+    const data = compareStreams(ids, at);
+    // A comparison is a snapshot: never let a shared cache serve stale values.
+    res.set("Cache-Control", "no-store");
+    res.json({ at, data });
+  } catch (error: unknown) {
+    const normalizedError = normalizeUnknownApiError(
+      error,
+      "Failed to compare streams.",
+    );
+    sendApiError(
+      req,
+      res,
+      normalizedError.statusCode,
+      normalizedError.message,
+      { code: normalizedError.code ?? "INTERNAL_ERROR" },
+    );
+  }
+});
 
 app.get("/api/streams/:id", readLimiter, (req: Request, res: Response) => {
   const parsedId = parseStreamId(req.params.id);
@@ -1079,12 +1195,17 @@ app.get(
     }
     if (query.q && query.q.length > 0) {
       const searchTerm = query.q.toLowerCase();
+      // When an explicit asset filter is already applied, exclude the assetCode
+      // arm from q so that q does not conflict with the asset constraint.
+      // All filters combine with AND logic.
+      const assetAlreadyFiltered =
+        !!query.asset || (!!query.assetCode && query.assetCode.length > 0);
       data = data.filter((stream) => {
         return (
           stream.id.toLowerCase().includes(searchTerm) ||
           stream.sender.toLowerCase().includes(searchTerm) ||
           stream.recipient.toLowerCase().includes(searchTerm) ||
-          stream.assetCode.toLowerCase().includes(searchTerm)
+          (!assetAlreadyFiltered && stream.assetCode.toLowerCase().includes(searchTerm))
         );
       });
     }
@@ -1160,12 +1281,16 @@ app.get(
     }
     if (query.q && query.q.length > 0) {
       const searchTerm = query.q.toLowerCase();
+      // When an explicit asset filter is already applied, exclude the assetCode
+      // arm from q so that q does not conflict with the asset constraint.
+      // All filters combine with AND logic.
+      const assetAlreadyFiltered = !!query.asset;
       data = data.filter((stream) => {
         return (
           stream.id.toLowerCase().includes(searchTerm) ||
           stream.sender.toLowerCase().includes(searchTerm) ||
           stream.recipient.toLowerCase().includes(searchTerm) ||
-          stream.assetCode.toLowerCase().includes(searchTerm)
+          (!assetAlreadyFiltered && stream.assetCode.toLowerCase().includes(searchTerm))
         );
       });
     }
@@ -1796,6 +1921,41 @@ app.get("/api/open-issues", async (req: Request, res: Response) => {
     );
   }
 });
+
+// GET /api/webhooks/monitoring — coarse delivery-health signal for the
+// outbound webhook pipeline. Counts and state only: it never returns the
+// destination URL, payloads, or stream IDs.
+app.get(
+  "/api/webhooks/monitoring",
+  authMiddleware,
+  (req: Request, res: Response) => {
+    try {
+      const signal = getWebhookOutcomeSignal();
+      res.set("Cache-Control", "no-store");
+      res.json({
+        outcome: signal.outcome,
+        outcomeCode: signal.outcomeCode,
+        detail: signal.detail,
+        counts: signal.counts,
+      });
+    } catch (error: any) {
+      logger.error({ err: error }, "failed to compute webhook monitoring outcome");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to compute webhook monitoring outcome.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        {
+          code: normalizedError.code ?? "INTERNAL_ERROR",
+        },
+      );
+    }
+  },
+);
 
 app.get(
   "/api/webhooks/dead-letters",

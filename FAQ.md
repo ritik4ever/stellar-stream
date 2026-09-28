@@ -3,16 +3,47 @@
 This document addresses common questions and issues encountered by contributors and developers working on StellarStream.
 
 ## Table of Contents
-1. [How do I get testnet XLM?](#how-do-i-get-testnet-xlm)
-2. [How do I set up Freighter for development?](#how-do-i-set-up-freighter-for-development)
-3. [Why is the indexer circuit breaker open?](#why-is-the-indexer-circuit-breaker-open)
-4. [How do I reset the database?](#how-do-i-reset-the-database)
-5. [How do I generate a JWT secret?](#how-do-i-generate-a-jwt-secret)
-6. [How do I debug WebSocket issues?](#how-do-i-debug-websocket-issues)
-7. [How do I run the full project locally?](#how-do-i-run-the-full-project-locally)
-8. [How do I run tests?](#how-do-i-run-tests)
-9. [How do I update contract bindings?](#how-do-i-update-contract-bindings)
-10. [How do I change the allowed assets?](#how-do-i-change-the-allowed-assets)
+1. [How do I run the backend without Stellar credentials?](#how-do-i-run-the-backend-without-stellar-credentials)
+2. [How do I get testnet XLM?](#how-do-i-get-testnet-xlm)
+3. [How do I set up Freighter for development?](#how-do-i-set-up-freighter-for-development)
+4. [Why is the indexer circuit breaker open?](#why-is-the-indexer-circuit-breaker-open)
+5. [How do I reset the database?](#how-do-i-reset-the-database)
+6. [How do I generate a JWT secret?](#how-do-i-generate-a-jwt-secret)
+7. [How do I debug WebSocket issues?](#how-do-i-debug-websocket-issues)
+8. [How do I run the full project locally?](#how-do-i-run-the-full-project-locally)
+9. [How do I run tests?](#how-do-i-run-tests)
+10. [How do I update contract bindings?](#how-do-i-update-contract-bindings)
+11. [How do I change the allowed assets?](#how-do-i-change-the-allowed-assets)
+
+---
+
+### How do I run the backend without Stellar credentials?
+This is the recommended starting point for new contributors who haven't deployed a contract yet (frontend work, API development, running tests).
+
+1. Copy the example env file:
+   ```bash
+   cp backend/.env.example backend/.env
+   ```
+2. Uncomment (or add) `SOROBAN_DISABLED=true` in `backend/.env`:
+   ```
+   SOROBAN_DISABLED=true
+   ```
+3. Start the backend:
+   ```bash
+   npm run dev:backend
+   ```
+
+What works in this mode:
+- All REST API endpoints (streams, webhooks, events, stats).
+- WebSocket real-time updates.
+- JWT authentication (uses an ephemeral secret that resets on restart).
+- All backend unit and integration tests (`cd backend && npm test`).
+
+What doesn't work:
+- On-chain stream operations (claim, create, cancel) — these require a deployed contract.
+- The event indexer will not start (no `CONTRACT_ID` to watch).
+
+Once you have a deployed contract, remove `SOROBAN_DISABLED=true` and set `CONTRACT_ID` and `SERVER_PRIVATE_KEY` in your `.env`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full Soroban local testnet setup.
 
 ---
 

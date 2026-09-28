@@ -219,7 +219,39 @@ Tests use the Express app directly (no port binding), so port conflicts should n
 
 Potential additions to the test suite:
 - [ ] Authentication flow tests
-- [ ] Webhook delivery tests
+- [x] Webhook delivery tests (see Webhook Monitoring Smoke Check)
 - [ ] Concurrent request handling
 - [ ] Performance benchmarks
 - [ ] Load testing
+
+## Webhook Monitoring Smoke Check
+
+`src/services/webhookQueueStats.test.ts` is a repeatable smoke check for the
+webhook monitoring workflow. It drives the real queue worker against a real
+SQLite database (`axios` is mocked, so nothing touches the network) and then
+asserts the pending, retry and dead-letter counts through
+`evaluateWebhookMonitoring()`, which returns an explicit pass/fail verdict
+instead of a bare number.
+
+```bash
+cd backend
+npx vitest run src/services/webhookQueueStats.test.ts
+```
+
+### Checklist
+
+Run this before releasing a change to `webhook.ts`, `webhookWorker.ts`, the
+webhook migrations, or the queue schema.
+
+| # | Scenario | What to confirm | Expected result |
+| --- | --- | --- | --- |
+| 1 | Bursty delivery queue | 25 deliveries become due at once | Queue drains: `pending: 0`, `delivered: 25`, `deadLetters: 0` |
+| 2 | Destination remains unavailable | The receiver refuses every attempt | Retry scheduled while the budget lasts (`pending: 1`, `scheduledRetries: 1`), then `deadLetters: 1` once the budget is exhausted |
+| 3 | Verdict has teeth | Expectation deliberately mismatched | `pass: false`, with the failing checks named |
+| 4 | Empty queue invariants | No deliveries at all | `pass: true`; `pending == dueNow + scheduledRetries` and `total == pending + delivered + deadLetters` |
+
+A red run means the queue no longer behaves the way the monitoring signal
+assumes — investigate before trusting the webhook health signal in production.
+
+The check prints only counts, never payloads, stream IDs, or the destination
+URL, so its output is safe to keep in a CI log.

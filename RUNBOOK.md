@@ -11,8 +11,9 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 5. [Archive Old Streams Manually](#archive-old-streams-manually)
 6. [Indexer Falls Behind](#indexer-falls-behind)
 7. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
-8. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
-9. [Contract Invocation Timeout](#contract-invocation-timeout)
+8. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
+9. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
+10. [Contract Invocation Timeout](#contract-invocation-timeout)
 
 ---
 
@@ -213,6 +214,38 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
      "SELECT id, payload FROM webhook_dead_letters ORDER BY created_at DESC LIMIT 5;" | \
      jq '.'
    ```
+
+---
+
+### Webhook Delivery Outcome Signal
+**Symptoms:**
+- Alert on the `webhook_outcome` Prometheus gauge changing from `0`.
+- `GET /api/webhooks/monitoring` returns `outcome: "blocked"`.
+- Recipients report missing stream event notifications.
+
+**Outcome meanings:**
+
+| Outcome | Gauge value | Meaning | Owner action |
+| --- | --- | --- | --- |
+| `success` | 0 | Nothing queued, nothing dead-lettered. | None. |
+| `transient_delay` | 1 | Deliveries are waiting out a backoff window; the retry budget is intact. | None while the queued count falls — the worker clears these on its own. |
+| `blocked` | 2 | The destination exhausted its retry budget, or work is queued with no destination configured. | Verify the receiver, then requeue; or set `WEBHOOK_DESTINATION_URL`. |
+
+**Diagnosis:**
+1. Read the signal. It reports counts and state only — never the destination URL, a payload, or a stream ID, so it is safe to paste into an incident channel:
+   ```bash
+   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
+     http://localhost:3001/api/webhooks/monitoring | jq
+   ```
+2. Cross-check the raw counters on the Prometheus scrape:
+   ```bash
+   curl -s http://localhost:3001/metrics | grep -E "^webhook_(outcome|queue_|dead_letters)"
+   ```
+
+**Remediation:**
+1. `blocked` with `counts.deadLetters > 0` — the destination has remained unavailable. Follow [Webhook Dead-Letter Spike](#webhook-dead-letter-spike).
+2. `blocked` with `counts.pending > 0` and no destination configured — set `WEBHOOK_DESTINATION_URL` in the backend `.env` and restart the service.
+3. `transient_delay` — take no action while the queued count is falling. If it stops draining, inspect the worker log for `webhook delivery scheduled for retry` and confirm the destination is reachable.
 
 ---
 

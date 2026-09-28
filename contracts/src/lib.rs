@@ -2,9 +2,10 @@
 
 mod errors;
 
+use crate::templates::{StreamTemplate, TemplateCreated};
 use errors::ContractError;
 pub mod dao;
-mod errors;
+pub mod templates;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
     Map, String, Vec,
@@ -87,6 +88,7 @@ pub mod escrow {
 }
 
 const NATIVE_SENTINEL: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+const MAX_TEMPLATES_PER_SENDER: u32 = 10;
 
 // ---------------------------------------------------------------------------
 // Stream struct
@@ -102,6 +104,8 @@ pub struct Stream {
     pub claimed_amount: i128,
     pub start_time: u64,
     pub end_time: u64,
+    pub cliff_seconds: u64,
+    pub vesting_type: String,
     /// Minimum seconds that must elapse between two claims (0 = no limit).
     pub min_claim_interval_seconds: u64,
     /// Ledger timestamp of the last successful claim (0 if never claimed).
@@ -122,6 +126,9 @@ pub enum DataKey {
     Admin,
     NextStreamId,
     Stream(u64),
+    NextTemplateId,
+    Template(u64),
+    SenderTemplates(Address),
     SplitChildren(u64),
     ChildToParent(u64),
     NativeToken,
@@ -157,6 +164,8 @@ pub struct StreamCreated {
     pub total_amount: i128,
     pub start_time: u64,
     pub end_time: u64,
+    pub cliff_seconds: u64,
+    pub vesting_type: String,
     pub min_claim_interval_seconds: u64,
     pub metadata: Option<Map<String, String>>,
 }
@@ -310,6 +319,119 @@ impl StellarStreamContract {
     // Stream creation
     // -----------------------------------------------------------------------
 
+    pub fn create_template(
+        env: Env,
+        sender: Address,
+        name: String,
+        token: Address,
+        duration_seconds: u64,
+        cliff_seconds: u64,
+        vesting_type: String,
+    ) -> u64 {
+        sender.require_auth();
+
+        if duration_seconds == 0 {
+            panic!("duration must be positive");
+        }
+        if cliff_seconds > duration_seconds {
+            panic!("cliff exceeds duration");
+        }
+
+        let mut sender_templates: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SenderTemplates(sender.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        if sender_templates.len() >= MAX_TEMPLATES_PER_SENDER {
+            panic!("template limit exceeded");
+        }
+
+        let mut template_id: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::NextTemplateId)
+            .unwrap_or(0);
+        template_id += 1;
+
+        let template = StreamTemplate {
+            id: template_id,
+            sender: sender.clone(),
+            name,
+            token: token.clone(),
+            duration_seconds,
+            cliff_seconds,
+            vesting_type: vesting_type.clone(),
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Template(template_id), &template);
+        sender_templates.push_back(template_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::SenderTemplates(sender.clone()), &sender_templates);
+        env.storage()
+            .persistent()
+            .set(&DataKey::NextTemplateId, &template_id);
+
+        env.events().publish(
+            (symbol_short!("Template"), symbol_short!("Created")),
+            TemplateCreated {
+                template_id,
+                sender,
+                token,
+                duration_seconds,
+                cliff_seconds,
+                vesting_type,
+            },
+        );
+
+        template_id
+    }
+
+    pub fn get_template(env: Env, template_id: u64) -> StreamTemplate {
+        read_template(&env, template_id)
+    }
+
+    pub fn get_templates_by_sender(env: Env, sender: Address) -> Vec<StreamTemplate> {
+        let template_ids: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SenderTemplates(sender))
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut templates = Vec::new(&env);
+        for template_id in template_ids.iter() {
+            templates.push_back(read_template(&env, template_id));
+        }
+        templates
+    }
+
+    pub fn create_stream_from_template(
+        env: Env,
+        template_id: u64,
+        recipient: Address,
+        amount: i128,
+    ) -> u64 {
+        let template = read_template(&env, template_id);
+
+        let start_time = env.ledger().timestamp();
+        let end_time = start_time.saturating_add(template.duration_seconds);
+
+        create_stream_with_config(
+            &env,
+            template.sender,
+            recipient,
+            template.token,
+            amount,
+            start_time,
+            end_time,
+            template.cliff_seconds,
+            template.vesting_type,
+            0,
+            None,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn create_stream(
         env: Env,
@@ -322,101 +444,19 @@ impl StellarStreamContract {
         min_claim_interval_seconds: u64,
         metadata: Option<Map<String, String>>,
     ) -> u64 {
-        sender.require_auth();
-
-        if total_amount <= 0 {
-            panic!("total_amount must be positive");
-        }
-        if end_time <= start_time {
-            panic!("end_time must be greater than start_time");
-        }
-
-        let is_native = token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
-        if !is_native {
-            let allowed_tokens: Vec<Address> = env
-                .storage()
-                .instance()
-                .get(&DataKey::AllowedTokens)
-                .unwrap_or_else(|| Vec::new(&env));
-            #[cfg(not(test))]
-            #[cfg(not(any(test, feature = "testutils")))]
-            if !allowed_tokens.contains(&token) {
-                panic!("ContractError::TokenNotAllowed");
-            }
-            #[cfg(test)]
-            if !allowed_tokens.is_empty() && !allowed_tokens.contains(&token) {
-                panic!("ContractError::TokenNotAllowed");
-            }
-        }
-
-        let actual_token = if is_native {
-            env.storage()
-                .instance()
-                .get(&DataKey::NativeToken)
-                .unwrap_or_else(|| panic!("not initialized"))
-        } else {
-            token.clone()
-        };
-        let token_client = TokenClient::new(&env, &actual_token);
-        let sender_balance = token_client.balance(&sender);
-        if sender_balance < total_amount {
-            panic!("insufficient sender balance");
-        }
-        // Escrow: transfer total_amount from sender into this contract.
-        let contract_address = env.current_contract_address();
-        token_client.transfer(&sender, &contract_address, &total_amount);
-
-        let mut next_id: u64 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::NextStreamId)
-            .unwrap_or(0);
-        next_id += 1;
-
-        let stream = Stream {
-            sender: sender.clone(),
-            recipient: recipient.clone(),
-            token: token.clone(),
+        create_stream_with_config(
+            &env,
+            sender,
+            recipient,
+            token,
             total_amount,
-            claimed_amount: 0,
             start_time,
             end_time,
+            0,
+            String::from_str(&env, "linear"),
             min_claim_interval_seconds,
-            last_claim_time: 0,
-            canceled: false,
-            paused: false,
-            pause_started_at: None,
-
-            metadata: metadata.clone(),
-        };
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::NextStreamId, &next_id);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Stream(next_id), &stream);
-
-        let now = env.ledger().timestamp();
-        env.events().publish(
-            (symbol_short!("Stream"), symbol_short!("Created")),
-            StreamCreated {
-                stream_id: next_id,
-                actor: sender.clone(),
-                timestamp: now,
-                sender,
-                recipient,
-                token: token.clone(),
-                token_symbol: token_client.symbol(),
-                total_amount,
-                start_time,
-                end_time,
-                min_claim_interval_seconds,
-                metadata,
-            },
-        );
-
-        next_id
+            metadata,
+        )
     }
 
     pub fn create_split_stream(
@@ -486,6 +526,8 @@ impl StellarStreamContract {
                 claimed_amount: 0,
                 start_time,
                 end_time,
+                cliff_seconds: 0,
+                vesting_type: String::from_str(&env, "linear"),
                 min_claim_interval_seconds: 0,
                 last_claim_time: 0,
                 canceled: false,
@@ -515,6 +557,8 @@ impl StellarStreamContract {
                     total_amount: allocation,
                     start_time,
                     end_time,
+                    cliff_seconds: 0,
+                    vesting_type: String::from_str(&env, "linear"),
                     min_claim_interval_seconds: 0,
                     metadata: None,
                 },
@@ -976,6 +1020,44 @@ impl StellarStreamContract {
             .unwrap_or_else(|| Vec::new(&env))
     }
 
+    // -----------------------------------------------------------------------
+    // Native XLM stream support (#688)
+    // -----------------------------------------------------------------------
+    //
+    // `NativeToken` is the address of the SAC (Stellar Asset Contract) that
+    // wraps native XLM for this network — the only address a Soroban
+    // contract can present to the standard SEP-41 token interface to move
+    // native balances; there is no lower-level, SAC-free path for a contract
+    // to debit/credit XLM. Before this, that address could only be set once,
+    // at `initialize()`, with no way to view or correct it afterward: a
+    // wrong or stale address (e.g. after a network migration) permanently
+    // broke every native-token stream (`create_stream`/`clawback` both
+    // `panic!("not initialized")` on the missing key) with no recovery short
+    // of redeploying the whole contract. `get_native_token`/`set_native_token`
+    // give admins visibility and a correction path, matching the pattern
+    // already used for `AllowedTokens`.
+
+    /// Returns the configured native-XLM SAC address, if any.
+    pub fn get_native_token(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::NativeToken)
+    }
+
+    /// Sets (or corrects) the native-XLM SAC address. Admin-only.
+    pub fn set_native_token(env: Env, admin: Address, native_token: Address) {
+        let admin_stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("contract not initialized"));
+        if admin_stored != admin {
+            panic!("unauthorized");
+        }
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::NativeToken, &native_token);
+    }
+
     /// Transfers the admin role to a new address.
     /// Only the current admin can call this. Panics if the contract is not initialized.
     pub fn set_admin(env: Env, admin: Address, new_admin: Address) {
@@ -995,6 +1077,126 @@ impl StellarStreamContract {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+fn create_stream_with_config(
+    env: &Env,
+    sender: Address,
+    recipient: Address,
+    token: Address,
+    total_amount: i128,
+    start_time: u64,
+    end_time: u64,
+    cliff_seconds: u64,
+    vesting_type: String,
+    min_claim_interval_seconds: u64,
+    metadata: Option<Map<String, String>>,
+) -> u64 {
+    sender.require_auth();
+
+    if total_amount <= 0 {
+        panic!("total_amount must be positive");
+    }
+    if end_time <= start_time {
+        panic!("end_time must be greater than start_time");
+    }
+
+    let is_native = token.to_string() == String::from_str(env, NATIVE_SENTINEL);
+    if !is_native {
+        let allowed_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or_else(|| Vec::new(env));
+        #[cfg(not(any(test, feature = "testutils")))]
+        if !allowed_tokens.contains(&token) {
+            panic!("ContractError::TokenNotAllowed");
+        }
+        #[cfg(any(test, feature = "testutils"))]
+        if !allowed_tokens.is_empty() && !allowed_tokens.contains(&token) {
+            panic!("ContractError::TokenNotAllowed");
+        }
+    }
+
+    let actual_token = if is_native {
+        env.storage()
+            .instance()
+            .get(&DataKey::NativeToken)
+            .unwrap_or_else(|| panic!("not initialized"))
+    } else {
+        token.clone()
+    };
+    let token_client = TokenClient::new(env, &actual_token);
+    let sender_balance = token_client.balance(&sender);
+    if sender_balance < total_amount {
+        panic!("insufficient sender balance");
+    }
+
+    let contract_address = env.current_contract_address();
+    token_client.transfer(&sender, &contract_address, &total_amount);
+
+    let mut next_id: u64 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::NextStreamId)
+        .unwrap_or(0);
+    next_id += 1;
+
+    let stream = Stream {
+        sender: sender.clone(),
+        recipient: recipient.clone(),
+        token: token.clone(),
+        total_amount,
+        claimed_amount: 0,
+        start_time,
+        end_time,
+        cliff_seconds,
+        vesting_type: vesting_type.clone(),
+        min_claim_interval_seconds,
+        last_claim_time: 0,
+        canceled: false,
+        paused: false,
+        pause_started_at: None,
+        metadata: metadata.clone(),
+    };
+
+    env.storage()
+        .persistent()
+        .set(&DataKey::NextStreamId, &next_id);
+    env.storage()
+        .persistent()
+        .set(&DataKey::Stream(next_id), &stream);
+
+    let now = env.ledger().timestamp();
+    env.events().publish(
+        (symbol_short!("Stream"), symbol_short!("Created")),
+        StreamCreated {
+            stream_id: next_id,
+            actor: sender.clone(),
+            timestamp: now,
+            sender,
+            recipient,
+            token: token.clone(),
+            token_symbol: token_client.symbol(),
+            total_amount,
+            start_time,
+            end_time,
+            cliff_seconds,
+            vesting_type,
+            min_claim_interval_seconds,
+            metadata,
+        },
+    );
+
+    next_id
+}
+
+fn read_template(env: &Env, template_id: u64) -> StreamTemplate {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Template(template_id))
+        .unwrap_or_else(|| panic!("template not found"))
+}
 
 fn read_stream(env: &Env, stream_id: u64) -> Stream {
     env.storage()

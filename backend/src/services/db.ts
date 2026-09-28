@@ -308,6 +308,29 @@ class PostgresDatabase {
   }
 }
 
+export function syncFtsIndex(id: string, sender: string, recipient: string, assetCode: string): void {
+  if (isPostgres()) return;
+  // FTS index sync is currently a no-op; the streams_fts virtual table
+  // is only created for SQLite and is handled separately if needed.
+}
+
+/**
+ * Adds a column to a table if it doesn't already exist.
+ * Safe for both SQLite and Postgres.
+ */
+function addColumnIfMissing(database: any, table: string, column: string, typeDef: string): void {
+  try {
+    const cols = database
+      .prepare(`PRAGMA table_info(${table})`)
+      .all() as Array<{ name: string }>;
+    if (cols.some((c) => c.name === column)) return;
+  } catch {
+    // If PRAGMA fails (e.g. table does not exist), skip.
+    return;
+  }
+  database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeDef}`);
+}
+
 export function initDb(): void {
   if (isPostgres()) {
     db = new PostgresDatabase(process.env.DATABASE_URL!);
@@ -327,4 +350,8 @@ export function initDb(): void {
   }
 
   runMigrations(db);
+
+  // Incremental schema patches for columns added after the baseline.
+  addColumnIfMissing(db, "streams", "cliff_seconds", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "stream_archive", "cliff_seconds", "INTEGER NOT NULL DEFAULT 0");
 }

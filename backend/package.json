@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest",
+    "coverage": "vitest run --coverage",
     "lint": "eslint src"
   },
   "dependencies": {

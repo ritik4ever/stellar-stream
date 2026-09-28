@@ -102,10 +102,10 @@ Additional fields are event-specific and documented in each section below.
 
 ### ClaimThrottled *(new — emitted by `claim`, #681)*
 
-**Topic:** `("Stream", "Throttled")`  
+**Topic:** `("Stream", "Throttled")`
 **Triggered by:** `claim()` — emitted when a claim is rejected because the
 stream's `min_claim_interval_seconds` has not elapsed since the last claim.
-The claim reverts with `ClaimTooFrequent`.  
+The claim reverts with `ClaimTooFrequent`.
 **Actor:** The recipient whose claim attempt was rejected.
 
 | Field                     | Type      | Description                                                  |
@@ -211,7 +211,7 @@ The claim reverts with `ClaimTooFrequent`.
 
 ### ProposalCreated *(new — DAO governance, #695)*
 
-**Topic:** `("Proposal", "Created")`  
+**Topic:** `("Proposal", "Created")`
 **Triggered by:** `create_proposal()`
 
 | Field         | Type             | Description                                         |
@@ -224,7 +224,7 @@ The claim reverts with `ClaimTooFrequent`.
 
 ### VoteCast *(new — DAO governance, #695)*
 
-**Topic:** `("Proposal", "Vote")`  
+**Topic:** `("Proposal", "Vote")`
 **Triggered by:** `vote()`
 
 | Field         | Type      | Description                                    |
@@ -237,7 +237,7 @@ The claim reverts with `ClaimTooFrequent`.
 
 ### ProposalExecuted *(new — DAO governance, #695)*
 
-**Topic:** `("Proposal", "Executed")`  
+**Topic:** `("Proposal", "Executed")`
 **Triggered by:** `execute()` (only when the proposal passes)
 
 | Field         | Type             | Description                  |

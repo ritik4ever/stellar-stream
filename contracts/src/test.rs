@@ -5,7 +5,6 @@ use insta::assert_debug_snapshot as assert_snapshot;
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events, Ledger},
-    token, Env, IntoVal, Map, String, Symbol, Vec,
     token, Env, IntoVal, Map, String, Symbol, Val, Vec,
 };
 
@@ -635,6 +634,8 @@ fn test_event_emissions() {
             total_amount: 1000,
             start_time: 0,
             end_time: 1000,
+            cliff_seconds: 0,
+            vesting_type: String::from_str(&env, "linear"),
             min_claim_interval_seconds: 0,
             metadata: None,
         }
@@ -703,6 +704,8 @@ fn test_stream_created_snapshot() {
         total_amount: 1000,
         start_time: 100,
         end_time: 200,
+        cliff_seconds: 0,
+        vesting_type: String::from_str(&env, "linear"),
         min_claim_interval_seconds: 0,
         metadata: None,
     };
@@ -853,6 +856,8 @@ fn test_vested_amount_fuzz_invariants() {
         claimed_amount: 0,
         start_time: 100,
         end_time: 10_100,
+        cliff_seconds: 0,
+        vesting_type: String::from_str(&env, "linear"),
         min_claim_interval_seconds: 0,
         last_claim_time: 0,
         canceled: false,
@@ -1049,7 +1054,16 @@ fn test_cancel_before_start_claim_attempt_panics() {
 // -----------------------------------------------------------------
 
 #[test]
-fn test_cliff_vesting_blocks_claim_before_cliff() {
+fn test_min_claim_interval_does_not_affect_vesting_schedule() {
+    // NOTE: this test previously asserted "cliff vesting" behavior — but the
+    // contract has no cliff concept (no `cliff_seconds` field on `Stream`,
+    // no cliff parameter on `create_stream`); it was mislabeling the 7th
+    // `create_stream` argument, which is actually `min_claim_interval_seconds`
+    // (a claim-throttle, not a vesting gate — see `test_claim_throttle_*` and
+    // `test_claim_allowed_after_interval_elapses` for that behavior). Fixed
+    // to assert what `min_claim_interval_seconds` actually does: nothing to
+    // `claimable()` — vesting stays purely linear from `start_time` regardless
+    // of its value.
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register_contract(None, StellarStreamContract);
@@ -1061,17 +1075,13 @@ fn test_cliff_vesting_blocks_claim_before_cliff() {
     let token_admin = token::StellarAssetClient::new(&env, &token);
     token_admin.mint(&sender, &1000);
 
-    // Create stream with cliff of 250 seconds
+    // min_claim_interval_seconds = 250 — a claim-throttle, not a vesting cliff.
     let stream_id =
         client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &250, &None);
 
-    // Before cliff, claimable is 0
-    assert_eq!(client.claimable(&stream_id, &249), 0);
-
-    // Exactly at cliff, claimable resumes linear vesting (25% of 1000 = 250)
+    // Vesting is linear from t=0 regardless of min_claim_interval_seconds.
+    assert_eq!(client.claimable(&stream_id, &249), 249);
     assert_eq!(client.claimable(&stream_id, &250), 250);
-
-    // After cliff, linear vesting continues normally
     assert_eq!(client.claimable(&stream_id, &500), 500);
 }
 
@@ -1556,6 +1566,8 @@ fn test_resume_stream_panic_on_missing_timestamp() {
         claimed_amount: 0,
         start_time: 1000,
         end_time: 2000,
+        cliff_seconds: 0,
+        vesting_type: String::from_str(&env, "linear"),
         min_claim_interval_seconds: 0,
         last_claim_time: 0,
         canceled: false,
@@ -1928,6 +1940,8 @@ fn test_stream_created_no_metadata_snapshot() {
         total_amount: 1000,
         start_time: 100,
         end_time: 200,
+        cliff_seconds: 0,
+        vesting_type: String::from_str(&env, "linear"),
         min_claim_interval_seconds: 0,
         metadata: None,
     };
@@ -3442,6 +3456,8 @@ fn test_claim_allowed_after_interval_elapses() {
     env.ledger().with_mut(|l| l.timestamp = 600);
     let claimed = client.claim(&stream_id, &recipient, &100);
     assert_eq!(claimed, 100);
+}
+
 // #695 — DAO governance scaffold
 // =============================================================================
 
@@ -3704,4 +3720,75 @@ fn test_dao_double_vote_rejected() {
     client.vote(&voter, &proposal_id, &true);
     // Second vote from the same account must panic
     client.vote(&voter, &proposal_id, &true);
+}
+
+// ---------------------------------------------------------------------------
+// Native token address getter/setter (#688)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_native_token_unset_before_initialize() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    assert_eq!(client.get_native_token(), None);
+}
+
+#[test]
+fn test_get_native_token_returns_configured_address() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let native_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.initialize(&admin, &native_token, &soroban_sdk::vec![&env]);
+    assert_eq!(client.get_native_token(), Some(native_token));
+}
+
+#[test]
+fn test_set_native_token_by_admin_updates_address() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let original_native = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let corrected_native = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.initialize(&admin, &original_native, &soroban_sdk::vec![&env]);
+    assert_eq!(client.get_native_token(), Some(original_native));
+
+    client.set_native_token(&admin, &corrected_native);
+    assert_eq!(client.get_native_token(), Some(corrected_native));
+}
+
+#[test]
+#[should_panic(expected = "unauthorized")]
+fn test_set_native_token_rejects_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    let native_token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let replacement = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.initialize(&admin, &native_token, &soroban_sdk::vec![&env]);
+    client.set_native_token(&outsider, &replacement);
 }

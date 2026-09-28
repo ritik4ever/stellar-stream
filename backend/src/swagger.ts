@@ -628,27 +628,31 @@ export const swaggerDocument = {
       get: {
         summary: "List all streams",
         description:
-          "Retrieves streams with optional filtering by status/sender/recipient/asset and optional pagination. " +
+          "Retrieves streams with optional filtering and pagination. " +
           "All filter parameters combine with AND logic: a stream must satisfy every supplied filter to appear in results. " +
-          "For example, ?asset=USDC&q=GABC returns only streams whose asset is USDC AND whose id/sender/recipient matches 'GABC'. " +
-          "When an explicit asset filter (asset or assetCode) is present, the q search does not apply to the asset code field — " +
-          "the explicit asset filter governs asset matching.",
+          "Filter combination semantics:\n" +
+          "- **q only** → substring match across id, sender, recipient, and asset code.\n" +
+          "- **asset only** → exact asset code match (case-insensitive).\n" +
+          "- **assetCode only** → multi-asset match (comma-separated, case-insensitive).\n" +
+          "- **q + asset (AND)** → asset filter pins the asset; q searches id, sender, and recipient only (not asset code).\n" +
+          "- **q + assetCode (AND)** → same as q + asset but for multi-asset.\n" +
+          "- **any combination** → every supplied filter must be satisfied simultaneously.",
         parameters: [
           {
             name: "status",
             in: "query",
             required: false,
-            description: "Filter by stream status.",
+            description: "Filter by stream status. Combines with AND logic alongside all other filters.",
             schema: {
               type: "string",
-              enum: ["scheduled", "active", "completed", "canceled"],
+              enum: ["scheduled", "active", "paused", "completed", "canceled"],
             },
           },
           {
             name: "sender",
             in: "query",
             required: false,
-            description: "Exact sender account ID match.",
+            description: "Exact sender account ID match (case-insensitive). Combines with AND logic.",
             schema: {
               type: "string",
             },
@@ -657,7 +661,7 @@ export const swaggerDocument = {
             name: "recipient",
             in: "query",
             required: false,
-            description: "Exact recipient account ID match.",
+            description: "Exact recipient account ID match (case-insensitive). Combines with AND logic.",
             schema: {
               type: "string",
             },
@@ -667,11 +671,11 @@ export const swaggerDocument = {
             in: "query",
             required: false,
             description:
-              "Exact asset code match (case-insensitive). " +
-              "Combines with AND logic alongside all other filters including q. " +
+              "Exact asset code match (case-insensitive). Combines with AND logic alongside all other filters. " +
               "When asset is set, the q parameter searches only across id, sender, and recipient — not asset code.",
             schema: {
               type: "string",
+              example: "USDC",
             },
           },
           {
@@ -680,10 +684,11 @@ export const swaggerDocument = {
             required: false,
             description:
               "Filter by one or more asset codes (comma-separated, case-insensitive). Example: ?assetCode=USDC,XLM. " +
-              "Combines with AND logic alongside all other filters including q. " +
+              "Combines with AND logic alongside all other filters. " +
               "When assetCode is set, the q parameter searches only across id, sender, and recipient — not asset code.",
             schema: {
               type: "string",
+              example: "USDC,XLM",
             },
           },
           {
@@ -693,39 +698,43 @@ export const swaggerDocument = {
             description:
               "General search term (case-insensitive substring match). " +
               "Searches across stream id, sender, recipient, and — when no explicit asset/assetCode filter is active — asset code. " +
-              "Combines with AND logic with all other filters: results must satisfy q AND every other supplied filter. " +
-              "Filter combination semantics: " +
-              "q alone → matches any stream whose id/sender/recipient/assetCode contains the term; " +
-              "asset alone → exact asset code match; " +
-              "assetCode alone → multi-asset match; " +
-              "q + asset (AND) → asset filter pins the asset, q searches id/sender/recipient only; " +
-              "q + assetCode (AND) → same as q + asset but for multi-asset; " +
-              "all filters (AND) → every supplied filter must be satisfied.",
+              "Combines with AND logic with all other filters. " +
+              "Examples: " +
+              "q alone → any stream whose id/sender/recipient/assetCode contains the term; " +
+              "q + asset → asset filter governs asset matching, q searches id/sender/recipient only; " +
+              "q + status → streams matching both the status AND the search term.",
             schema: {
               type: "string",
             },
           },
           {
-            name: "page",
+            name: "minAmount",
             in: "query",
             required: false,
-            description:
-              "Page number (>=1). Pagination is enabled when either page or limit is provided.",
+            description: "Filter streams whose totalAmount is greater than or equal to this value. Combines with AND logic.",
             schema: {
-              type: "integer",
-              minimum: 1,
+              type: "number",
+              minimum: 0,
             },
           },
           {
-            name: "limit",
+            name: "maxAmount",
             in: "query",
             required: false,
-            description:
-              "Page size (1..100). Defaults to 20 in pagination mode.",
+            description: "Filter streams whose totalAmount is less than or equal to this value. Combines with AND logic.",
             schema: {
-              type: "integer",
-              minimum: 1,
-              maximum: 100,
+              type: "number",
+              minimum: 0,
+            },
+          },
+          {
+            name: "include_archived",
+            in: "query",
+            required: false,
+            description: "Set to 'true' to include soft-deleted (archived) streams in results. Defaults to false.",
+            schema: {
+              type: "string",
+              enum: ["true", "false"],
             },
           },
           {
@@ -886,9 +895,103 @@ export const swaggerDocument = {
         },
       },
     },
+    "/api/streams/search": {
+      get: {
+        summary: "Full-text search for streams",
+        description:
+          "Searches streams using a case-insensitive substring match of `q` across stream id, " +
+          "sender, recipient, and assetCode fields.  An optional `asset` query parameter " +
+          "applies an additional exact asset-code filter (AND-composed with `q`).\n\n" +
+          "**Boundary behaviour**\n" +
+          "- Missing or empty `q` → 400 VALIDATION_ERROR\n" +
+          "- `asset` with invalid format (non-alphanumeric or >12 chars) → 400 VALIDATION_ERROR\n" +
+          "- Valid `q` that matches nothing → 200, data: [], total: 0\n" +
+          "- Valid `q` + `asset` combination → 200, intersection of both filters\n\n" +
+          "The `total` field always reflects the number of matched rows returned; " +
+          "`data` and `total` are always consistent.",
+        parameters: [
+          {
+            name: "q",
+            in: "query",
+            required: true,
+            description:
+              "Non-empty search term. Case-insensitive substring match across stream id, " +
+              "sender, recipient, and assetCode.",
+            schema: {
+              type: "string",
+              minLength: 1,
+            },
+          },
+          {
+            name: "asset",
+            in: "query",
+            required: false,
+            description:
+              "Optional exact asset-code filter (case-insensitive, 1–12 alphanumeric characters). " +
+              "When provided, only streams matching BOTH `q` AND this asset code are returned. " +
+              "Values outside the 1–12 alphanumeric character range return a 400.",
+            schema: {
+              type: "string",
+              pattern: "^[A-Za-z0-9]{1,12}$",
+              example: "USDC",
+            },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Search results with total count and echoed query context.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/Stream" },
+                    },
+                    total: {
+                      type: "number",
+                      description: "Number of streams in the result set (equals data.length).",
+                      example: 3,
+                    },
+                    query: {
+                      type: "string",
+                      description: "The search term that was applied.",
+                      example: "GABC",
+                    },
+                    asset: {
+                      type: "string",
+                      description: "The asset filter that was applied (only present when ?asset was supplied).",
+                      example: "USDC",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": {
+            description: "Missing, empty, or invalid query parameters.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+          "500": {
+            description: "Unexpected server error during search.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+        },
+      },
+    },
     "/api/streams/{id}": {
       get: {
         summary: "Get a specific stream",
+
         description: "Retrieves a stream by its unique ID.",
         parameters: [
           {
@@ -988,7 +1091,9 @@ export const swaggerDocument = {
     "/api/recipients/{accountId}/streams": {
       get: {
         summary: "Get recipient streams",
-        description: "Retrieves all streams for a specific recipient with optional filtering, search, and pagination.",
+        description:
+          "Retrieves all streams for a specific recipient with optional filtering, search, and pagination. " +
+          "All filter parameters combine with AND logic. See GET /api/streams for full q + asset combination semantics.",
         parameters: [
           {
             name: "accountId",
@@ -1004,17 +1109,17 @@ export const swaggerDocument = {
             name: "status",
             in: "query",
             required: false,
-            description: "Filter by stream status.",
+            description: "Filter by stream status. Combines with AND logic.",
             schema: {
               type: "string",
-              enum: ["scheduled", "active", "completed", "canceled"],
+              enum: ["scheduled", "active", "paused", "completed", "canceled"],
             },
           },
           {
             name: "sender",
             in: "query",
             required: false,
-            description: "Filter by sender account ID (case-insensitive).",
+            description: "Filter by sender account ID (case-insensitive). Combines with AND logic.",
             schema: {
               type: "string",
             },
@@ -1023,7 +1128,9 @@ export const swaggerDocument = {
             name: "asset",
             in: "query",
             required: false,
-            description: "Filter by asset code (case-insensitive).",
+            description:
+              "Exact asset code match (case-insensitive). Combines with AND logic. " +
+              "When asset is set, the q parameter searches only across id, sender, and recipient — not asset code.",
             schema: {
               type: "string",
             },
@@ -1032,7 +1139,9 @@ export const swaggerDocument = {
             name: "q",
             in: "query",
             required: false,
-            description: "Search term for stream ID, sender, recipient, or asset code (case-insensitive partial match).",
+            description:
+              "General search term (case-insensitive substring match). Combines with AND logic with all other filters. " +
+              "When an explicit asset/assetCode filter is active, q searches id, sender, and recipient only.",
             schema: {
               type: "string",
             },
@@ -1106,31 +1215,60 @@ export const swaggerDocument = {
     "/api/senders/{accountId}/streams": {
       get: {
         summary: "Get sender streams",
-        description: "Retrieves all streams for a specific sender with optional filtering and pagination.",
+        description:
+          "Retrieves all streams for a specific sender with optional filtering and pagination. " +
+          "All filter parameters combine with AND logic; see GET /api/streams for full q + asset combination semantics.",
         parameters: [
           {
             name: "accountId",
             in: "path",
             required: true,
-            description: "The Stellar account ID of the sender.",
+            description: "The Stellar account ID of the sender (starts with G, exactly 56 characters).",
             schema: {
               type: "string",
+              pattern: "^G[A-Z2-7]{55}$",
             },
           },
           {
             name: "status",
             in: "query",
             required: false,
-            description: "Filter by stream status.",
+            description: "Filter by stream status. Combines with AND logic.",
             schema: {
               type: "string",
-              enum: ["scheduled", "active", "completed", "canceled"],
+              enum: ["scheduled", "active", "paused", "completed", "canceled"],
             },
+          },
+          {
+            name: "recipient",
+            in: "query",
+            required: false,
+            description: "Filter by recipient account ID (case-insensitive). Combines with AND logic.",
+            schema: { type: "string" },
+          },
+          {
+            name: "asset",
+            in: "query",
+            required: false,
+            description:
+              "Exact asset code match (case-insensitive). Combines with AND logic. " +
+              "When asset is set, q searches id, sender, and recipient only — not asset code.",
+            schema: { type: "string", example: "USDC" },
+          },
+          {
+            name: "q",
+            in: "query",
+            required: false,
+            description:
+              "General search term (case-insensitive substring match). Combines with AND logic with all other filters. " +
+              "When an explicit asset filter is active, q searches id, sender, and recipient only.",
+            schema: { type: "string" },
           },
           {
             name: "page",
             in: "query",
             required: false,
+            description: "Page number (>=1). Pagination is enabled when either page or limit is provided.",
             schema: {
               type: "integer",
               minimum: 1,
@@ -1140,6 +1278,7 @@ export const swaggerDocument = {
             name: "limit",
             in: "query",
             required: false,
+            description: "Page size (1..100). Defaults to 20 in pagination mode.",
             schema: {
               type: "integer",
               minimum: 1,
@@ -1206,7 +1345,7 @@ export const swaggerDocument = {
             required: true,
             description:
               "Stellar account address of the sender. Must be a valid Ed25519 public key " +
-              "starting with 'G' and exactly 56 characters long (e.g. GABC...XYZ).",
+              "starting with 'G' and exactly 56 characters long.",
             schema: {
               type: "string",
               pattern: "^G[A-Z2-7]{55}$",
@@ -1217,54 +1356,58 @@ export const swaggerDocument = {
             name: "status",
             in: "query",
             required: false,
-            description: "Filter by stream status.",
+            description: "Filter by stream status. Combines with AND logic.",
             schema: {
               type: "string",
-              enum: ["scheduled", "active", "completed", "canceled"],
+              enum: ["scheduled", "active", "paused", "completed", "canceled"],
             },
           },
           {
             name: "recipient",
             in: "query",
             required: false,
-            description: "Filter by recipient account ID (case-insensitive).",
+            description: "Filter by recipient account ID (case-insensitive). Combines with AND logic.",
             schema: { type: "string" },
           },
           {
             name: "asset",
             in: "query",
             required: false,
-            description: "Filter by asset code (case-insensitive exact match).",
-            schema: { type: "string" },
+            description:
+              "Exact asset code match (case-insensitive). Combines with AND logic. " +
+              "When asset is set, the q parameter searches only across id, sender, and recipient — not asset code.",
+            schema: { type: "string", example: "USDC" },
           },
           {
             name: "assetCode",
             in: "query",
             required: false,
             description:
-              "Filter by one or more asset codes (comma-separated, case-insensitive). Example: ?assetCode=USDC,XLM",
-            schema: { type: "string" },
+              "Filter by one or more asset codes (comma-separated, case-insensitive). Example: ?assetCode=USDC,XLM. " +
+              "Combines with AND logic. When assetCode is set, q searches id, sender, and recipient only.",
+            schema: { type: "string", example: "USDC,XLM" },
           },
           {
             name: "q",
             in: "query",
             required: false,
             description:
-              "Search term across stream ID, sender, recipient, and asset code (case-insensitive).",
+              "General search term (case-insensitive substring match). Combines with AND logic with all other filters. " +
+              "When an explicit asset/assetCode filter is active, q searches id, sender, and recipient only.",
             schema: { type: "string" },
           },
           {
             name: "minAmount",
             in: "query",
             required: false,
-            description: "Filter streams with totalAmount >= minAmount.",
+            description: "Filter streams with totalAmount >= minAmount. Combines with AND logic.",
             schema: { type: "number", minimum: 0 },
           },
           {
             name: "maxAmount",
             in: "query",
             required: false,
-            description: "Filter streams with totalAmount <= maxAmount.",
+            description: "Filter streams with totalAmount <= maxAmount. Combines with AND logic.",
             schema: { type: "number", minimum: 0 },
           },
           {
@@ -1328,7 +1471,7 @@ export const swaggerDocument = {
             required: true,
             description:
               "Stellar account address of the recipient. Must be a valid Ed25519 public key " +
-              "starting with 'G' and exactly 56 characters long (e.g. GABC...XYZ).",
+              "starting with 'G' and exactly 56 characters long.",
             schema: {
               type: "string",
               pattern: "^G[A-Z2-7]{55}$",
@@ -1339,54 +1482,58 @@ export const swaggerDocument = {
             name: "status",
             in: "query",
             required: false,
-            description: "Filter by stream status.",
+            description: "Filter by stream status. Combines with AND logic.",
             schema: {
               type: "string",
-              enum: ["scheduled", "active", "completed", "canceled"],
+              enum: ["scheduled", "active", "paused", "completed", "canceled"],
             },
           },
           {
             name: "sender",
             in: "query",
             required: false,
-            description: "Filter by sender account ID (case-insensitive).",
+            description: "Filter by sender account ID (case-insensitive). Combines with AND logic.",
             schema: { type: "string" },
           },
           {
             name: "asset",
             in: "query",
             required: false,
-            description: "Filter by asset code (case-insensitive exact match).",
-            schema: { type: "string" },
+            description:
+              "Exact asset code match (case-insensitive). Combines with AND logic. " +
+              "When asset is set, q searches id, sender, and recipient only — not asset code.",
+            schema: { type: "string", example: "USDC" },
           },
           {
             name: "assetCode",
             in: "query",
             required: false,
             description:
-              "Filter by one or more asset codes (comma-separated, case-insensitive). Example: ?assetCode=USDC,XLM",
-            schema: { type: "string" },
+              "Filter by one or more asset codes (comma-separated, case-insensitive). Example: ?assetCode=USDC,XLM. " +
+              "Combines with AND logic. When assetCode is set, q searches id, sender, and recipient only.",
+            schema: { type: "string", example: "USDC,XLM" },
           },
           {
             name: "q",
             in: "query",
             required: false,
             description:
-              "Search term across stream ID, sender, recipient, and asset code (case-insensitive).",
+              "General search term (case-insensitive substring match). Combines with AND logic with all other filters. " +
+              "When an explicit asset/assetCode filter is active, q searches id, sender, and recipient only.",
             schema: { type: "string" },
           },
           {
             name: "minAmount",
             in: "query",
             required: false,
-            description: "Filter streams with totalAmount >= minAmount.",
+            description: "Filter streams with totalAmount >= minAmount. Combines with AND logic.",
             schema: { type: "number", minimum: 0 },
           },
           {
             name: "maxAmount",
             in: "query",
             required: false,
-            description: "Filter streams with totalAmount <= maxAmount.",
+            description: "Filter streams with totalAmount <= maxAmount. Combines with AND logic.",
             schema: { type: "number", minimum: 0 },
           },
           {

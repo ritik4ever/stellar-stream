@@ -183,7 +183,9 @@ describe('Stream Ownership Enforcement', () => {
 
   beforeAll(async () => {
     const { initDb, getDb } = await import('./services/db');
+    const { initCache } = await import('./services/cache');
     initDb();
+    initCache();
     const db = getDb();
 
     // Clean up any leftover state

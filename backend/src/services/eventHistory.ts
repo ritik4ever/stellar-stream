@@ -241,3 +241,19 @@ export function streamHasEvent(
 
   return row !== undefined;
 }
+
+/**
+ * Sum of the amounts recorded for `claimed` events on a stream.
+ * Returns 0 when the stream has no recorded claims, and rounds to 6 decimal
+ * places so callers get a stable value regardless of float drift.
+ */
+export function getClaimedTotal(streamId: string): number {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM stream_events WHERE stream_id = ? AND event_type = 'claimed'`,
+    )
+    .get(streamId) as { total: number } | undefined;
+
+  return Number((row?.total ?? 0).toFixed(6));
+}

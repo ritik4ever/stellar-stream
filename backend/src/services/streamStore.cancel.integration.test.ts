@@ -3,6 +3,7 @@ import request from "supertest";
 import jwt from "jsonwebtoken";
 import { app } from "../index";
 import { initDb, getDb } from "./db";
+import { initCache } from "./cache";
 import { getStreamHistory } from "./eventHistory";
 import { getJwtSecret } from "./auth";
 import path from "path";
@@ -27,6 +28,7 @@ describe("POST /api/streams/:id/cancel Integration Tests", () => {
     
     // Initialize database
     initDb();
+    initCache();
 
     // Create auth tokens for tests
     authToken = jwt.sign({ accountId: mockSender }, getJwtSecret(), { expiresIn: '1h' });

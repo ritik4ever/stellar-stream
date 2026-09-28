@@ -3,6 +3,7 @@
 [![English](https://img.shields.io/badge/lang-en-red.svg)](README.md)
 [![Español](https://img.shields.io/badge/lang-es-green.svg)](docs/README.es.md)
 [![Português](https://img.shields.io/badge/lang-pt--br-blue.svg)](docs/README.pt.md)
+![Coverage](https://img.shields.io/badge/coverage-80%25-brightgreen.svg)
 
 > **Translation lag notice:** Translations are community-contributed and may lag behind the English version by up to one release cycle. The English [`README.md`](README.md) is the authoritative source.
 
@@ -378,6 +379,10 @@ Database Volume: Persists across restarts.
 Build
 
 npm run build
+
+### Testing
+
+Backend unit tests cover stream lifecycle, indexer, webhook delivery, and auth middleware. Branch coverage is enforced at >= 80%; CI fails if coverage drops below this threshold.
 
 7) Deploy Contract
 Deploy the Soroban contract to Stellar testnet.
