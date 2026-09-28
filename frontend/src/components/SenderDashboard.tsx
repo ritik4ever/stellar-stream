@@ -355,7 +355,7 @@ export function SenderDashboard({
     );
   }
 
-
+  if (streams.length === 0) {
     return (
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Sender Dashboard</h2>
@@ -757,4 +757,3 @@ export function SenderDashboard({
     </div>
   );
 }
-
