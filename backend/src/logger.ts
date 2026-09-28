@@ -1,4 +1,5 @@
 import pino from "pino";
+import { trace } from "@opentelemetry/api";
 import { getCorrelationId } from "./correlationContext";
 
 const STELLAR_SECRET_REGEX = /^S[0-9A-Z]{55}$/;
@@ -49,6 +50,13 @@ const logger = pino({
       const correlationId = getCorrelationId();
       if (correlationId && !obj.correlation_id) {
         obj.correlation_id = correlationId;
+      }
+      const spanContext = trace.getActiveSpan()?.spanContext();
+      if (spanContext?.traceId && !obj.trace_id) {
+        obj.trace_id = spanContext.traceId;
+      }
+      if (spanContext?.spanId && !obj.span_id) {
+        obj.span_id = spanContext.spanId;
       }
       return redactObject(obj);
     },

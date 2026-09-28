@@ -12,6 +12,9 @@
     "lint": "eslint src"
   },
   "dependencies": {
+    "@opentelemetry/auto-instrumentations-node": "^0.80.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
+    "@opentelemetry/sdk-node": "^0.222.0",
     "@stellar/stellar-sdk": "^17.1.0",
     "axios": "^1.13.5",
     "better-sqlite3": "^13.0.3",
