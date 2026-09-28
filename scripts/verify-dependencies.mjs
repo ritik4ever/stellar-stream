@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -16,6 +16,21 @@ const results = [];
 function record(area, check, status, detail = '') {
   results.push({ area, check, status, detail });
   console.log(`${status}: ${area} ${check}${detail ? ` — ${detail}` : ''}`);
+}
+
+function isTransientMessage(message = '') {
+  return /(?:ECONNRESET|ECONNREFUSED|ENETUNREACH|EAI_AGAIN|ETIMEDOUT|network|registry|timeout|5\d\d|audit service)/i.test(message);
+}
+
+function failureStatus(message = '') {
+  return isTransientMessage(message) ? 'TRANSIENT' : 'FAIL';
+}
+
+function safeDetail(message = '') {
+  return message
+    .replace(/https?:\/\/[^\s]+/gi, '[url redacted]')
+    .replace(/(?:token|password|authorization|npm_[^=\s]*)[=:][^\s]+/gi, '[secret redacted]')
+    .slice(0, 240);
 }
 
 function readJson(path) {
@@ -45,7 +60,7 @@ function checkLock(area, directory) {
     record(area, 'manifest/lockfile', 'PASS');
     return true;
   } catch (error) {
-    record(area, 'manifest/lockfile', 'FAIL', error.message);
+    record(area, 'manifest/lockfile', 'BLOCKED', safeDetail(error.message));
     return false;
   }
 }
@@ -58,7 +73,8 @@ function runNpm(area, directory, check, args) {
     stdio: 'inherit',
   });
   const passed = result.status === 0;
-  record(area, check, passed ? 'PASS' : 'FAIL', passed ? '' : (result.error?.message ?? `exit ${result.status}`));
+  const detail = passed ? '' : safeDetail(result.error?.message ?? `exit ${result.status}`);
+  record(area, check, passed ? 'PASS' : failureStatus(detail), detail);
   return passed;
 }
 
@@ -73,22 +89,25 @@ function audit(area, directory) {
   try {
     report = JSON.parse(result.stdout);
   } catch {
-    record(area, 'high/critical audit', 'FAIL', result.error?.message ?? (result.stderr.trim() || `exit ${result.status}: no audit JSON`));
+    const detail = result.error?.message ?? (result.stderr.trim() || `exit ${result.status}: no audit JSON`);
+    record(area, 'high/critical audit', failureStatus(detail), safeDetail(detail));
     return;
   }
 
   const high = report.metadata?.vulnerabilities?.high;
   const critical = report.metadata?.vulnerabilities?.critical;
   if (report.error) {
-    record(area, 'high/critical audit', 'FAIL', report.error.summary || report.error.message || 'audit service returned an error');
+    const detail = report.error.summary || report.error.message || 'audit service returned an error';
+    record(area, 'high/critical audit', failureStatus(detail), safeDetail(detail));
   } else if (typeof high !== 'number' || typeof critical !== 'number') {
-    record(area, 'high/critical audit', 'FAIL', report.error?.summary || report.error?.message || result.stderr.trim() || 'audit returned no vulnerability totals');
+    const detail = report.error?.summary || report.error?.message || result.stderr.trim() || 'audit returned no vulnerability totals';
+    record(area, 'high/critical audit', failureStatus(detail), safeDetail(detail));
   } else if (high + critical > 0) {
     record(area, 'high/critical audit', 'FAIL', `${high} high, ${critical} critical (run npm audit in ${area} for details)`);
   } else if (result.status === 0) {
     record(area, 'high/critical audit', 'PASS', '0 high, 0 critical');
   } else {
-    record(area, 'high/critical audit', 'FAIL', `audit exited ${result.status} despite zero high/critical findings`);
+    record(area, 'high/critical audit', failureStatus(`audit exited ${result.status}`), `audit exited ${result.status} despite zero high/critical findings`);
   }
 }
 
@@ -97,7 +116,7 @@ console.log('Dependency update verification (npm ci, CI checks, and high/critica
 for (const area of ['backend', 'frontend']) {
   const directory = join(root, area);
   if (!checkLock(area, directory)) {
-    record(area, 'install/CI checks', 'SKIP', 'fix manifest or lockfile first');
+    record(area, 'install/CI checks', 'BLOCKED', 'fix manifest or lockfile first');
     try {
       readJson(join(directory, 'package.json'));
       const lock = readJson(join(directory, 'package-lock.json'));
@@ -121,11 +140,18 @@ for (const area of ['backend', 'frontend']) {
     }
     runNpm(area, directory, 'build', ['run', 'build']);
   } else {
-    record(area, 'CI checks', 'SKIP', 'clean install failed');
+    record(area, 'CI checks', 'BLOCKED', 'clean install failed; see the install result above');
   }
   audit(area, directory);
 }
 
-const failures = results.filter((result) => result.status === 'FAIL').length;
-console.log(`\nDependency verification: ${failures === 0 ? 'PASS' : 'FAIL'} (${failures} failed check${failures === 1 ? '' : 's'})`);
-process.exitCode = failures === 0 ? 0 : 1;
+const failedResults = results.filter((result) => !['PASS', 'SKIP'].includes(result.status));
+const outcome = failedResults.length === 0 ? 'PASS' : failedResults.some((result) => result.status === 'TRANSIENT') ? 'TRANSIENT' : failedResults.some((result) => result.status === 'BLOCKED') ? 'BLOCKED' : 'FAIL';
+console.log(`\nDependency verification: ${outcome} (${failedResults.length} non-passing check${failedResults.length === 1 ? '' : 's'})`);
+
+if (process.env.GITHUB_STEP_SUMMARY) {
+  const rows = results.map(({ area, check, status, detail }) => `| ${area} | ${check} | ${status} | ${detail || ''} |`).join('\n');
+  appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Dependency update verification: ${outcome}\n\n| Area | Check | Outcome | Detail |\n| --- | --- | --- | --- |\n${rows}\n`);
+}
+
+process.exitCode = outcome === 'PASS' ? 0 : 1;

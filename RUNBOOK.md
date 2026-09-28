@@ -14,6 +14,22 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 8. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
 9. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
 10. [Contract Invocation Timeout](#contract-invocation-timeout)
+11. [Dependency Update Verification](#dependency-update-verification)
+
+---
+
+### Dependency Update Verification
+
+Run `npm run verify:dependencies` after changing a dependency manifest or lockfile. The command emits a redacted, machine-readable outcome in CI and writes the detailed check table to the GitHub Actions job summary when `GITHUB_STEP_SUMMARY` is available.
+
+| Outcome | Meaning | Owner action |
+| --- | --- | --- |
+| `PASS` | Clean installs and the required typecheck, lint, tests, build, and high/critical audit checks passed. | Dependency maintainer reviews the update and merges it when the rest of CI is green. |
+| `TRANSIENT` | The registry or audit service/network was temporarily unavailable. No vulnerability is inferred. | Release/dependency maintainer reruns the workflow after service recovery; do not change versions just to work around the outage. |
+| `BLOCKED` | The manifest and lockfile are inconsistent, or installation cannot proceed from repository state. | Dependency author repairs and commits the matching manifest/lockfile, then reruns verification. Do not merge. |
+| `FAIL` | A deterministic typecheck, lint, test, build, or high/critical vulnerability check failed. | The owning subsystem fixes the reported dependency or code regression before merge. |
+
+The verifier never includes credentials or full registry URLs in its recorded details. Use the workflow summary and the owning area logs for diagnosis, and rotate any credential that is accidentally printed.
 
 ---
 
