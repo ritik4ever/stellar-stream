@@ -576,12 +576,17 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
   }
   if (query.q && query.q.length > 0) {
     const searchTerm = query.q.toLowerCase();
+    // When an explicit asset filter (asset or assetCode) is already applied,
+    // exclude the assetCode arm from the q search so that q cannot conflict
+    // with the asset constraint. All filters combine with AND logic.
+    const assetAlreadyFiltered =
+      !!query.asset || (!!query.assetCode && query.assetCode.length > 0);
     data = data.filter((stream) => {
       return (
         stream.id.toLowerCase().includes(searchTerm) ||
         stream.sender.toLowerCase().includes(searchTerm) ||
         stream.recipient.toLowerCase().includes(searchTerm) ||
-        stream.assetCode.toLowerCase().includes(searchTerm)
+        (!assetAlreadyFiltered && stream.assetCode.toLowerCase().includes(searchTerm))
       );
     });
   }
@@ -883,12 +888,17 @@ app.get(
     }
     if (query.q && query.q.length > 0) {
       const searchTerm = query.q.toLowerCase();
+      // When an explicit asset filter is already applied, exclude the assetCode
+      // arm from q so that q does not conflict with the asset constraint.
+      // All filters combine with AND logic.
+      const assetAlreadyFiltered =
+        !!query.asset || (!!query.assetCode && query.assetCode.length > 0);
       data = data.filter(
         (stream) =>
           stream.id.toLowerCase().includes(searchTerm) ||
           stream.sender.toLowerCase().includes(searchTerm) ||
           stream.recipient.toLowerCase().includes(searchTerm) ||
-          stream.assetCode.toLowerCase().includes(searchTerm),
+          (!assetAlreadyFiltered && stream.assetCode.toLowerCase().includes(searchTerm)),
       );
     }
     if (query.minAmount !== undefined) {
@@ -967,12 +977,17 @@ app.get(
     }
     if (query.q && query.q.length > 0) {
       const searchTerm = query.q.toLowerCase();
+      // When an explicit asset filter is already applied, exclude the assetCode
+      // arm from q so that q does not conflict with the asset constraint.
+      // All filters combine with AND logic.
+      const assetAlreadyFiltered =
+        !!query.asset || (!!query.assetCode && query.assetCode.length > 0);
       data = data.filter(
         (stream) =>
           stream.id.toLowerCase().includes(searchTerm) ||
           stream.sender.toLowerCase().includes(searchTerm) ||
           stream.recipient.toLowerCase().includes(searchTerm) ||
-          stream.assetCode.toLowerCase().includes(searchTerm),
+          (!assetAlreadyFiltered && stream.assetCode.toLowerCase().includes(searchTerm)),
       );
     }
     if (query.minAmount !== undefined) {
@@ -1066,12 +1081,17 @@ app.get(
     }
     if (query.q && query.q.length > 0) {
       const searchTerm = query.q.toLowerCase();
+      // When an explicit asset filter is already applied, exclude the assetCode
+      // arm from q so that q does not conflict with the asset constraint.
+      // All filters combine with AND logic.
+      const assetAlreadyFiltered =
+        !!query.asset || (!!query.assetCode && query.assetCode.length > 0);
       data = data.filter((stream) => {
         return (
           stream.id.toLowerCase().includes(searchTerm) ||
           stream.sender.toLowerCase().includes(searchTerm) ||
           stream.recipient.toLowerCase().includes(searchTerm) ||
-          stream.assetCode.toLowerCase().includes(searchTerm)
+          (!assetAlreadyFiltered && stream.assetCode.toLowerCase().includes(searchTerm))
         );
       });
     }
@@ -1147,12 +1167,16 @@ app.get(
     }
     if (query.q && query.q.length > 0) {
       const searchTerm = query.q.toLowerCase();
+      // When an explicit asset filter is already applied, exclude the assetCode
+      // arm from q so that q does not conflict with the asset constraint.
+      // All filters combine with AND logic.
+      const assetAlreadyFiltered = !!query.asset;
       data = data.filter((stream) => {
         return (
           stream.id.toLowerCase().includes(searchTerm) ||
           stream.sender.toLowerCase().includes(searchTerm) ||
           stream.recipient.toLowerCase().includes(searchTerm) ||
-          stream.assetCode.toLowerCase().includes(searchTerm)
+          (!assetAlreadyFiltered && stream.assetCode.toLowerCase().includes(searchTerm))
         );
       });
     }
