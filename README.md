@@ -410,7 +410,7 @@ SECRET_KEY="S..." npm run deploy:contract
 The script will build the contract, deploy to Stellar testnet, output the contract ID, and save it to contracts/contract_id.txt.
 
 After Deployment
-Copy the contract ID from contracts/contract_id.txt.
+Copy the contract ID from the script output (it is also saved to contracts/contract_id.txt, which is git-ignored — the file is per-deployment state, not part of the repo).
 
 Set CONTRACT_ID in your backend .env file.
 

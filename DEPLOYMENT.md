@@ -49,7 +49,7 @@ The network is selected with `STELLAR_NETWORK` (`testnet` — the default — or
    SECRET_KEY="YOUR_SECRET_KEY" ./scripts/deploy.sh                        # testnet (default)
    SECRET_KEY="YOUR_SECRET_KEY" STELLAR_NETWORK=mainnet ./scripts/deploy.sh # mainnet
    ```
-3. Note the **Contract ID** output (also saved in `contracts/contract_id.txt`). You will need this for the backend configuration.
+3. Note the **Contract ID** output (also saved in `contracts/contract_id.txt`, which is git-ignored — the file is per-deployment state, not part of the repo). You will need this for the backend configuration.
 
 The script performs its own preflight checks and exits **1 before building or deploying** when: `SECRET_KEY` is missing, `soroban-cli` is not installed, `STELLAR_NETWORK` is not a recognized network, or `RPC_URL`/`NETWORK_PASSPHRASE` point at a different network than `STELLAR_NETWORK`. A failed run therefore never leaves a half-deployed contract or overwrites `contracts/contract_id.txt` — fix the reported variable and re-run.
 
@@ -378,6 +378,55 @@ This section defines how to detect and recover from the most common deployment-c
 ### Escape hatch (explicit, temporary)
 
 If you need the API up **without chain features** while sorting out credentials, set `SOROBAN_DISABLED=true`: the server starts, all REST endpoints work, but the indexer will not start and on-chain operations are unavailable. The startup log will say so (`Soroban disabled` / `CONTRACT_ID not set, event indexer will not start`). This is a **local-development mode — never enable it in production**.
+
+### Reproducing network selection from a clean environment
+
+Testnet-vs-mainnet selection is documented behaviour, so it must be verifiable **without undocumented local state**. Two pieces of state are deliberately *not* part of the repo and must never be needed to reproduce a documented result:
+
+| Local state | Why it is not committed |
+|---|---|
+| `backend/.env` | Contains secrets; created from `backend/.env.example`. |
+| `contracts/contract_id.txt` | Written by each deploy run; a stale ID from a previous deployment must never leak into a new one. |
+
+A fresh checkout therefore reproduces network selection with only committed files:
+
+**Automated (no CLI, no network, no funded account):**
+
+```bash
+bash scripts/deploy.test.sh      # 15 cases: testnet/mainnet/alias defaults,
+                                 # endpoint+passphrase overrides, and every
+                                 # preflight failure mode (exit 1 before build)
+npm run test:deploy              # same suite via package.json
+bash scripts/compose-up.test.sh  # Compose preflight incl. network-mismatch cases
+```
+
+The suite stubs the `soroban` binary and runs every case in an empty
+environment (`env -i`) inside its own sandbox directory, so no local `.env`, no
+`contracts/contract_id.txt`, and no cached deploy output can influence the
+result — exactly what a fresh checkout sees.
+
+**Manual (fresh checkout, nothing installed):**
+
+The deploy script's preflight fires **before** it needs the Soroban CLI or an
+account, so these probes reproduce from any clone:
+
+```bash
+# 1. Missing credential is named and exits 1:
+./scripts/deploy.sh                      # → "SECRET_KEY environment variable is required"
+
+# 2. Unknown network is rejected and exits 1:
+SECRET_KEY=Saaaa... STELLAR_NETWORK=stagenet ./scripts/deploy.sh
+                                         # → "unknown STELLAR_NETWORK stagenet"
+
+# 3. Cross-network wiring is rejected and exits 1:
+SECRET_KEY=Saaaa... STELLAR_NETWORK=mainnet \
+  RPC_URL=https://soroban-testnet.stellar.org:443 ./scripts/deploy.sh
+                                         # → "RPC_URL points at a testnet endpoint"
+```
+
+Each probe exits **1 before building or deploying** — no `contracts/` output is created and `contracts/contract_id.txt` is never written by a failed run.
+
+**Checking a checkout is actually clean** (no leftover deploy state): `git status` should show no `contracts/contract_id.txt`; the file is git-ignored, so its presence means a previous local deploy ran here. Delete it before re-deploying so you cannot accidentally reuse the old ID.
 
 ---
 
