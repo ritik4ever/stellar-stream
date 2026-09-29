@@ -22,6 +22,7 @@
 #   POLL_INTERVAL            seconds between health polls          (default 5)
 #   MAX_RECOVERY_ATTEMPTS    backend restarts before rollback      (default 1)
 #   MAX_CRASH_RESTARTS       container restarts treated as a crash loop (default 3)
+#   BACKEND_PORT             backend port the container healthcheck expects (default 3001)
 #   ROLLBACK                 "down" (default) or "keep" to leave containers for debugging
 #   COMPOSE_BUILD            "1" (default) passes --build to `up`
 # ──────────────────────────────────────────────────────────────────────────────
@@ -37,6 +38,7 @@ FRONTEND_HEALTH_TIMEOUT="${FRONTEND_HEALTH_TIMEOUT:-120}"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
 MAX_RECOVERY_ATTEMPTS="${MAX_RECOVERY_ATTEMPTS:-1}"
 MAX_CRASH_RESTARTS="${MAX_CRASH_RESTARTS:-3}"
+BACKEND_PORT="${BACKEND_PORT:-3001}"
 ROLLBACK="${ROLLBACK:-down}"
 COMPOSE_BUILD="${COMPOSE_BUILD:-1}"
 
@@ -92,6 +94,122 @@ is_config_error() {
   compose logs --no-color --tail 200 "$1" 2>/dev/null | grep -Eq "$CONFIG_ERROR_PATTERN"
 }
 
+# ── Configuration preflight ───────────────────────────────────────────────────
+# Reads one value from the backend env file without sourcing it (sourcing would
+# execute arbitrary shell from the file). Handles `export KEY=VALUE`, trailing
+# `# comments`, CRLF line endings and surrounding quotes. Last definition wins.
+env_value() {
+  local key="$1" file="$2" line value=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"   # trim leading whitespace
+    [[ "$line" == "#"* ]] && continue           # comment
+    line="${line#export }"                      # allow `export KEY=VALUE`
+    [[ "$line" == "$key="* ]] || continue
+    value="${line#"$key="}"
+    value="${value%%[[:space:]]#*}"             # drop trailing ` # comment`
+    value="${value%"${value##*[![:space:]]}"}" # trim trailing whitespace
+    value="${value#"${value%%[![:space:]]*}"}" # trim leading whitespace
+    value="${value%\"}"; value="${value#\"}"    # strip double quotes
+    value="${value%\'}"; value="${value#\'}"    # strip single quotes
+  done < "$file"
+  printf '%s' "$value"
+}
+
+# Safe description of a value for logs: length only, never the value itself.
+redact_value() { printf '[%s chars, redacted]' "${#1}"; }
+
+# Fails fast (exit 2, nothing started) when backend/.env cannot produce a
+# healthy backend under this Compose file. Never prints secret values.
+validate_backend_env() {
+  local file="$1" line assignments=0 key value
+
+  # An env file with no assignments cannot satisfy the backend, so the stack
+  # would crash-loop and roll back. Catch it before anything is started.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "${line//[[:space:]]/}" || "$line" == "#"* ]] && continue
+    [[ "${line#export }" == *=* ]] && assignments=$(( assignments + 1 ))
+  done < "$file"
+  if (( assignments == 0 )); then
+    fail "backend env file has no settings (empty environment): need SOROBAN_DISABLED=true, or CONTRACT_ID and SERVER_PRIVATE_KEY"
+    log "  edit ${file#"$ROOT_DIR"/} (see backend/.env.example) — nothing was started."
+    exit 2
+  fi
+
+  # Mirrors backend validateEnv(): credentials are required unless Soroban is
+  # explicitly disabled. Only presence/format is checked — values are never logged.
+  local soroban_disabled
+  soroban_disabled="$(printf '%s' "$(env_value SOROBAN_DISABLED "$file")" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$soroban_disabled" != "true" ]]; then
+    local contract_id server_key
+    contract_id="$(env_value CONTRACT_ID "$file")"
+    [[ -n "$contract_id" ]] || contract_id="$(env_value STELLAR_CONTRACT_ID "$file")"
+    server_key="$(env_value SERVER_PRIVATE_KEY "$file")"
+    if [[ -z "$contract_id" || -z "$server_key" ]]; then
+      fail "backend Soroban configuration is incomplete: CONTRACT_ID and SERVER_PRIVATE_KEY are both required unless SOROBAN_DISABLED=true"
+      log "  set SOROBAN_DISABLED=true in ${file#"$ROOT_DIR"/} for local runs without a deployed contract."
+      log "  (credential values are never printed)"
+      exit 2
+    fi
+    if [[ ${#contract_id} -ne 56 || "$contract_id" != C* ]]; then
+      fail "CONTRACT_ID is invalid: expected a 56-character contract ID starting with C ($(redact_value "$contract_id"))"
+      log "  the placeholder in backend/.env.example is not a real contract ID — replace it or set SOROBAN_DISABLED=true."
+      exit 2
+    fi
+    if [[ ${#server_key} -ne 56 || "$server_key" != S* ]]; then
+      fail "SERVER_PRIVATE_KEY is invalid: expected a 56-character secret key starting with S ($(redact_value "$server_key"))"
+      log "  the placeholder in backend/.env.example is not a real key — replace it or set SOROBAN_DISABLED=true."
+      exit 2
+    fi
+  fi
+
+  # The healthcheck and published port in docker-compose.yml are fixed at
+  # $BACKEND_PORT; a different PORT leaves the container permanently unhealthy.
+  local port
+  port="$(env_value PORT "$file")"
+  if [[ -n "$port" ]]; then
+    if [[ ! "$port" =~ ^[0-9]+$ ]]; then
+      fail "PORT must be a number (got \"$port\")"
+      exit 2
+    fi
+    if [[ "$port" != "$BACKEND_PORT" ]]; then
+      fail "PORT=$port does not match the Compose backend port $BACKEND_PORT used by the container healthcheck and port mapping"
+      log "  remove PORT from ${file#"$ROOT_DIR"/} (default 3001) or update docker-compose.yml consistently."
+      exit 2
+    fi
+  fi
+
+  # Anything the backend would reject at startup and crash on.
+  for key in RPC_URL SOROBAN_RPC_URL WEBHOOK_DESTINATION_URL; do
+    value="$(env_value "$key" "$file")"
+    if [[ -n "$value" && ! "$value" =~ ^https?:// ]]; then
+      fail "$key must be a valid http(s) URL, e.g. https://host:port/path"
+      exit 2
+    fi
+  done
+  value="$(env_value ALLOWED_ASSETS "$file")"
+  if [[ -n "$value" && ! "$value" =~ [A-Za-z0-9] ]]; then
+    fail "ALLOWED_ASSETS is set but lists no asset codes (expected e.g. USDC,XLM)"
+    exit 2
+  fi
+
+  # A fresh SQLite database only persists when it lives in the mounted volume.
+  local db_path
+  db_path="$(env_value DB_PATH "$file")"
+  if [[ -z "$(env_value DATABASE_URL "$file")" && -n "$db_path" ]]; then
+    case "$db_path" in
+      /app/*|data/*|./data/*) : ;;
+      *)
+        log "WARNING: DB_PATH=\"$db_path\" is outside the persisted volume /app/data."
+        log "         A database created there is a fresh database on every container start."
+        log "         Use the default /app/data/streams.db to persist SQLite across restarts."
+        ;;
+    esac
+  fi
+}
+
 # Returns 0 healthy, 1 timed out, 3 crashed / crash-looping.
 wait_healthy() {
   local service="$1" timeout="$2" elapsed=0 state health restarts baseline
@@ -119,10 +237,11 @@ wait_healthy() {
 }
 
 # ── 1. Preflight ──────────────────────────────────────────────────────────────
-for n in BACKEND_HEALTH_TIMEOUT FRONTEND_HEALTH_TIMEOUT POLL_INTERVAL MAX_RECOVERY_ATTEMPTS MAX_CRASH_RESTARTS; do
+for n in BACKEND_PORT BACKEND_HEALTH_TIMEOUT FRONTEND_HEALTH_TIMEOUT POLL_INTERVAL MAX_RECOVERY_ATTEMPTS MAX_CRASH_RESTARTS; do
   if [[ ! "${!n}" =~ ^[0-9]+$ ]]; then fail "$n must be a non-negative integer"; exit 2; fi
 done
 if (( POLL_INTERVAL < 1 )); then fail "POLL_INTERVAL must be >= 1"; exit 2; fi
+if (( BACKEND_PORT < 1 || BACKEND_PORT > 65535 )); then fail "BACKEND_PORT must be between 1 and 65535"; exit 2; fi
 if ! "$DOCKER" compose version >/dev/null 2>&1; then
   fail "docker compose is not available (need Docker Compose v2)"
   exit 2
@@ -133,6 +252,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
   log "For local runs without a deployed contract, set SOROBAN_DISABLED=true in it."
   exit 2
 fi
+validate_backend_env "$ENV_FILE"
 if ! compose config -q >/dev/null 2>&1; then
   fail "docker-compose.yml is invalid:"
   compose config -q 2>&1 | sed 's/^/  /' >&2

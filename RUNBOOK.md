@@ -655,13 +655,29 @@ npm run compose:up        # or: bash scripts/compose-up.sh
 
 | Phase | What happens | On failure |
 |-------|--------------|------------|
-| Preflight | Checks `docker compose`, `backend/.env`, `docker compose config` | Exit `2`. Nothing is started |
+| Preflight | Checks `docker compose`, `backend/.env`, the backend configuration (see below) and `docker compose config` | Exit `2`. Nothing is started |
 | Backend | `up -d --build redis backend`, then polls container health every `POLL_INTERVAL`s for up to `BACKEND_HEALTH_TIMEOUT`s | Prints `compose ps`, the last healthcheck probes and the last 40 log lines |
 | Recovery | Restarts the backend at most `MAX_RECOVERY_ATTEMPTS` times (default `1`). Config errors are **not** retried. `MAX_CRASH_RESTARTS` (default `3`) container restarts count as a crash loop | Rollback |
 | Frontend | Starts only after the backend is healthy. Waits up to `FRONTEND_HEALTH_TIMEOUT`s | Rollback |
 | Rollback | `docker compose down --remove-orphans`. The `backend-data` volume (SQLite) is **kept** | Exit `1`, `RESULT: FAIL` |
 
 It ends with a single `RESULT: PASS` or `RESULT: FAIL` line. Set `ROLLBACK=keep` to leave the containers running so you can inspect them.
+
+#### Configuration preflight
+
+Before starting any container, the script reads `backend/.env` (without sourcing it) and rejects settings that would leave the backend crash-looping or permanently unhealthy. Every check fails with exit `2` and a message that names the variable and the rule — **credential values are never printed** (only the variable name and, for format errors, `[<n> chars, redacted]`).
+
+| Check | Why it matters |
+|-------|----------------|
+| Env file has at least one setting | An empty environment can never satisfy `validateEnv()`, so the stack would start, crash-loop and roll back |
+| `CONTRACT_ID` + `SERVER_PRIVATE_KEY` present, each exactly 56 characters starting with `C` / `S` | Required by the backend unless `SOROBAN_DISABLED=true`; the `.env.example` placeholders are deliberately invalid |
+| `PORT` (when set) matches the Compose backend port (`3001`) | The container healthcheck and published port in `docker-compose.yml` are fixed, so any other `PORT` makes the backend stay `unhealthy` and the frontend never starts |
+| `RPC_URL`, `SOROBAN_RPC_URL`, `WEBHOOK_DESTINATION_URL` (when set) are `http(s)://` URLs | The backend rejects malformed URLs at startup |
+| `ALLOWED_ASSETS` (when set) lists at least one code | The backend rejects an empty allowlist at startup |
+
+A `DB_PATH` outside the persisted `/app/data` volume is a **warning**, not a failure: the stack still starts, but the SQLite file is recreated on every container start (a fresh database each time). Use the default `/app/data/streams.db` to persist data across restarts.
+
+Override the expected backend port for a customised compose file with `BACKEND_PORT=<port>`.
 
 #### Manual detection
 
@@ -676,9 +692,13 @@ docker compose logs --tail 50 backend
 | Log line | Fix |
 |----------|-----|
 | `env file .../backend/.env not found` | `cp backend/.env.example backend/.env` |
+| `has no settings (empty environment)` | Add `SOROBAN_DISABLED=true` for local runs, or fill in `CONTRACT_ID` and `SERVER_PRIVATE_KEY` |
 | `Soroban configuration incomplete` | Set a valid `CONTRACT_ID` and `SERVER_PRIVATE_KEY`, or `SOROBAN_DISABLED=true` for local runs |
-| `must be exactly 56 characters` / `must start with` | The placeholder keys from `.env.example` are not valid. Replace them or set `SOROBAN_DISABLED=true` |
+| `CONTRACT_ID is invalid` / `SERVER_PRIVATE_KEY is invalid` | The placeholder keys from `.env.example` are not valid. Replace them or set `SOROBAN_DISABLED=true` |
+| `PORT=... does not match the Compose backend port` | Remove `PORT` from `backend/.env` (default `3001`) or update `docker-compose.yml` consistently |
 | `EADDRINUSE` | Another process holds port 3001: `lsof -i :3001` |
+
+The preflight rows above are reported by `npm run compose:up` before anything is started; the `EADDRINUSE` row is only visible after start (or when running `docker compose up` directly).
 
 #### Rollback
 

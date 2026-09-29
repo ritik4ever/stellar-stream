@@ -91,6 +91,8 @@ and this project currently tracks history by milestone date.
 ### Added
 
 - Initial changelog scaffold for back-filled release history.
+- Docker Compose startup now runs a configuration preflight against `backend/.env` before starting any container. An empty environment, missing or invalid Soroban credentials, malformed URLs, an empty asset allowlist, or a `PORT` that does not match the Compose healthcheck port all fail with exit `2`, a useful non-sensitive message, and no partial rollout. See [RUNBOOK.md](RUNBOOK.md#docker-compose-startup-failure).
+- A `DB_PATH` outside the persisted `/app/data` volume now logs a startup warning that the SQLite database will be recreated on every container start.
 
 ## [2026-04-27]
 

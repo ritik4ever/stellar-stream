@@ -224,6 +224,10 @@ Backend restart policy: on-failure:5 (bounded; stops after 5 crash restarts)
 
 Guarded startup: `npm run compose:up` waits for backend then frontend health, retries the backend once, and rolls back with `docker compose down` (volumes kept) if they never become healthy. See [RUNBOOK.md](RUNBOOK.md#docker-compose-startup-failure).
 
+Configuration preflight: before starting anything, `compose:up` validates `backend/.env` and exits `2` (no partial rollout) when the settings cannot produce a healthy backend — an empty environment, missing/invalid `CONTRACT_ID` or `SERVER_PRIVATE_KEY` (unless `SOROBAN_DISABLED=true`), malformed URLs, an empty `ALLOWED_ASSETS`, or a `PORT` that does not match the Compose healthcheck port (`3001`). Errors name the variable and rule and never print credential values.
+
+SQLite persistence: inside the Compose stack the database lives at `/app/data/streams.db` in the named `backend-data` volume. On a fresh volume the file is created and migrated automatically; keep `DB_PATH` inside `/app/data` so data survives container recreation.
+
 GET /api/streams
 Purpose: List streams sorted by newest first, with optional filtering and pagination
 

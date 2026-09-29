@@ -60,13 +60,23 @@ STUB
 printf '#!/usr/bin/env bash\nexit 0\n' >"$WORK/bin/sleep"
 chmod +x "$WORK/bin/docker" "$WORK/bin/sleep"
 
+# A minimal backend env that passes the configuration preflight: local mode
+# needs no Stellar credentials.
+write_valid_env() {
+  cat >"$1" <<'EOF'
+SOROBAN_DISABLED=true
+PORT=3001
+ALLOWED_ASSETS=USDC,XLM
+EOF
+}
+
 # run_case <name> <scenario> <expected exit> [VAR=value ...]
 run_case() {
   local name="$1" scenario="$2" expected="$3"
   shift 3
   export STUB_DIR="$WORK/$name"
   mkdir -p "$STUB_DIR"
-  touch "$STUB_DIR/env"
+  write_valid_env "$STUB_DIR/env"
   env PATH="$WORK/bin:$PATH" STUB_SCENARIO="$scenario" \
     BACKEND_ENV_FILE="$STUB_DIR/env" \
     BACKEND_HEALTH_TIMEOUT=10 FRONTEND_HEALTH_TIMEOUT=10 POLL_INTERVAL=5 \
@@ -156,6 +166,73 @@ name="ROLLBACK=keep leaves containers running"
 if run_case keep unhealthy 1 ROLLBACK=keep &&
    check "$name" "down not called" test ! -f "$CASE_DIR/down" &&
    check "$name" "manual rollback printed" grep -q "Roll back manually" "$CASE_DIR/out"; then
+  pass_case "$name"
+fi
+
+# ── configuration preflight cases ─────────────────────────────────────────────
+# Every case below must stop with exit 2 and never call `compose up`, so no
+# partial rollout happens for an unusable environment.
+
+name="empty backend/.env fails preflight without starting anything"
+cat >"$WORK/empty.env" <<'EOF'
+# no settings here yet
+EOF
+if run_case empty_env healthy 2 BACKEND_ENV_FILE="$WORK/empty.env" &&
+   check "$name" "empty environment reported" grep -q "empty environment" "$CASE_DIR/out" &&
+   check "$name" "compose up not called" bash -c "! grep -q ' up ' '$CASE_DIR/calls'"; then
+  pass_case "$name"
+fi
+
+name="missing Soroban credentials fail preflight without starting anything"
+cat >"$WORK/no-soroban.env" <<'EOF'
+ALLOWED_ASSETS=USDC,XLM
+PORT=3001
+EOF
+if run_case no_soroban healthy 2 BACKEND_ENV_FILE="$WORK/no-soroban.env" &&
+   check "$name" "incomplete config reported" grep -q "Soroban configuration is incomplete" "$CASE_DIR/out" &&
+   check "$name" "hint to disable Soroban" grep -q "SOROBAN_DISABLED=true" "$CASE_DIR/out" &&
+   check "$name" "compose up not called" bash -c "! grep -q ' up ' '$CASE_DIR/calls'"; then
+  pass_case "$name"
+fi
+
+name="invalid credentials fail without leaking their values"
+cat >"$WORK/bad-keys.env" <<'EOF'
+CONTRACT_ID=SECRETPLACEHOLDERCONTRACTVALUE
+SERVER_PRIVATE_KEY=SECRETPLACEHOLDERKEYVALUE
+EOF
+if run_case bad_keys healthy 2 BACKEND_ENV_FILE="$WORK/bad-keys.env" &&
+   check "$name" "invalid CONTRACT_ID reported" grep -q "CONTRACT_ID is invalid" "$CASE_DIR/out" &&
+   check "$name" "contract value redacted" bash -c "! grep -q 'SECRETPLACEHOLDERCONTRACTVALUE' '$CASE_DIR/out'" &&
+   check "$name" "secret value redacted" bash -c "! grep -q 'SECRETPLACEHOLDERKEYVALUE' '$CASE_DIR/out'" &&
+   check "$name" "compose up not called" bash -c "! grep -q ' up ' '$CASE_DIR/calls'"; then
+  pass_case "$name"
+fi
+
+name="PORT mismatch with the Compose healthcheck port fails preflight"
+cat >"$WORK/bad-port.env" <<'EOF'
+SOROBAN_DISABLED=true
+PORT=5000
+EOF
+if run_case bad_port healthy 2 BACKEND_ENV_FILE="$WORK/bad-port.env" &&
+   check "$name" "mismatch reported" grep -q "does not match the Compose backend port" "$CASE_DIR/out" &&
+   check "$name" "compose up not called" bash -c "! grep -q ' up ' '$CASE_DIR/calls'"; then
+  pass_case "$name"
+fi
+
+name="SOROBAN_DISABLED=true passes preflight without credentials"
+if run_case local_mode healthy 0 &&
+   check "$name" "stack reached healthy" grep -q "RESULT: PASS" "$CASE_DIR/out"; then
+  pass_case "$name"
+fi
+
+name="DB_PATH outside the persisted volume warns but still starts"
+cat >"$WORK/db-outside.env" <<'EOF'
+SOROBAN_DISABLED=true
+DB_PATH=backend/data/streams.db
+EOF
+if run_case db_outside healthy 0 BACKEND_ENV_FILE="$WORK/db-outside.env" &&
+   check "$name" "persistence warning printed" grep -q "outside the persisted volume" "$CASE_DIR/out" &&
+   check "$name" "stack still started" grep -q "RESULT: PASS" "$CASE_DIR/out"; then
   pass_case "$name"
 fi
 
