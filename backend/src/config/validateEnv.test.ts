@@ -146,8 +146,8 @@ describe('validateEnv', () => {
       );
     });
 
-    it('should exit with code 1 when RPC_URL is invalid', () => {
-      const badUrl = 'not-a-valid-url';
+    it('should exit with code 1 when RPC_URL is invalid without logging credentials', () => {
+      const badUrl = 'https://rpc.example:bad/path?api_key=rpc-secret-token';
       process.env = {
         CONTRACT_ID: 'C' + 'A'.repeat(55),
         SERVER_PRIVATE_KEY: 'S' + 'A'.repeat(55),
@@ -159,11 +159,13 @@ describe('validateEnv', () => {
       } catch (e) {}
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      // Implementation logs: { rpcUrl: badUrl }, "RPC_URL validation failed"
       expect(loggerErrorSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ rpcUrl: badUrl }),
+        expect.objectContaining({
+          rpcUrl: '[REDACTED_INVALID_URL]',
+        }),
         'RPC_URL validation failed',
       );
+      assertNoLoggerOutputContains('rpc-secret-token');
     });
 
     it('should provide helpful error message listing required keys', () => {
@@ -709,9 +711,10 @@ describe('validateEnv', () => {
 
     it('should reject ADMIN_API_KEY with less than 32 characters in production', () => {
       process.env = {
-        SOROBAN_DISABLED: 'true',
         ADMIN_API_KEY: 'short-key',
         NODE_ENV: 'production',
+        CONTRACT_ID: 'C' + 'A'.repeat(55),
+        SERVER_PRIVATE_KEY: 'S' + 'A'.repeat(55),
       };
 
       try {
@@ -761,8 +764,9 @@ describe('validateEnv', () => {
 
     it('should warn when ADMIN_API_KEY not set in production', () => {
       process.env = {
-        SOROBAN_DISABLED: 'true',
         NODE_ENV: 'production',
+        CONTRACT_ID: 'C' + 'A'.repeat(55),
+        SERVER_PRIVATE_KEY: 'S' + 'A'.repeat(55),
       };
 
       validateEnv();
@@ -869,10 +873,18 @@ describe('validateEnv', () => {
     });
 
     it('maps mainnet aliases (public, main) to the mainnet profile', () => {
-      process.env = { SOROBAN_DISABLED: 'true', STELLAR_NETWORK: 'Public' };
+      process.env = {
+        STELLAR_NETWORK: 'Public',
+        CONTRACT_ID: 'C' + 'A'.repeat(55),
+        SERVER_PRIVATE_KEY: 'S' + 'A'.repeat(55),
+      };
       expect(validateEnv().stellarNetwork).toBe('mainnet');
 
-      process.env = { SOROBAN_DISABLED: 'true', STELLAR_NETWORK: 'MAIN' };
+      process.env = {
+        STELLAR_NETWORK: 'MAIN',
+        CONTRACT_ID: 'C' + 'A'.repeat(55),
+        SERVER_PRIVATE_KEY: 'S' + 'A'.repeat(55),
+      };
       expect(validateEnv().stellarNetwork).toBe('mainnet');
       expect(exitSpy).not.toHaveBeenCalled();
     });
@@ -892,9 +904,10 @@ describe('validateEnv', () => {
 
     it('exits when mainnet is selected but RPC_URL points at testnet', () => {
       process.env = {
-        SOROBAN_DISABLED: 'true',
         STELLAR_NETWORK: 'mainnet',
         RPC_URL: 'https://soroban-testnet.stellar.org:443',
+        CONTRACT_ID: 'C' + 'A'.repeat(55),
+        SERVER_PRIVATE_KEY: 'S' + 'A'.repeat(55),
       };
 
       try {
@@ -915,9 +928,10 @@ describe('validateEnv', () => {
 
     it('exits when testnet is selected but RPC_URL points at mainnet', () => {
       process.env = {
-        SOROBAN_DISABLED: 'true',
         STELLAR_NETWORK: 'testnet',
         RPC_URL: 'https://soroban-rpc.stellar.org:443',
+        CONTRACT_ID: 'C' + 'A'.repeat(55),
+        SERVER_PRIVATE_KEY: 'S' + 'A'.repeat(55),
       };
 
       try {
@@ -938,10 +952,11 @@ describe('validateEnv', () => {
 
     it('exits when NETWORK_PASSPHRASE contradicts STELLAR_NETWORK=mainnet', () => {
       process.env = {
-        SOROBAN_DISABLED: 'true',
         STELLAR_NETWORK: 'mainnet',
         RPC_URL: 'https://rpc.provider.example:443',
         NETWORK_PASSPHRASE: 'Test SDF Network ; September 2015',
+        CONTRACT_ID: 'C' + 'A'.repeat(55),
+        SERVER_PRIVATE_KEY: 'S' + 'A'.repeat(55),
       };
 
       try {
@@ -973,18 +988,60 @@ describe('validateEnv', () => {
       expect(exitSpy).not.toHaveBeenCalled();
     });
 
-    it('warns but starts when mainnet is selected with no RPC_URL (default points at testnet)', () => {
+    it('uses the mainnet RPC and passphrase defaults when mainnet is selected without overrides', () => {
       process.env = {
-        SOROBAN_DISABLED: 'true',
         STELLAR_NETWORK: 'mainnet',
+        CONTRACT_ID: 'C' + 'A'.repeat(55),
+        SERVER_PRIVATE_KEY: 'S' + 'A'.repeat(55),
       };
 
       const config = validateEnv();
 
       expect(config.stellarNetwork).toBe('mainnet');
+      expect(config.rpcUrl).toBe('https://soroban-rpc.stellar.org:443');
+      expect(config.networkPassphrase).toBe(
+        'Public Global Stellar Network ; September 2015',
+      );
+      expect(process.env.RPC_URL).toBe('https://soroban-rpc.stellar.org:443');
       expect(exitSpy).not.toHaveBeenCalled();
-      expect(loggerWarnSpy).toHaveBeenCalledWith(
+      expect(loggerWarnSpy).not.toHaveBeenCalledWith(
         expect.stringContaining('no RPC_URL set'),
+      );
+    });
+
+    it('rejects SOROBAN_DISABLED=true on mainnet without logging credentials', () => {
+      const privateKey = 'S' + 'B'.repeat(55);
+      process.env = {
+        SOROBAN_DISABLED: 'true',
+        STELLAR_NETWORK: 'mainnet',
+        SERVER_PRIVATE_KEY: privateKey,
+      };
+
+      try {
+        validateEnv();
+      } catch (e) {}
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('only allowed for non-production testnet runs'),
+      );
+      assertNoLoggerOutputContains(privateKey);
+    });
+
+    it('rejects SOROBAN_DISABLED=true in production even on testnet', () => {
+      process.env = {
+        NODE_ENV: 'production',
+        SOROBAN_DISABLED: 'true',
+        STELLAR_NETWORK: 'testnet',
+      };
+
+      try {
+        validateEnv();
+      } catch (e) {}
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('only allowed for non-production testnet runs'),
       );
     });
 

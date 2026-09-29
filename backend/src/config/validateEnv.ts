@@ -101,7 +101,6 @@ function resolveStellarNetwork(): { name: StellarNetworkName; source: string } {
  *  - the well-known passphrase of the opposite network is configured
  *
  * Warnings (startup continues):
- *  - mainnet selected with no RPC_URL (defaults to the testnet endpoint)
  *  - mainnet selected but ADMIN_API_KEY / JWT_SECRET are unset
  *
  * Custom passphrases (local standalone nodes, futurenet) are allowed: only the
@@ -113,14 +112,21 @@ function validateNetworkConsistency(network: StellarNetworkName): void {
     network === 'mainnet' ? 'testnet' : 'mainnet';
   const oppositeProfile = NETWORK_PROFILES[opposite];
 
-  const rpcUrl = process.env.RPC_URL || '';
+  const rpcUrl = process.env.SOROBAN_RPC_URL || process.env.RPC_URL || '';
   const explicitRpc = rpcUrl.length > 0;
 
-  // Detect which public network a configured RPC endpoint belongs to.
+  // Classify the host only; provider tokens in paths or query parameters may
+  // themselves contain words such as "mainnet" or "testnet".
+  let rpcHostname = '';
+  try {
+    rpcHostname = new URL(rpcUrl).hostname;
+  } catch {
+    // URL format validation below reports malformed values without echoing them.
+  }
   const rpcTargetsMainnet =
     explicitRpc &&
-    (/mainnet/i.test(rpcUrl) || rpcUrl === NETWORK_PROFILES.mainnet.rpcUrl);
-  const rpcTargetsTestnet = explicitRpc && /testnet/i.test(rpcUrl);
+    (/mainnet/i.test(rpcHostname) || rpcUrl === NETWORK_PROFILES.mainnet.rpcUrl);
+  const rpcTargetsTestnet = explicitRpc && /testnet/i.test(rpcHostname);
 
   if (network === 'mainnet' && rpcTargetsTestnet) {
     logger.error(
@@ -146,13 +152,6 @@ function validateNetworkConsistency(network: StellarNetworkName): void {
     process.exit(1);
     throw new Error('Environment validation failed');
   }
-  if (network === 'mainnet' && !explicitRpc) {
-    logger.warn(
-      `STELLAR_NETWORK=mainnet with no RPC_URL set — the default RPC is the public testnet endpoint ` +
-        `(${NETWORK_PROFILES.testnet.rpcUrl}). Set RPC_URL=${NETWORK_PROFILES.mainnet.rpcUrl} or a mainnet RPC provider.`,
-    );
-  }
-
   const passphrase = process.env.NETWORK_PASSPHRASE;
   if (passphrase === oppositeProfile.networkPassphrase) {
     logger.error('network configuration mismatch');
@@ -347,6 +346,16 @@ export function validateEnv(): ValidatedConfig {
   const network = resolveStellarNetwork();
   validateNetworkConsistency(network.name);
 
+  // Keep legacy consumers that read process.env directly on the same profile
+  // as the validated config. In particular, the previous static defaults sent
+  // mainnet deployments to testnet when RPC_URL was omitted.
+  const configuredRpcUrl = process.env.SOROBAN_RPC_URL || process.env.RPC_URL;
+  process.env.RPC_URL =
+    configuredRpcUrl || NETWORK_PROFILES[network.name].rpcUrl;
+  process.env.SOROBAN_RPC_URL = process.env.RPC_URL;
+  process.env.NETWORK_PASSPHRASE ||=
+    NETWORK_PROFILES[network.name].networkPassphrase;
+
   // Support backwards compatibility: map old variables to new ones if new ones are not set
   if (!process.env.STELLAR_CONTRACT_ID && process.env.CONTRACT_ID) {
     process.env.STELLAR_CONTRACT_ID = process.env.CONTRACT_ID;
@@ -381,6 +390,14 @@ export function validateEnv(): ValidatedConfig {
   const isProduction = process.env.NODE_ENV === 'production';
   const sorobanDisabled =
     process.env.SOROBAN_DISABLED?.toLowerCase() === 'true';
+
+  if (sorobanDisabled && (isProduction || network.name === 'mainnet')) {
+    logger.error(
+      'SOROBAN_DISABLED=true is only allowed for non-production testnet runs; configure CONTRACT_ID and SERVER_PRIVATE_KEY for production or mainnet.',
+    );
+    process.exit(1);
+    throw new Error('Environment validation failed');
+  }
 
   if (!sorobanDisabled) {
     // CONTRACT_ID and SERVER_PRIVATE_KEY are required for Soroban operations
@@ -444,7 +461,10 @@ export function validateEnv(): ValidatedConfig {
     // Validate RPC_URL format
     const rpcValidation = urlSchema.safeParse(env.RPC_URL);
     if (!rpcValidation.success) {
-      logger.error({ rpcUrl: env.RPC_URL }, 'RPC_URL validation failed');
+      logger.error(
+        { rpcUrl: redactUrlForConfigLog(env.RPC_URL) },
+        'RPC_URL validation failed',
+      );
       rpcValidation.error.issues.forEach((issue: z.ZodIssue) => {
         logger.error({ issue: issue.message }, 'RPC_URL validation issue');
       });
@@ -611,11 +631,11 @@ export function validateEnv(): ValidatedConfig {
     rpcUrl:
       process.env.SOROBAN_RPC_URL ||
       env.RPC_URL ||
-      'https://soroban-testnet.stellar.org:443',
+      NETWORK_PROFILES[network.name].rpcUrl,
     networkPassphrase:
       process.env.NETWORK_PASSPHRASE ||
       env.NETWORK_PASSPHRASE ||
-      'Test SDF Network ; September 2015',
+      NETWORK_PROFILES[network.name].networkPassphrase,
     allowedAssets,
     dbPath: env.DB_PATH || 'backend/data/streams.db',
     webhookDestinationUrl: env.WEBHOOK_DESTINATION_URL || null,
