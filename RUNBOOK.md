@@ -15,6 +15,7 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 9. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
 10. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
 11. [Contract Invocation Timeout](#contract-invocation-timeout)
+12. [Contract CI Outcome Signal](#contract-ci-outcome-signal)
 
 ---
 
@@ -70,10 +71,10 @@ To verify the rotation works without undocumented local state:
 
 **Steps:**
 1. Generate a new Stellar keypair:
-   ```bash
+   ``bash
    # Using Stellar CLI
    stellar keys generate server-signing-new
-   # Or via Node.js:
+   # or via Node.js:
    node -e "const {Keypair} = require('@stellar/stellar-sdk'); const kp = Keypair.random(); console.log('Secret:', kp.secret()); console.log('Public:', kp.publicKey());"
    ```
 2. Fund the new public key on-chain with XLM for transaction fees (testnet: friendbot).
@@ -105,9 +106,9 @@ Both `JWT_SECRET` and `SERVER_SIGNING_KEY` can be rotated simultaneously by upda
 **Steps:**
 1. Identify the ledger sequence number you want to re-index from.
 2. Set the `INDEXER_START_LEDGER` environment variable:
-   ```bash
+   ``bash
    # Example: Re-index from ledger 1234567
-   export INDEXER_START_LEDGER=1234567
+   export INDEXER_START_LEGGER=1234567
    ```
 3. Restart the backend service.
 
@@ -128,8 +129,8 @@ Both `JWT_SECRET` and `SERVER_SIGNING_KEY` can be rotated simultaneously by upda
    curl -H "Authorization: Bearer <ADMIN_TOKEN>" http://localhost:3001/api/webhooks/dead-letters
    ```
 2. Re-queue a specific webhook using its ID:
-   ```bash
-   curl -X POST -H "Authorization: Bearer <ADMIN_TOKEN>" http://localhost:3001/api/webhooks/dead-letters/<ID>/requeue
+   ``bash
+   curl  -X POST -H "Authorization: Bearer <ADMIN_TOKEN>" http://localhost:3001/api/webhooks/dead-letters/<ID>/requeue
    ```
 
 **Expected Output:**
@@ -177,7 +178,7 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
 **Diagnosis:**
 1. Read indexer metrics (add configured metrics authentication if enabled):
    ```bash
-   curl -s http://localhost:3001/metrics | grep -E '^(indexer_latest_ledger|last_indexed_ledger|indexer_ledger_lag|indexer_errors_total|indexer_circuit_state)'
+   curl -s http://localhost:3001/metrics | grep -E '{^(indexer_latest_ledger|last_indexed_ledger|indexer_ledger_lag|indexer_errors_total|indexer_circuit_state)'
    ```
 2. Compare the reported head with a direct `getLatestLedger` call to the configured RPC endpoint. If the direct call succeeds and the RPC-head gauge advances, RPC is reachable; if the direct call fails or times out, treat this as an RPC/provider connectivity incident.
    ```bash
@@ -192,7 +193,7 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
    journalctl -u stellar-stream-backend --since "10 minutes ago" | grep -i indexer
    ```
    Or if running via PM2:
-   ```bash
+   ``bash
    pm2 logs stellar-stream-backend --lines 200 | grep -i indexer
    ```
 
@@ -232,7 +233,7 @@ an explicit owner action instead of raw counters.
 1. Read the signal. It reports ledgers, counts and enumerated state only — never the
    RPC URL, contract ID, credentials, or a raw provider message, so it is safe to paste
    into an incident channel:
-   ```bash
+   ``bash
    curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
      http://localhost:3001/api/indexer/monitoring | jq
    ```
@@ -245,199 +246,142 @@ an explicit owner action instead of raw counters.
 1. `blocked` with `state.circuitState` = `"OPEN"` — the indexer exhausted its retry
    budget. Follow [Indexer Falls Behind](#indexer-falls-behind) remediation steps 1–2:
    verify RPC availability and provider rate-limit status, restore network access or
-   reduce competing RPC traffic, and let the scheduled poll/half-open probe recover. Do
-   not restart the service in a loop.
-2. `blocked` with `state.rpcConfigured` = `false` and `state.ledgerLag > 0` — the service
-   is running without a Stellar RPC URL or contract ID. Set them and restart once.
-3. `transient_delay` — take no action while `consecutiveFailures` stays below
-   `failureThreshold`. If the count reaches the threshold the outcome moves to `blocked`;
-   see step 1. The `state.lastFailureKind` field separates `rate_limited` from
-   `disconnected` without exposing the provider message.
-4. `success` with a non-zero `state.ledgerLag` — expected between polls while the chain
-   advances; lag alone does not raise the outcome. If lag keeps growing while
-   `indexer_outcome` stays `0`, follow [Indexer Falls Behind](#indexer-falls-behind)
-   remediation step 3.
+   reduce competing RPC traffic, and let the scheduled poll/probe recover.
 
 ---
 
 ### Webhook Dead-Letter Spike
 **Symptoms:**
-- Alert: `webhook_dead_letter_count` exceeds threshold (default > 50).
-- Recipients report not receiving stream event notifications.
-- Backend logs contain repeated `webhook delivery failed` entries.
+- A growing number of records in `webhook_dead_letters`.
+- Customers report missing or delayed webhook notifications.
 
 **Diagnosis:**
-1. Count dead-letter records:
-   ```bash
+1. Check the dead-letter count:
+   ``bash
    sqlite3 backend/data/streams.db "SELECT COUNT(*) FROM webhook_dead_letters;"
    ```
-2. List recent dead-letter entries with failure reasons:
+2. Inspect recent failures:
    ```bash
-   sqlite3 backend/data/streams.db \
-     "SELECT id, stream_id, event_type, failure_reason, created_at \
-      FROM webhook_dead_letters ORDER BY created_at DESC LIMIT 20;"
-   ```
-3. Check the webhook worker log for connectivity errors:
-   ```bash
-   journalctl -u stellar-stream-backend --since "30 minutes ago" | grep -i "webhook\|dead.letter\|retry"
+   sqlite3 backend/data/streams.db "SELECT id, url, attempts, last_error FROM webhook_dead_letters ORDER BY id DESC LIMIT 10;"
    ```
 
 **Remediation:**
-1. **Fix the receiver endpoint:** If the downstream webhook receiver is down or returning errors, contact the receiver's operator. Verify the webhook endpoint is reachable:
-   ```bash
-   curl -s -o /dev/null -w "%{http_code}" --max-time 5 <WEBHOOK_URL>
-   ```
-2. **Re-queue dead-letter webhooks** after the receiver is healthy:
-   ```bash
-   curl -X POST -H "Authorization: Bearer <ADMIN_TOKEN>" \
-     http://localhost:3001/api/webhooks/dead-letters/requeue-all
-   ```
-   Or requeue individually via the admin API (see [Requeue Dead-Letter Webhooks](#requeue-dead-letter-webhooks)).
-3. **Increase retry attempts** if the receiver is slow but healthy: set `WEBHOOK_MAX_RETRIES` in the backend `.env` (default: 3, max recommended: 6).
-4. **Inspect dead-letter payloads** to rule out malformed data:
-   ```bash
-   sqlite3 backend/data/streams.db \
-     "SELECT id, payload FROM webhook_dead_letters ORDER BY created_at DESC LIMIT 5;" | \
-     jq '.'
-   ```
+1. Re-queue the affected records once the consumer endpoint is fixed (see [Requeue Dead-Letter Webhooks](#requeue-dead-letter-webhooks)).
+2. If failures continue, check the consumer's HTTP status codes and response times.
 
 ---
 
 ### Webhook Delivery Outcome Signal
+
 **Symptoms:**
 - Alert on the `webhook_outcome` Prometheus gauge changing from `0`.
-- `GET /api/webhooks/monitoring` returns `outcome: "blocked"`.
-- Recipients report missing stream event notifications.
+- `GET /api/webhooks/monitoring` returns `outcome: "transient_delay"` or `outcome: "blocked"`.
+
+The signal collapses webhook delivery health into three outcomes so the two cases
+(`transient HTTP failure` and `dead-letter backlog`) map to an explicit owner action
+instead of raw counters.
 
 **Outcome meanings:**
 
 | Outcome | Gauge value | Meaning | Owner action |
 | --- | --- | --- | --- |
-| `success` | 0 | Nothing queued, nothing dead-lettered. | None. |
-| `transient_delay` | 1 | Deliveries are waiting out a backoff window; the retry budget is intact. | None while the queued count falls — the worker clears these on its own. |
-| `blocked` | 2 | The destination exhausted its retry budget, or work is queued with no destination configured. | Verify the receiver, then requeue; or set `WEBHOOK_DESTINATION_URL`. |
+| `success` | 0 | No dead-letter records and no recent failures. | None. |
+| `transient_delay` | 1 | Recent delivery failures but the retry budget is intact. | None while retries remain within budget. |
+| `blocked` | 2 | Dead-letter records exist or the retry budget is exhausted. | Requeue dead-letter webhooks after fixing the consumer endpoint. |
 
 **Diagnosis:**
-1. Read the signal. It reports counts and state only — never the destination URL, a payload, or a stream ID, so it is safe to paste into an incident channel:
+1. Read the signal:
    ```bash
    curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
      http://localhost:3001/api/webhooks/monitoring | jq
    ```
-2. Cross-check the raw counters on the Prometheus scrape:
+2. Cross-check the raw gauges:
    ```bash
-   curl -s http://localhost:3001/metrics | grep -E "^webhook_(outcome|queue_|dead_letters)"
+   curl -s http://localhost:3001/metrics | grep -E '{^(webhook_outcome|webhook_dead_letters_total|webhook_failures_total)'
    ```
 
 **Remediation:**
-1. `blocked` with `counts.deadLetters > 0` — the destination has remained unavailable. Follow [Webhook Dead-Letter Spike](#webhook-dead-letter-spike).
-2. `blocked` with `counts.pending > 0` and no destination configured — set `WEBHOOK_DESTINATION_URL` in the backend `.env` and restart the service.
-3. `transient_delay` — take no action while the queued count is falling. If it stops draining, inspect the worker log for `webhook delivery scheduled for retry` and confirm the destination is reachable.
+1. `blocked` — follow [Requeue Dead-Letter Webhooks](#requeue-dead-letter-webhooks) after confirming the consumer endpoint is healthy.
 
 ---
 
 ### SQLite WAL Size Growth
+
 **Symptoms:**
-- Disk usage on the backend server is growing unexpectedly.
-- The `backend/data/` directory contains a `streams.db-wal` file significantly larger than `streams.db`.
-- Alert: WAL file size exceeds 500 MB (configurable threshold).
+- The `-wal` file grows without bound.
+- Disk usage increases and queries may slow down.
 
 **Diagnosis:**
-1. Check WAL and database file sizes:
+1. Check the WAL file size:
    ```bash
-   ls -lh backend/data/streams.db*
+   ls -lh backend/data/streams.db-wal
    ```
-2. Confirm WAL mode is active:
+2. Check the current journal mode:
    ```bash
    sqlite3 backend/data/streams.db "PRAGMA journal_mode;"
    ```
-3. Check how many checkpoints are pending:
-   ```bash
-   sqlite3 backend/data/streams.db "PRAGMA wal_checkpoint;"
-   ```
-   Output format: `busy`, `log`, `checkpointed`. A large `log` value (pages) indicates many uncheckpointed writes.
-4. Monitor write-heavy workloads:
-   ```bash
-   sqlite3 backend/data/streams.db \
-     "SELECT COUNT(*) FROM streams; SELECT COUNT(*) FROM stream_events; \
-      SELECT COUNT(*) FROM webhook_deliveries;"
-   ```
 
 **Remediation:**
-1. **Force a WAL checkpoint** to flush the WAL into the main database:
+1. Trigger a WAL checkpoint to allow SQLite to reuse the WAL:
    ```bash
-   sqlite3 backend/data/streams.db "PRAGMA wal_checkpoint(TRUNCATE);"
+   sqlite3 backend/data/streams.db "PRAGMA wal_checkpoint(truncate); VACUUM;"
    ```
-   The WAL file should shrink or disappear after this.
-2. **Schedule periodic checkpointing** by adding the following pragmas to `db.ts` after WAL mode is enabled:
-   ```sql
-   PRAGMA synchronous=NORMAL;
-   PRAGMA busy_timeout=5000;
-   PRAGMA cache_size=-64000;
-   ```
-   These reduce WAL spooling and improve concurrency.
-3. **Set `PRAGMA wal_autocheckpoint`** to tune checkpoint frequency (default: 1000 pages). For write-heavy workloads, lower it:
-   ```bash
-   sqlite3 backend/data/streams.db "PRAGMA wal_autocheckpoint=500;"
-   ```
-4. **Add a periodic cron job** if manual checkpointing is required:
-   ```bash
-   # Every hour, checkpoint the WAL
-   0 * * * * sqlite3 /path/to/streams.db "PRAGMA wal_checkpoint(TRUNCATE);"
-   ```
-5. **Verify recovery** after remediation:
-   ```bash
-   ls -lh backend/data/streams.db*
-   sqlite3 backend/data/streams.db "PRAGMA wal_checkpoint;"
-   ```
+2. If the WAL continues to grow, check for long-running read transactions that prevent checkpointing.
 
 ---
 
 ### Contract Invocation Timeout
+
 **Symptoms:**
-- Stream creation, claim, or cancel operations fail with timeout errors.
-- Backend logs contain `soroban_contract` errors: `Contract invocation timed out` or `RPC call timed out`.
-- Frontend shows "Transaction failed" with no detailed error message.
+- API requests that invoke the Soroban contract time out or return a connection error.
+- Backend logs show RPC timeouts while building or submitting transactions.
 
 **Diagnosis:**
-1. Check backend logs for contract invocation errors:
-   ```bash
-   journalctl -u stellar-stream-backend --since "1 hour ago" | grep -i "contract\|soroban\|timeout\|rpc"
-   ```
-2. Verify the Soroban RPC endpoint is reachable and responsive:
+1. Confirm the configured RPC endpoint is reachable:
    ```bash
    curl -s --max-time 10 <STELLAR_RPC_URL> -X POST \
      -H "Content-Type: application/json" \
-     -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' | jq '.'
+     -d '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger"}'
    ```
-3. Check the current network ledger status:
-   ```bash
-   curl -s --max-time 10 <STELLAR_RPC_URL> -X POST \
-     -H "Content-Type: application/json" \
-     -d '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger"}' | \
-     jq '{sequence: .result.sequence, protocolVersion: .result.protocolVersion}'
-   ```
-4. Verify the deployed contract ID matches what the backend expects:
-   ```bash
-   grep SOROBAN_CONTRACT_ID backend/.env
+2. Check backend logs for the failing transaction hash and the RPC error message.
+
+**Remediation:**
+1. If the RPC is unreachable, restore network access or switch to a known-good RPC endpoint.
+2. If the RPC is reachable but slow, increase the client timeout and retry once.
+3. If timeouts persist, escalate to the RPC provider.
+
+---
+
+### Contract CI Outcome Signal
+
+**Symptoms:**
+- The `Contract CI` workflow failed or was blocked.
+- The workflow step summary reports `Contract CI outcome: transient_delay` or `Contract CI outcome: blocked`.
+- The workflow step summary reports `Toolchain mismatch: expected=... actual=...`.
+
+The workflow classifies the `Rust contract change with generated bindings` job
+outcome into three values so the cases (`toolchain mismatch` and `transient build/bindings
+failure`) map to an explicit owner action instead of raw logs. The signal reports only the
+classification and the expected/actual toolchain channel names — not secrets, RPC URLs, or
+contract IDs — so it is safe to paste into an incident channel.
+
+**Outcome meanings:**
+
+| Outcome | Meaning | Owner action |
+| --- | --- | --- |
+| `success` | Toolchain matches `rust-toolchain.toml` and both the contract build and binding generation succeeded. | None. |
+| `transient_delay` | Toolchain matches but the contract build or binding generation failed (e.g., RPC or registry timeout). The retry budget is intact. | Re-run the workflow once; if it repeats, follow [Contract Invocation Timeout](#contract-invocation-timeout). |
+| `blocked` | The toolchain channel in `rust-toolchain.toml` does not match the installed Rust toolchain. | Update `rust-toolchain.toml `channel` to match the installed toolchain (or pin the workflow toolchain to the committed channel), then re-run the workflow. |
+
+**Diagnosis:**
+1. Open the failed workflow run and read the `Classify outcome` step summary.
+2. Compare the reported `expected=` and `actual=` toolchain channels with `rust-toolchain.tom``.
+3. Confirm the local toolchain version:
+   ``bash
+   rustup show active-toolchain
    ```
 
 **Remediation:**
-1. **Increase RPC timeout** in the backend `.env`:
-   ```bash
-   SOROBAN_RPC_TIMEOUT_MS=30000
-   ```
-   (Default is typically 10000 ms. Increase in increments of 5000 ms.)
-2. **Switch to a more reliable RPC provider** if timeouts persist. Update `STELLAR_RPC_URL` in `.env`.
-3. **Check rate limits** — some RPC providers throttle high-volume requests. Reduce concurrent contract calls by lowering `SOROBAN_MAX_CONCURRENT_CALLS` (default: 10).
-4. **Restart the backend** to clear any stale RPC connections:
-   ```bash
-   pm2 restart stellar-stream-backend
-   ```
-5. **Verify the contract is still deployed** at the expected address:
-   ```bash
-   curl -s --max-time 10 <STELLAR_RPC_URL> -X POST \
-     -H "Content-Type: application/json" \
-     -d '{"jsonrpc":"2.0","id":1,"method":"getContractData","params":{"contractId":"<SOROBAN_CONTRACT_ID>","key":"..."}}' | \
-     jq '.result'
-   ```
-6. **Escalate to the Soroban/SDK team** if the issue is on the Stellar network side (e.g., network congestion or protocol upgrade).
+1. `blocked` — update `rust-toolchain.toml` `channel` to the installed toolchain, or pin the workflow toolchain to the committed channel, then re-run the workflow.
+2. `transient_delay` — re-run the workflow once. If the outcome repeats, follow [Contract Invocation Timeout](#contract-invocation-timeout).
+3. `success` — no action required.

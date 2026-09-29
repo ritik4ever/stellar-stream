@@ -16,13 +16,13 @@ directly.
 
 ```
 contracts/src/lib.rs          ← Rust source of truth
-        │  build + deploy
+        |  build + deploy
         ▼
   Stellar Testnet              ← CONTRACT_ID lives here
-        │  soroban contract bindings typescript
+        |  soroban contract bindings typescript
         ▼
 frontend/src/contracts/generated/   ← gitignored, regenerate as needed
-        │  import
+        |  import
         ▼
 frontend/src/services/contractClient.ts  ← thin wrapper used by the app
 ```
@@ -80,11 +80,10 @@ CONTRACT_ID="C..." npm run gen:bindings
 
 After running the command, `frontend/src/contracts/generated/` will contain:
 
-```
-generated/
+```generated/
 ├── index.ts          ← main export: Contract class + all types
 ├── methods.ts        ← one typed function per contract method
-└── types.ts          ← Stream, StreamCreated, StreamClaimed, StreamCanceled structs
+├── types.ts          ← Stream, StreamCreated, StreamClaimed, StreamCanceled structs
 ```
 
 ### Generated types (from `contracts/src/lib.rs`)
@@ -112,7 +111,7 @@ generated/
 ## Step 4 — Consuming the bindings in the frontend
 
 Create a thin wrapper at `frontend/src/services/contractClient.ts` so components
-never import from `generated/` directly:
+nver import from `generated/` directly:
 
 ```typescript
 // frontend/src/services/contractClient.ts
@@ -303,8 +302,8 @@ try {
 
 ## Regenerating after a contract change
 
-Any time `contracts/src/lib.rs` changes a method signature or adds/removes a
-public method:
+Any time `contracts/src/lib.rs` changes a method signature or adds/removes
+a public method:
 
 1. Rebuild and redeploy: `SECRET_KEY="S..." npm run deploy:contract`
 2. Update `CONTRACT_ID` in `backend/.env`
@@ -328,6 +327,11 @@ To regenerate bindings in a CI pipeline, add a step after deployment:
 The generated files do not need to be committed they can be regenerated from
 the deployed contract ID on every CI run.
 
+The `Contract CI` workflow (`.github/workflows/contract-ci.yml`) classifies each
+run into one of three outcomes and exposes them as workflow outputs. See
+[Contract CI Outcome Signal](../RUNBOOK.md#contract-ci-outcome-signal) for the
+owner action associated with each outcome.
+
 ---
 
 ## Gitignore rules
@@ -337,7 +341,7 @@ The following lines should be present in `.gitignore`:
 ```
 # Generated Soroban contract bindings — regenerate with: npm run gen:bindings
 frontend/src/contracts/generated/*
-!frontend/src/contracts/generated/README.md
+!frontend/src/contracts/generated/README.md`
 ```
 
 This keeps the folder tracked so contributors know where to look while
@@ -371,72 +375,9 @@ If you've just cloned this repo, `frontend/src/contracts/generated/` won't exist
 
 If this is your very first time running it, you should end up with fully typed functions for every contract method (e.g. `create_stream`, `claim`, `cancel`) — if you don't see those, see Troubleshooting below.
 
-## Updating Bindings After a Contract Upgrade
+## Updating Bindings After a Contract Change
 
-Bindings are a point-in-time snapshot of the contract's interface. Whenever the contract is redeployed — even for a minor change — the bindings can silently go stale and reference methods/types that no longer match on-chain reality.
-
-1. **Redeploy or upgrade the contract** and get the new contract ID (or confirm the existing one, if you're upgrading via Soroban's upgrade mechanism rather than a fresh deploy).
-2. **Delete the old generated bindings** to avoid stale leftovers mixing with new output:
-```bash
-   rm -rf frontend/src/contracts/generated
-```
-3. **Re-run the generation script**, pointing at the current contract ID:
-```bash
-   npm run gen:bindings
-```
-4. **Diff the generated output** against what was previously committed/used in code — if a method signature changed (new required argument, renamed field, different return type), TypeScript will surface compile errors in any frontend code calling it. This is expected and is the whole point of typed bindings: fix the call sites, don't suppress the error.
-5. **Rebuild and smoke-test** the frontend against the upgraded contract before merging.
-
-> **Tip:** treat "regenerate bindings" as a required step in your contract-deploy checklist, not an optional one — this project doesn't yet automate it in CI (see the README's roadmap), so it's a manual step every contributor must remember.
-
-## Troubleshooting Common Errors
-
-### `Error: contract not found` / binding generation fails immediately
-- **Cause:** wrong or mistyped contract ID, or the contract isn't actually deployed on the network you pointed the CLI at.
-- **Fix:** double-check the contract ID you're passing matches exactly (Stellar contract IDs are case-sensitive, start with `C`, and are 56 characters). Confirm deployment with:
-```bash
-  stellar contract info interface --id <CONTRACT_ID> --network testnet
-```
-  If that also fails, the contract isn't deployed where you think it is.
-
-### `Error: network mismatch` or bindings work but calls fail at runtime
-- **Cause:** bindings were generated against one network (e.g. testnet) but your app is configured to call the contract on a different network (e.g. futurenet, or a different testnet contract instance), or the `networkPassphrase` used when instantiating the client doesn't match the network the bindings were generated from.
-- **Fix:** ensure the `--network` flag used during generation matches the network your frontend's client configuration points to (check wherever `contractClient.ts` or similar sets up the RPC URL / network passphrase). These three things must agree: generation network, RPC URL at runtime, and network passphrase at runtime.
-
-### Generated file exists but frontend won't compile / "Cannot find module"
-- **Cause:** `frontend/src/contracts/generated/` is gitignored — if you skipped Step 1-3 above (first-time generation) after a fresh clone, the import will fail because the folder is empty or missing.
-- **Fix:** run `npm run gen:bindings` before running the frontend dev server for the first time on any fresh clone.
-
-### Bindings generated successfully, but calling a method throws at runtime with an unrelated-looking error
-- **Cause:** most often this means the bindings are stale relative to a contract that was upgraded since the last generation (see "Updating Bindings After a Contract Upgrade" above), even if the compile step didn't catch it (e.g. an argument order change that TypeScript couldn't detect because the types happened to still align).
-- **Fix:** regenerate the bindings fresh and re-test before debugging further.
-
-## Using Bindings in Frontend Code
-
-Once generated, import the typed client from `frontend/src/contracts/generated/` wherever you need to call the contract — this is intended to be consumed from `frontend/src/services/contractClient.ts` per the project's architecture.
-
-```typescript
-import { Client, networks } from "../contracts/generated";
-
-const client = new Client({
-  contractId: "<CONTRACT_ID>",
-  networkPassphrase: networks.testnet.networkPassphrase, // must match generation network
-  rpcUrl: "https://soroban-testnet.stellar.org",
-  publicKey: userPublicKey, // from connected wallet
-});
-
-// Example: calling a contract method with full type-checking and IDE autocomplete
-const tx = await client.create_stream({
-  sender: senderAddress,
-  recipient: recipientAddress,
-  amount: streamAmount,
-  // ...remaining typed args, exact shape depends on the contract's current interface
-});
-
-const result = await tx.signAndSend();
-```
-
-Key points for frontend integration:
-- The generated client gives you compile-time type safety — if the contract's interface changes and you forget to regenerate, TypeScript will not catch it (stale types still "look" valid), which is why regenerating after every deploy matters (see above).
-- Prefer importing from the barrel file (`index.ts`) at the root of the generated folder rather than reaching into individual generated files directly, so future regenerations don't break your imports if internal file structure changes.
-- Since `frontend/src/contracts/generated/` is gitignored, CI and new contributors must run `npm run gen:bindings` before the frontend will build — make sure this is documented in your local setup steps (see `README.md`).
+When the contract ABI changes, the `Contract CI` workflow will classify the run as
+success, transient_delay, or blocked. If the outcome is `blocked` due to a
+toolchain mismatch, follow the owner action in
+[Contract CI Outcome Signal](../RUNBOOK.md#contract-ci-outcome-signal) before re-running.

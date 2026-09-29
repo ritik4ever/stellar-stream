@@ -1,5 +1,9 @@
 name: Soroban Contract CI
 
+env:
+  # Owner action: see docs/runbooks/contract-ci.md#toolchain-mismatch
+  TOOLCHAIN_MISMATCH_OWNER: "@stellar-stream/contracts-oncall"
+
 on:
   push:
     paths:
@@ -29,6 +33,32 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      - name: Record toolchain outcome
+        id: toolchain
+        if: always()
+        run: |
+          set -euo pipefail
+          ACTIVE=$(rustc --version | awk '{print $2}')
+          PINNED=$(grep -m1 '^rust-version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/' || true)
+          if [ -z "${PINNED:-}" ]; then
+            OUTCOME="success"
+            DETAIL="no rust-version pin declared"
+          elif [ "$ACTIVE" = "$PINNED" ]; then
+            OUTCOME="success"
+            DETAIL="toolchain matches pinned rust-version"
+          else
+            OUTCOME="blocked"
+            DETAIL="toolchain mismatch: active=${ACTIVE} pinned=${PINNED}"
+          fi
+          echo "outcome=${OUTCOME}" >> "$GITHUB_OUTPUT"
+          echo "detail=${DETAIL}" >> "$GITHUB_OUTPUT"
+          echo "## Contract CI outcome" >> "$GITHUB_STEP_SUMMARY"
+          echo "- outcome: **${OUTCOME}**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- detail: ${DETAIL}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$OUTCOME" = "blocked" ]; then
+            echo "- owner action: ${TOOLCHAIN_MISMATCH_OWNER} — see docs/runbooks/contract-ci.md#toolchain-mismatch" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Cache cargo registry and build artifacts
         uses: actions/cache@v4
         with:
@@ -45,6 +75,19 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Record transient delay outcome
+        id: transient
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.toolchain.outputs.outcome }}" = "blocked" ]; then
+            echo "outcome=blocked" >> "$GITHUB_OUTPUT"
+          elif [ "${{ job.status }}" = "cancelled" ]; then
+            echo "outcome=transient" >> "$GITHUB_OUTPUT"
+          else
+            echo "outcome=success" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
@@ -75,3 +118,14 @@ jobs:
           echo "WASM Binary Size: ${SIZE} bytes ($(numfmt --to=iec ${SIZE}))"
           echo "## WASM Binary Size" >> $GITHUB_STEP_SUMMARY
           echo "**$(numfmt --to=iec ${SIZE})** (${SIZE} bytes)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Publish contract CI outcome
+        if: always()
+        run: |
+          set -euo pipefail
+          echo "## Contract CI outcome" >> "$GITHUB_STEP_SUMMARY"
+          echo "- toolchain: ${{ steps.toolchain.outputs.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- overall: ${{ steps.transient.outputs.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.toolchain.outputs.outcome }}" = "blocked" ]; then
+            echo "::warning::Contract CI blocked by toolchain mismatch; owner action required: ${TOOLCHAIN_MISMATCH_OWNER}"
+          fi
