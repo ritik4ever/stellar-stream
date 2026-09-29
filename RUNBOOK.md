@@ -90,6 +90,23 @@ sqlite3 /data/streams.db ".backup '/data-backup/streams-$(date +%Y%m%d).db'"
 The `-wal` and `-shm` files are not needed for a backup produced by `.backup`
 because the command writes a fully checkpointed copy.
 
+For a repeatable backup with preflight validation and an integrity check, use
+the repository helper. It writes beside the destination, checks
+`PRAGMA integrity_check`, and publishes the result only after verification:
+
+```bash
+npm run sqlite:backup -- /data-backup/streams-$(date +%Y%m%d-%H%M%S).db
+# Or: DB_PATH=/data/streams.db SQLITE_BACKUP_PATH=/data-backup/streams.db \
+#       bash scripts/sqlite-backup.sh
+```
+
+The helper fails before opening SQLite when `DB_PATH` is missing/unreadable,
+the destination directory is missing/unwritable, `DATABASE_URL` selects
+PostgreSQL, or `sqlite3` is unavailable. It never prints environment values.
+An interrupted backup or a failed integrity check removes only its temporary
+file and preserves any existing destination. A fresh Compose database is
+reported as `transient_delay` during startup until migrations complete.
+
 #### Restoring a backup in a clean environment
 
 These steps reproduce the expected restore outcome without undocumented local
