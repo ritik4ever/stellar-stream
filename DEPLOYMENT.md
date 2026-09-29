@@ -20,7 +20,7 @@ Before deploying the backend, you must deploy the Soroban smart contract. The de
 
 ### Choose the Network First
 
-The network is selected with `STELLAR_NETWORK` (`testnet` — the default — or `mainnet`, alias `public`). Pick it **before** deploying, because the contract ID, RPC endpoint, and network passphrase are all network-specific, and the backend refuses to start when they disagree:
+The network is selected with `STELLAR_NETWORK` (`testnet` — the default — or `mainnet`, aliases `public` and `main`). Pick it **before** deploying, because the contract ID, RPC endpoint, and network passphrase are all network-specific. When `RPC_URL` and `NETWORK_PASSPHRASE` are omitted, the backend defaults both to the selected network; explicitly configured well-known endpoints or passphrases for the other network are rejected at startup:
 
 | `STELLAR_NETWORK`    | RPC default                               | Passphrase default                               |
 | -------------------- | ----------------------------------------- | ------------------------------------------------ |
@@ -55,9 +55,9 @@ The network is selected with `STELLAR_NETWORK` (`testnet` — the default — or
    ```
 3. Note the **Contract ID** output (also saved in `contracts/contract_id.txt`). You will need this for the backend configuration.
 
-The script performs its own preflight checks and exits **1 before building or deploying** when: `SECRET_KEY` is missing, `soroban-cli` is not installed, `STELLAR_NETWORK` is not a recognized network, or `RPC_URL`/`NETWORK_PASSPHRASE` point at a different network than `STELLAR_NETWORK`. A failed run therefore never leaves a half-deployed contract or overwrites `contracts/contract_id.txt` — fix the reported variable and re-run.
+The script exits **1 before building or deploying** when `SECRET_KEY` is missing, `soroban-cli` is unavailable, network settings disagree, or the selected RPC endpoint rejects a `getLatestLedger` request. A failed preflight never submits a contract deployment or overwrites `contracts/contract_id.txt`. For custom providers, put the provider-supported credential in `RPC_URL` and store the full value in a deployment secret manager. The check suppresses endpoint details and raw CLI errors so credentials are not written to logs.
 
-At backend startup, structured logs record a `deployment configuration outcome`: `success` (`outcomeCode: 0`) means required Soroban settings validated for the reported network; `blocked` (`outcomeCode: 2`) means `CONTRACT_ID` and/or `SERVER_PRIVATE_KEY` is missing and startup exits. The detail names missing variables but never includes their values. `success` records configuration validation only; use the indexer monitoring check in Section 4 to verify RPC connectivity and observe `transient_delay` or runtime `blocked` outcomes.
+At backend startup, structured logs record a `deployment configuration outcome`: `success` (`outcomeCode: 0`) means required Soroban settings validated for the reported network; `blocked` (`outcomeCode: 2`) means `CONTRACT_ID` and/or `SERVER_PRIVATE_KEY` is missing and startup exits. The detail names missing variables but never includes their values. Configure both required values for the deployed contract's network; set `SOROBAN_DISABLED=true` only for intentional local/API-only development. RPC URL validation errors redact embedded credentials. `success` records configuration validation only; use the indexer monitoring check in Section 4 to verify RPC connectivity and observe `transient_delay` or runtime `blocked` outcomes.
 
 > **Note**: The deploy script still names the Soroban CLI v21 `--network` flag value (`testnet`/`mainnet`); older CLI versions may not recognize the `mainnet` alias — if your CLI rejects it, keep the flag but pass your RPC and passphrase explicitly as the script does.
 
@@ -85,7 +85,9 @@ The backend is a Node.js Express app (TypeScript, compiled to JS) that uses a SQ
    - **Runtime**: `Node`
    - **Build Command**: `npm run build`
    - **Start Command**: `npm start`
-   - **Plan**: Free (or choose a paid plan for better performance)
+   - **Plan**: Choose a plan that supports Render pre-deploy commands so invalid configuration blocks release.
+
+Set **Pre-Deploy Command** to `npm run preflight:deployment`. After the build and before releasing the new version, it validates the production backend configuration and verifies RPC access with `getLatestLedger`. A rejected request blocks release and reports a sanitized error. Do not omit this command when a no-partial-rollout guarantee is required.
 
 ### Step 2: Add a Persistent Disk
 
@@ -114,7 +116,7 @@ Add the following environment variables in your Render Web Service dashboard und
 | `DB_PATH`                    | **Yes**  | `/data/streams.db`                        | Path to SQLite file on the persistent disk                                                                    |
 | `ALLOWED_ASSETS`             | No       | `USDC,XLM`                                | Comma-separated list of allowed asset codes                                                                   |
 | `ALLOWED_ORIGINS`            | **Yes**  | `https://your-app.vercel.app`             | Frontend URL(s) for CORS (comma-separated)                                                                    |
-| `RPC_URL`                    | No       | `https://soroban-testnet.stellar.org:443` | Stellar RPC endpoint; must belong to `STELLAR_NETWORK`                                                        |
+| `RPC_URL`                    | No       | `https://soroban-testnet.stellar.org:443` | Stellar RPC endpoint; defaults to the selected network and is probed before release. Store provider credentials in a secret manager. |
 | `NETWORK_PASSPHRASE`         | No       | `Test SDF Network ; September 2015`       | Stellar network passphrase; must match `STELLAR_NETWORK`                                                      |
 | `HORIZON_URL`                | No       | `https://horizon-testnet.stellar.org`     | Stellar Horizon endpoint                                                                                      |
 | `WEBHOOK_DESTINATION_URL`    | No       | `https://your-app.com/webhooks`           | URL for webhook delivery (optional)                                                                           |
@@ -129,6 +131,8 @@ openssl rand -hex 32
 ```
 
 > **Important**: `DB_PATH` **must** point to the persistent disk mount path (`/data/streams.db`). If you use the default (`data/streams.db` relative to the app directory), data will be lost on every deploy.
+
+`SOROBAN_DISABLED=true` is reserved for non-production testnet development. The backend rejects it in production or on mainnet. RPC provider credentials are provider-specific; configure them in the provider-supported `RPC_URL` form. The pre-deploy check verifies access without logging the URL or response body.
 
 ### Step 4: Health Check
 

@@ -206,44 +206,11 @@ validate_backend_env() {
       exit 2
       ;;
   esac
-  for key in RPC_URL SOROBAN_RPC_URL; do
-    value="$(env_value "$key" "$file")"
-    case "$value" in
-      "") ;; # unset falls through to the network default
-      *testnet*)
-        if [[ "$network" != "testnet" ]]; then
-          fail "$key points at a testnet endpoint but STELLAR_NETWORK=$network"
-          log "  set $key to a mainnet RPC endpoint, or drop STELLAR_NETWORK to run against testnet."
-          exit 2
-        fi
-        ;;
-      *mainnet*|"https://soroban-rpc.stellar.org:443")
-        if [[ "$network" != "mainnet" ]]; then
-          fail "$key points at a mainnet endpoint but STELLAR_NETWORK=$network"
-          log "  set $key to a testnet RPC endpoint (default: https://soroban-testnet.stellar.org:443), or set STELLAR_NETWORK=mainnet."
-          exit 2
-        fi
-        ;;
-    esac
-  done
-  value="$(env_value NETWORK_PASSPHRASE "$file")"
-  case "$value" in
-    "") ;;
-    "Test SDF Network ; September 2015")
-      if [[ "$network" != "testnet" ]]; then
-        fail "NETWORK_PASSPHRASE is the testnet passphrase but STELLAR_NETWORK=$network"
-        log "  align NETWORK_PASSPHRASE with STELLAR_NETWORK, or unset it to use the selected network's default."
-        exit 2
-      fi
-      ;;
-    "Public Global Stellar Network ; September 2015")
-      if [[ "$network" != "mainnet" ]]; then
-        fail "NETWORK_PASSPHRASE is the mainnet passphrase but STELLAR_NETWORK=$network"
-        log "  align NETWORK_PASSPHRASE with STELLAR_NETWORK, or unset it to use the selected network's default."
-        exit 2
-      fi
-      ;;
-  esac
+  if [[ "$soroban_disabled" == "true" && ( "$network" == "mainnet" || "$(env_value NODE_ENV "$file" | tr '[:upper:]' '[:lower:]')" == "production" ) ]]; then
+    fail "SOROBAN_DISABLED=true is only allowed for non-production testnet runs"
+    log "  configure CONTRACT_ID and SERVER_PRIVATE_KEY for production or mainnet."
+    exit 2
+  fi
   value="$(env_value ALLOWED_ASSETS "$file")"
   if [[ -n "$value" && ! "$value" =~ [A-Za-z0-9] ]]; then
     fail "ALLOWED_ASSETS is set but lists no asset codes (expected e.g. USDC,XLM)"
@@ -262,6 +229,17 @@ validate_backend_env() {
         log "         Use the default /app/data/streams.db to persist SQLite across restarts."
         ;;
     esac
+  fi
+
+  if ! command -v node >/dev/null 2>&1; then
+    fail "Node.js is required to validate Stellar network settings before starting Compose"
+    exit 2
+  fi
+  local rpc_preflight_args=(--env-file "$file")
+  [[ "$soroban_disabled" == "true" ]] && rpc_preflight_args+=(--skip-connectivity)
+  if ! node "$ROOT_DIR/backend/scripts/rpc-preflight.cjs" "${rpc_preflight_args[@]}"; then
+    fail "Stellar network/RPC preflight failed; no containers were started"
+    exit 2
   fi
 }
 
