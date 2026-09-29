@@ -130,9 +130,9 @@ cd "$CONTRACTS_DIR" || exit 1
 
 # Build the contract
 echo -e "${YELLOW}Building contract...${NC}"
-soroban contract build
-
-if [ $? -ne 0 ]; then
+# `if !` form is required under `set -e`: a plain command would exit the script
+# before the friendly error handler below could run.
+if ! soroban contract build; then
     echo -e "${RED}Error: Contract build failed${NC}"
     exit 1
 fi
@@ -167,11 +167,10 @@ DEPLOY_ARGS=(
     --network-passphrase "$NETWORK_PASSPHRASE"
     --rpc-url "$RPC_URL"
 )
-DEPLOY_OUTPUT=$(soroban contract deploy "${DEPLOY_ARGS[@]}" \
-    2>&1)
-DEPLOY_EXIT_CODE=$?
-
-if [ $DEPLOY_EXIT_CODE -ne 0 ]; then
+# The `if !` form captures the exit code even under `set -e`, so a failed
+# deploy prints the provider output instead of silently exiting.
+if ! DEPLOY_OUTPUT=$(soroban contract deploy "${DEPLOY_ARGS[@]}" \
+    2>&1); then
     echo -e "${RED}Error: Contract deployment failed${NC}"
     echo "$DEPLOY_OUTPUT"
     exit 1

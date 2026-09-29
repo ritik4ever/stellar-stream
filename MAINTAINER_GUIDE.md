@@ -368,7 +368,7 @@ SECRET_KEY="S..." npm run deploy:contract
 ```
 
 After deployment:
-- Copy the contract ID from the output or `contracts/contract_id.txt`
+- Copy the contract ID from the script output (also saved to `contracts/contract_id.txt`, which is git-ignored and must stay uncommitted)
 - Set `CONTRACT_ID=<id>` in `backend/.env`
 - Set `SERVER_PRIVATE_KEY=<key>` in `backend/.env`
 - Restart the backend

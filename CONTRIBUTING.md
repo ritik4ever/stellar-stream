@@ -100,7 +100,7 @@ If you need to work with on-chain stream operations, set up a local Soroban test
    ```bash
    SECRET_KEY="S..." npm run deploy:contract
    ```
-   This builds the contract with `wasm-opt -O4` optimization and deploys it to Stellar testnet. The contract ID is saved to `contracts/contract_id.txt`.
+   This builds the contract with `wasm-opt -O4` optimization and deploys it to Stellar testnet. The contract ID is saved to `contracts/contract_id.txt` (git-ignored — copy it from the script output; never commit the file).
 
 3. **Copy the contract ID** to your backend `.env`:
    ```

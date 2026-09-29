@@ -9,6 +9,7 @@ frontend/.vite/
 contracts/target/
 contracts/.stellar/
 backend/data/
+backend/src/data/
 .current_bench.tmp
 .bench_results.tmp
 

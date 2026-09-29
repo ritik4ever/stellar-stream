@@ -23,3 +23,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash scripts/compose-up.test.sh
+  deploy-script:
+    name: Deploy Script Preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/deploy.test.sh
