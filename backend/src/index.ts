@@ -1,3 +1,4 @@
+import "./telemetry";
 import cors from "cors";
 import helmet from "helmet";
 import { requestLogger } from "./middleware/requestLogger";

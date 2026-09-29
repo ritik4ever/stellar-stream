@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { SpanStatusCode, trace } from "@opentelemetry/api";
 import path from "path";
 import { runMigrations } from "./migrations";
 import {
@@ -12,6 +13,21 @@ const DB_PATH =
   process.env.DB_PATH || path.join(__dirname, "..", "..", "data", "streams.db");
 
 let db: any;
+const dbTracer = trace.getTracer("stellar-stream/database");
+
+function withDatabaseSpan<T>(sql: string, operation: () => T): T {
+  return dbTracer.startActiveSpan("db.query", { attributes: { "db.system": "sqlite", "db.operation": sql.trim().split(/\s+/, 1)[0] ?? "unknown" } }, (span) => {
+    try {
+      return operation();
+    } catch (error) {
+      span.recordException(error as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR });
+      throw error;
+    } finally {
+      span.end();
+    }
+  });
+}
 
 export function getDb(): any {
   if (!db) {
@@ -223,6 +239,7 @@ class PostgresDatabase {
   }
 
   private querySync(sql: string, params: any = []): any {
+    return withDatabaseSpan(sql, () => {
     const translated = translateSqlAndParams(sql, params);
     let postgresSql = translateSqlPostgres(translated.sql);
     postgresSql = translateDdl(postgresSql);
@@ -258,6 +275,7 @@ class PostgresDatabase {
     }
 
     return result;
+    });
   }
 
   public exec(sql: string): void {

@@ -17,6 +17,7 @@ import {
   indexerCircuitState,
 } from "./metrics";
 import { logger } from "../logger";
+import { SpanStatusCode, trace } from "@opentelemetry/api";
 
 const FALLBACK_POLLING_ENABLED = process.env.INDEXER_FALLBACK_POLLING_ENABLED === "true";
 const FALLBACK_POLL_INTERVAL_MS = Number(process.env.INDEXER_FALLBACK_POLL_INTERVAL_MS ?? 10000);
@@ -33,6 +34,7 @@ let lastFailureKind: IndexerRpcFailureKind | null = null;
 
 const INDEXER_CURSOR_TABLE = "indexer_cursor";
 const CHECKPOINT_ROW_ID = 1;
+const indexerTracer = trace.getTracer("stellar-stream/indexer");
 
 /**
  * Enumerated reason the most recent indexer poll failed.
@@ -384,16 +386,20 @@ export function resetIndexerState(): void {
 }
 
 async function indexEvents(): Promise<void> {
+  return indexerTracer.startActiveSpan("stellar.indexer.poll", async (span) => {
   if (!rpcServer || !contractId) {
+    span.end();
     return;
   }
 
   if (isIndexing) {
+    span.end();
     return;
   }
 
   const state = circuitBreaker.getState();
   if (state === CircuitState.OPEN) {
+    span.end();
     return;
   }
 
@@ -406,6 +412,8 @@ async function indexEvents(): Promise<void> {
     lastObservedLedger = currentLedger;
     indexerLatestLedger.set(currentLedger);
     indexerLedgerLag.set(Math.max(0, currentLedger - lastProcessedLedger));
+    span.setAttribute("stellar.contract_id", contractId);
+    span.setAttribute("stellar.ledger", currentLedger);
 
     if (currentLedger <= lastProcessedLedger) {
       recordPollSuccess();
@@ -420,13 +428,17 @@ async function indexEvents(): Promise<void> {
 
     recordPollSuccess();
   } catch (err) {
+    span.recordException(err as Error);
+    span.setStatus({ code: SpanStatusCode.ERROR });
     circuitBreaker.onFailure();
     lastFailureKind = classifyRpcFailure(err);
     indexerErrorsTotal.inc();
     logger.error({ err }, "failed to index events");
   } finally {
     isIndexing = false;
+    span.end();
   }
+  });
 }
 
 async function indexEventsWithFallback(db: any, currentLedger: number): Promise<void> {
