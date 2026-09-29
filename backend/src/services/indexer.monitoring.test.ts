@@ -38,6 +38,8 @@ vi.mock("./metrics", () => ({
   indexerErrorsTotal: { inc: vi.fn() },
   indexerCircuitState: { set: vi.fn() },
   indexerOutcome: { set: vi.fn() },
+  // Cursor-age freshness gauge added for issue #1228 (refreshed on poll success).
+  indexerLastSuccessTimestampSeconds: { set: vi.fn() },
 }));
 
 // ── In-memory SQLite DB (replaced per-test) ───────────────────────────────────

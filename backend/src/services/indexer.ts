@@ -15,6 +15,7 @@ import {
   indexerLedgerLag,
   indexerErrorsTotal,
   indexerCircuitState,
+  indexerLastSuccessTimestampSeconds,
 } from "./metrics";
 import { logger } from "../logger";
 
@@ -240,6 +241,9 @@ export function getIndexerMonitoringSnapshot(): IndexerMonitoringSnapshot {
 function recordPollSuccess(): void {
   circuitBreaker.onSuccess();
   lastFailureKind = null;
+  // Freshness timestamp for cursor-age alerting (issue #1228): only success
+  // refreshes it, so now - gauge grows exactly while polls keep failing.
+  indexerLastSuccessTimestampSeconds.set(Math.floor(Date.now() / 1000));
 }
 
 function isFallbackPollingEnabled(): boolean {
@@ -383,7 +387,12 @@ export function resetIndexerState(): void {
   circuitBreaker.reset();
 }
 
-async function indexEvents(): Promise<void> {
+/**
+ * Runs a single indexer poll. Exported so the repeatable monitoring
+ * verification (issue #1228) can drive the exact production poll path
+ * without timers.
+ */
+export async function indexEvents(): Promise<void> {
   if (!rpcServer || !contractId) {
     return;
   }
