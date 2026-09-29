@@ -61,6 +61,7 @@ incident channel.
 | `success` | 0 | Schema matches the running code. | None. |
 | `transient_delay` | 1 | The restored file is behind the running code. Pending migrations are applied automatically on startup. | None while the backend starts cleanly. Verify the signal returns to `success` after restart. |
 | `blocked` | 2 | The restored file is ahead of the running code: it contains schema versions this build does not know. Forward-only migrations cannot reconcile the difference. | Deploy the code version that wrote the snapshot, or restore a snapshot taken with this build; then confirm the signal returns to `success`. |
+| `interrupted` | 3 | The restored database backup was interrupted before completion or corrupted during active writes. | Discard the incomplete backup file, restore a valid complete backup, and confirm the signal returns to success. |
 
 #### Taking a backup
 
@@ -137,6 +138,7 @@ state.  Each scenario can be exercised from a fresh checkout.
 | Behind (fewer migrations applied) | `1` (transient_delay) | Startup applies the pending migrations automatically. No data is at risk. |
 | Matching (same versions) | `0` (success) | No migrations needed. Service starts normally. |
 | Ahead (unknown versions) | `2` (blocked) | Startup logs a warning. The service starts but the schema mismatch must be resolved before the service handles requests safely. See remediation below. |
+| Interrupted / Corrupt backup | `3` (interrupted) | Startup detects database corruption or incomplete write. The service must not use an incomplete backup. See remediation below. |
 | Fresh file / no schema_migrations | `1` (transient_delay) | All migrations are applied from scratch. Normal path for a clean install. |
 
 #### Restoring after a behind-code backup (transient_delay)
@@ -191,6 +193,23 @@ sqlite3 /data/streams.db \
 
 # Read the startup log entry (never exposes the database path or migration names):
 pm2 logs stellar-stream-backend --lines 100 | grep -i "restore"
+```
+
+#### Restoring an interrupted or corrupt backup
+
+This indicates that the database backup was interrupted before completion (e.g. copied during active writes without proper checkpointing or lock) or corrupted. The startup integrity check (`PRAGMA integrity_check;`) detects this state and sets `sqlite_restore_outcome` to `3` (`interrupted`).
+
+**Owner Action:**
+1. Discard the incomplete or corrupted backup file.
+2. Restore a valid, complete backup (or a fresh backup taken when the service was stopped or using `.backup`).
+3. Restart the backend service.
+4. Confirm the signal returns to `success` (`0`).
+
+**Diagnosis:**
+```bash
+# Check the startup log for interrupted restore outcome (never exposes paths or secrets):
+pm2 logs stellar-stream-backend --lines 100 | grep -i "restore"
+```
 ```
 
 #### Validation from a clean environment

@@ -189,6 +189,19 @@ describe("SQLite restore from prior schema version (clean environment)", () => {
     expect(detail).not.toMatch(/\/|\.sql|streams\.db|secret|schema_migrations/i);
   });
 
+  it("reports interrupted when restoring a corrupted or incomplete backup file", () => {
+    const p = tmpDbPath();
+    fs.writeFileSync(p, "NOT A VALID SQLITE DATABASE FILE");
+    const db = track(openDb(p), p);
+
+    const signal = getLiveRestoreOutcomeSignal(db);
+
+    expect(signal.outcome).toBe("interrupted");
+    expect(signal.outcomeCode).toBe(SQLITE_RESTORE_OUTCOME_CODES.interrupted);
+    expect(signal.detail).toMatch(/interrupted before completion|corrupted/i);
+    expect(signal.detail).toMatch(/owner action/i);
+  });
+
   // ── 4. Fresh checkout — no schema_migrations table at all ───────────────
 
   it("treats a fresh database with no schema_migrations table as transient_delay", () => {
@@ -287,6 +300,22 @@ describe("SQLite restore from prior schema version (clean environment)", () => {
     const line = scraped.split("\n").find((l) => l.startsWith("sqlite_restore_outcome "));
     expect(line).toBe(
       `sqlite_restore_outcome ${SQLITE_RESTORE_OUTCOME_CODES.success}`,
+    );
+  });
+
+  it("Prometheus gauge reflects interrupted for a corrupt or incomplete backup", async () => {
+    const p = tmpDbPath();
+    fs.writeFileSync(p, "NOT A VALID SQLITE DATABASE FILE");
+    const db = track(openDb(p), p);
+
+    const signal = getLiveRestoreOutcomeSignal(db);
+    recordRestoreOutcome(signal);
+    refreshRestoreMetrics();
+
+    const scraped = await register.metrics();
+    const line = scraped.split("\n").find((l) => l.startsWith("sqlite_restore_outcome "));
+    expect(line).toBe(
+      `sqlite_restore_outcome ${SQLITE_RESTORE_OUTCOME_CODES.interrupted}`,
     );
   });
 

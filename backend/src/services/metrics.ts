@@ -82,6 +82,6 @@ export const indexerOutcome = new Gauge({
 
 export const sqliteRestoreOutcome = new Gauge({
   name: "sqlite_restore_outcome",
-  help: "SQLite restore schema check outcome at startup: 0=success, 1=transient_delay, 2=blocked",
+  help: "SQLite restore schema check outcome at startup: 0=success, 1=transient_delay, 2=blocked, 3=interrupted",
   registers: [register],
 });
