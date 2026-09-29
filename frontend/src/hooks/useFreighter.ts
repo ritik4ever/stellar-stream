@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import {
+import FreighterApi, {
   isConnected,
   isAllowed,
   requestAccess,
-  getPublicKey,
+  getAddress,
   signAuthEntry,
-  signBlob,
+  signMessage,
 } from "@stellar/freighter-api";
 import { getAuthChallenge, verifyAuthToken } from "../services/auth";
 import { setAuthToken } from "../services/api";
@@ -61,7 +61,7 @@ export function useFreighter(): FreighterState {
         if (cancelled) return;
 
         if (permitted) {
-          const pk = await getPublicKey();
+          const { address: pk } = await getAddress();
           const storedToken = localStorage.getItem(STORAGE_KEY);
           if (cancelled) return;
           if (pk && storedToken) {
@@ -86,7 +86,7 @@ export function useFreighter(): FreighterState {
     setError(null);
     setStatus("connecting");
     try {
-      const pk = await requestAccess();
+      const { address: pk } = await requestAccess();
       if (!pk) throw new Error("Freighter did not return an account address.");
 
       setInstalled(true);
@@ -96,10 +96,11 @@ export function useFreighter(): FreighterState {
 
       // 2. Sign auth entry challenge using Freighter
       // Note: signAuthEntry is the modern way to sign SEP-10 txs in Freighter
-      const signedChallenge = await signAuthEntry(challengeXdr);
+      const { signedAuthEntry } = await signAuthEntry(challengeXdr);
+      if (!signedAuthEntry) throw new Error("Failed to sign auth entry.");
 
       // 3. Trade signed challenge for real JWT
-      const token = await verifyAuthToken(signedChallenge);
+      const token = await verifyAuthToken(signedAuthEntry);
 
       localStorage.setItem(STORAGE_KEY, token);
       setAuthToken(token);
@@ -135,10 +136,10 @@ export function useFreighter(): FreighterState {
     async (payload: Record<string, unknown>): Promise<string> => {
       const json = JSON.stringify(payload);
       const base64 = btoa(unescape(encodeURIComponent(json)));
-      const signed = await signBlob(base64, {
-        accountToSign: address ?? undefined,
+      const { signedMessage } = await signMessage(base64, {
+        address: address ?? undefined,
       });
-      return signed;
+      return signedMessage as string;
     },
     [address],
   );

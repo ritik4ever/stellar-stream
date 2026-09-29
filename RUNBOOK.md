@@ -273,6 +273,94 @@ Both `JWT_SECRET` and `SERVER_SIGNING_KEY` can be rotated simultaneously by upda
 
 ---
 
+### Handle Failure During Secrets Rotation
+**Symptoms:**
+- After restarting with new secrets, health checks fail or return errors
+- Clients cannot authenticate (401 errors on `/api/auth/token` or protected endpoints)
+- Metrics show elevated error rates: `auth_failures_total` increases
+- Logs show "Challenge verification failed" or "Invalid authorization token"
+
+**Detection:**
+1. Check backend health endpoint:
+   ```bash
+   curl -s http://localhost:3001/api/health | jq .
+   ```
+2. Test auth flow with a known client account:
+   ```bash
+   # Get challenge
+   CHALLENGE=$(curl -s "http://localhost:3001/api/auth/challenge?accountId=<CLIENT_PUBLIC_KEY>" | jq -r .transaction)
+   # Sign and submit (requires client secret)
+   # Verify JWT is returned
+   ```
+3. Check authentication error metrics:
+   ```bash
+   curl -s http://localhost:3001/metrics | grep auth_failures_total
+   ```
+4. Review backend logs for specific errors:
+   ```bash
+   journalctl -u stellar-stream-backend --since "5 minutes ago" | grep -iE "challenge|auth|jwt|token|secret"
+   ```
+
+**Diagnosis - Common Failure Modes:**
+
+| Failure Mode | Indicators | Cause |
+|--------------|------------|-------|
+| **JWT_SECRET mismatch** | Tokens signed with old secret rejected; new tokens work | Environment variable not updated on all instances, or rolling restart incomplete |
+| **SERVER_SIGNING_KEY mismatch** | "Challenge verification failed: signature" errors; challenges from before rotation fail | Old server signing key still in use by some instances, or key format invalid |
+| **Partial rollout** | Some requests succeed, others fail (401) | Rolling restart in progress; some instances on old secret, some on new |
+| **Invalid key format** | Startup crash or immediate 500 errors | `SERVER_SIGNING_KEY` not a valid Stellar secret (must start with `S`, 56 chars) |
+
+**Recovery Steps (Safe Retry Boundaries):**
+
+**Phase 1: Verify Configuration (No State Change)**
+1. Confirm all instances have the new environment variables:
+   ```bash
+   # On each instance/container
+   env | grep -E "JWT_SECRET|SERVER_SIGNING_KEY"
+   ```
+2. Validate key formats:
+   ```bash
+   # JWT_SECRET: any 32+ char string
+   # SERVER_SIGNING_KEY: must be 56 chars starting with 'S'
+   node -e "const {Keypair} = require('@stellar/stellar-sdk'); try { const kp = Keypair.fromSecret(process.env.SERVER_SIGNING_KEY); console.log('Valid:', kp.publicKey()); } catch(e) { console.error('Invalid:', e.message); }"
+   ```
+
+**Phase 2: Test Single Instance (Isolated)**
+1. Start a single test instance with new secrets (no traffic)
+2. Run the clean environment validation steps from [Rotate JWT Secret](#rotate-jwt-secret) and [Rotate Server Signing Key](#rotate-server-signing-key)
+3. If validation passes, proceed to Phase 3
+
+**Phase 3: Rolling Rollout with Verification**
+1. Update one instance at a time:
+   - Update env vars
+   - Restart instance
+   - Wait for health check pass
+   - Run auth flow test against that instance
+   - If test fails: **STOP** - revert that instance and investigate
+   - If test passes: continue to next instance
+
+**Phase 4: Full Verification**
+1. After all instances updated, run comprehensive auth tests
+2. Monitor `auth_failures_total` metric - should return to baseline
+3. Verify no stale challenges remain (check logs for old key errors)
+
+**Rollback Procedure (Clear Stop Point):**
+If any phase fails verification:
+1. **Immediately revert** the failed instance(s) to previous secrets
+2. Restart reverted instances
+3. Verify health and auth flow work with old secrets
+4. Preserve database and logs for investigation
+5. **Do not** attempt partial fixes or mixed-secret deployments
+6. Escalate to on-call with: error logs, env var values (redacted), and steps attempted
+
+**Safe Retry Boundaries:**
+- Maximum 3 restart attempts per instance per rotation
+- Wait 30 seconds between restart attempts for service stabilization
+- If >1 instance fails in Phase 3: stop rollout entirely, revert all, investigate
+- Total rollout time should not exceed 10 minutes; if longer, abort and rollback
+
+---
+
 ### Force Indexer Reconcile
 **Prerequisites:**
 - Access to the backend environment variables.

@@ -355,7 +355,7 @@ export function SenderDashboard({
     );
   }
 
-
+  if (stats.totalStreams === 0) {
     return (
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Sender Dashboard</h2>

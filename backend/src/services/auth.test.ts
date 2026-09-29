@@ -51,7 +51,11 @@ function modifyChallengeOps(challengeXdr: string, modifications: { timestamp?: n
                   continue;
               }
           }
-          builder.addOperation(Operation.manageData({ name: op.name, value: op.value as any, source: op.source }));
+          // Extract value from DataValue/BytesValue for copying
+          const opValue = op.value instanceof Uint8Array
+            ? op.value
+            : op.value?.value;
+          builder.addOperation(Operation.manageData({ name: op.name, value: opValue as any, source: op.source }));
       } else {
           builder.addOperation(op as any);
       }
@@ -281,8 +285,16 @@ describe("verifyChallengeAndIssueToken", () => {
       expect(timestampOp).toBeDefined();
       expect(nonceOp).toBeDefined();
       
-      const timestamp = parseInt(timestampOp.value!.toString('utf-8'), 10);
-      const nonce = nonceOp.value!.toString('utf-8');
+      // Extract bytes from DataValue/BytesValue (Stellar SDK v17)
+      const timestampBytes = timestampOp.value instanceof Uint8Array
+        ? timestampOp.value
+        : timestampOp.value?.value;
+      const nonceBytes = nonceOp.value instanceof Uint8Array
+        ? nonceOp.value
+        : nonceOp.value?.value;
+      
+      const timestamp = parseInt(Buffer.from(timestampBytes).toString('utf-8'), 10);
+      const nonce = Buffer.from(nonceBytes).toString('utf-8');
       
       expect(nonce).toMatch(/^[a-f0-9]{32}$/);
       

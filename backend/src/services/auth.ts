@@ -11,6 +11,7 @@ import crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
 import { sendApiError } from "../apiErrors";
 import { logger } from "../logger";
+import { authFailuresTotal } from "./metrics";
 
 const HORIZON_URL = (process.env.HORIZON_URL || "https://horizon-testnet.stellar.org").trim();
 
@@ -274,6 +275,7 @@ export async function verifyChallengeAndIssueToken(
     const token = jwt.sign(payload, getJwtSecret(), { expiresIn: "24h" });
     return token;
   } catch (error: any) {
+    authFailuresTotal.inc();
     if (error.message?.includes("TimeBounds")) {
       const err = new Error("Challenge has expired. Please request a new one.");
       (err as any).statusCode = 401;
@@ -297,6 +299,7 @@ export function refreshToken(req: Request, res: Response): void {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    authFailuresTotal.inc();
     sendApiError(req, res, 401, "Missing or invalid authorization header.", {
       code: "UNAUTHORIZED",
     });
@@ -316,6 +319,7 @@ export function refreshToken(req: Request, res: Response): void {
 
     res.json({ token: newToken });
   } catch {
+    authFailuresTotal.inc();
     sendApiError(req, res, 401, "Invalid or expired authorization token.", {
       code: "UNAUTHORIZED",
     });
@@ -330,6 +334,7 @@ export function authMiddleware(
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    authFailuresTotal.inc();
     sendApiError(req, res, 401, "Missing or invalid authorization header.", {
       code: "unauthorized",
     });
@@ -343,6 +348,7 @@ export function authMiddleware(
     (req as any).user = decoded; // Attach user to request
     next();
   } catch (error: any) {
+    authFailuresTotal.inc();
     if (error.name === "TokenExpiredError") {
       sendApiError(req, res, 401, "Authorization token has expired.", {
         code: "token_expired",
@@ -363,6 +369,7 @@ export function adminJwtAuth(
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    authFailuresTotal.inc();
     sendApiError(req, res, 401, "Missing or invalid authorization header.", {
       code: "unauthorized",
     });
@@ -382,6 +389,7 @@ export function adminJwtAuth(
     (req as any).user = decoded; // Attach user to request
     next();
   } catch (error: any) {
+    authFailuresTotal.inc();
     if (error.name === "TokenExpiredError") {
       sendApiError(req, res, 401, "Authorization token has expired.", {
         code: "token_expired",
