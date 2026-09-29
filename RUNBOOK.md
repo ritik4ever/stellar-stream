@@ -5,16 +5,17 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 
 ## Table of Contents
 1. [Reset SQLite Database](#reset-sqlite-database)
-2. [Rotate JWT Secret](#rotate-jwt-secret)
-3. [Force Indexer Reconcile](#force-indexer-reconcile)
-4. [Requeue Dead-Letter Webhooks](#requeue-dead-letter-webhooks)
-5. [Archive Old Streams Manually](#archive-old-streams-manually)
-6. [Indexer Falls Behind](#indexer-falls-behind)
-7. [Indexer Monitoring Outcome Signal](#indexer-monitoring-outcome-signal)
-8. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
-9. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
-10. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
-11. [Contract Invocation Timeout](#contract-invocation-timeout)
+2. [SQLite Restore from Backup](#sqlite-restore-from-backup)
+3. [Rotate JWT Secret](#rotate-jwt-secret)
+4. [Force Indexer Reconcile](#force-indexer-reconcile)
+5. [Requeue Dead-Letter Webhooks](#requeue-dead-letter-webhooks)
+6. [Archive Old Streams Manually](#archive-old-streams-manually)
+7. [Indexer Falls Behind](#indexer-falls-behind)
+8. [Indexer Monitoring Outcome Signal](#indexer-monitoring-outcome-signal)
+9. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
+10. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
+11. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
+12. [Contract Invocation Timeout](#contract-invocation-timeout)
 
 ---
 
@@ -35,6 +36,180 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 **Expected Output:**
 - Backend logs show: `Database initialized.` and `migrate()` running.
 - A new `streams.db` file is created.
+
+---
+
+### SQLite Restore from Backup
+
+This section covers restoring a SQLite database from a backup (or from a fresh
+checkout) where the schema version in the file may differ from the running code.
+The procedure is reproducible in a clean environment with no undocumented local
+state.
+
+#### How restore detection works
+
+Every time the backend opens the database file, before applying any pending
+migrations, it reads the `schema_migrations` table and compares the recorded
+schema versions against the migrations bundled with the running code.
+The result is published as the `sqlite_restore_outcome` Prometheus gauge and
+logged at startup.  The signal carries counts and state only — never the
+database path, migration names, or user data — so it is safe to paste into an
+incident channel.
+
+| Outcome | Gauge value | What it means | Owner action |
+| --- | --- | --- | --- |
+| `success` | 0 | Schema matches the running code. | None. |
+| `transient_delay` | 1 | The restored file is behind the running code. Pending migrations are applied automatically on startup. | None while the backend starts cleanly. Verify the signal returns to `success` after restart. |
+| `blocked` | 2 | The restored file is ahead of the running code: it contains schema versions this build does not know. Forward-only migrations cannot reconcile the difference. | Deploy the code version that wrote the snapshot, or restore a snapshot taken with this build; then confirm the signal returns to `success`. |
+
+#### Taking a backup
+
+Always stop the backend before copying the database directory so WAL pages are
+fully checkpointed into the main file.
+
+```bash
+# 1. Stop the backend.
+pm2 stop stellar-stream-backend   # or: systemctl stop stellar-stream-backend
+
+# 2. Copy the entire data directory — include the -wal and -shm companions.
+cp -r /data /data-backup-$(date +%Y%m%d-%H%M%S)
+
+# 3. Restart.
+pm2 start stellar-stream-backend
+```
+
+If you cannot stop the service, you can use SQLite's online backup API via
+`sqlite3` to copy a consistent snapshot without locking the live file:
+
+```bash
+sqlite3 /data/streams.db ".backup '/data-backup/streams-$(date +%Y%m%d).db'"
+```
+
+The `-wal` and `-shm` files are not needed for a backup produced by `.backup`
+because the command writes a fully checkpointed copy.
+
+#### Restoring a backup in a clean environment
+
+These steps reproduce the expected restore outcome without undocumented local
+state.  Each scenario can be exercised from a fresh checkout.
+
+**Prerequisites:**
+- Access to the server filesystem and the backup file.
+- Backend service stopped.
+- `sqlite3` available for inspection.
+
+**Steps:**
+
+1. Stop the backend:
+   ```bash
+   pm2 stop stellar-stream-backend
+   ```
+
+2. Replace the database file with the backup:
+   ```bash
+   # Remove the live file and its WAL companions.
+   rm -f /data/streams.db /data/streams.db-wal /data/streams.db-shm
+
+   # Place the backup.
+   cp /data-backup/streams-20260101.db /data/streams.db
+   ```
+
+3. Inspect the schema versions recorded in the backup:
+   ```bash
+   sqlite3 /data/streams.db \
+     "SELECT version, name, applied_at FROM schema_migrations ORDER BY version;"
+   ```
+
+4. Start the backend:
+   ```bash
+   pm2 start stellar-stream-backend
+   ```
+
+5. Read the restore outcome signal immediately after startup:
+   ```bash
+   curl -s http://localhost:3001/metrics | grep sqlite_restore_outcome
+   ```
+
+**Expected output** for each scenario:
+
+| Backup vs. running code | `sqlite_restore_outcome` value | What happens |
+| --- | --- | --- |
+| Behind (fewer migrations applied) | `1` (transient_delay) | Startup applies the pending migrations automatically. No data is at risk. |
+| Matching (same versions) | `0` (success) | No migrations needed. Service starts normally. |
+| Ahead (unknown versions) | `2` (blocked) | Startup logs a warning. The service starts but the schema mismatch must be resolved before the service handles requests safely. See remediation below. |
+| Fresh file / no schema_migrations | `1` (transient_delay) | All migrations are applied from scratch. Normal path for a clean install. |
+
+#### Restoring after a behind-code backup (transient_delay)
+
+This is the normal case.  The backup was taken at an older schema version; the
+running code ships additional migrations.
+
+1. Complete steps 1–4 from the restore procedure above.
+2. Check backend logs to confirm migrations ran:
+   ```bash
+   pm2 logs stellar-stream-backend --lines 50 | grep -i "migration\|schema\|restore"
+   ```
+   Expected: `SQLite restore outcome recorded` with `outcome: "transient_delay"` and
+   then each migration applied.
+3. Verify the signal resolves to `success` by comparing the live signal after startup:
+   ```bash
+   curl -s http://localhost:3001/metrics | grep sqlite_restore_outcome
+   # Expected: sqlite_restore_outcome 0
+   ```
+   Note: the startup-recorded gauge retains the value at the time the database was
+   opened (i.e., `1`); the live recomputed value will be `0`.  This is by design —
+   the gauge captures the restore state, not the post-migration state.
+4. Verify the database schema is current:
+   ```bash
+   sqlite3 /data/streams.db \
+     "SELECT version FROM schema_migrations ORDER BY version;"
+   ```
+   All expected migration version numbers should appear.
+
+#### Restoring a blocked backup (schema ahead of running code)
+
+This requires operator intervention: the backup contains schema versions the
+current build does not know, and forward-only migrations cannot undo them.
+
+**Option A — Roll forward: deploy the newer code.**
+If the backup was created by a newer build that is available, deploy that
+build instead.  Once the deployed code matches the schema in the backup, the
+signal returns to `success`.
+
+**Option B — Roll back: replace with a compatible backup.**
+If the newer build is unavailable or undesirable, restore a backup that was
+taken with the current (or earlier) schema version and repeat the procedure.
+
+Both options follow the same verification flow: after restarting, confirm
+`sqlite_restore_outcome` is `0`.
+
+**Diagnosis:**
+```bash
+# Count how many applied versions are unknown to the running code:
+sqlite3 /data/streams.db \
+  "SELECT COUNT(*) FROM schema_migrations;" # compare with discoverMigrations count
+
+# Read the startup log entry (never exposes the database path or migration names):
+pm2 logs stellar-stream-backend --lines 100 | grep -i "restore"
+```
+
+#### Validation from a clean environment
+
+To confirm the restore behavior is reproducible without undocumented local state:
+
+1. From a fresh checkout, install dependencies: `cd backend && npm install`
+2. Run the restore-scenario tests (no running service or live database needed):
+   ```bash
+   cd backend
+   npx vitest run src/services/dbRestoreOutcome.restore.test.ts
+   ```
+   All 12 tests must pass.  They build temporary in-memory databases at
+   specific schema versions and verify the exact outcome signal and Prometheus
+   gauge value for each scenario.
+3. Optionally, run the full suite to confirm no regressions:
+   ```bash
+   cd backend && npx vitest run
+   ```
 
 ---
 
