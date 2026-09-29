@@ -214,3 +214,14 @@ hardcoded in the `CircuitBreaker` constructor in `indexer.ts`.
 | `backend/src/services/indexerMonitor.test.ts` | Unit tests: all outcome classifications, Prometheus publishing, secret safety |
 | `backend/src/services/indexer.circuitbreaker.test.ts` | Unit tests: all circuit breaker state transitions |
 | `backend/src/services/indexer.gap.test.ts` | Unit tests: gap-fill on restart, cursor persistence, deduplication |
+
+## Validated monitoring thresholds
+
+The following optional settings are validated during startup in `backend/src/config/validateEnv.ts`:
+
+| Setting | Default | Validation | Use |
+| --- | ---: | --- | --- |
+| `INDEXER_MONITOR_MAX_LEDGER_LAG` | `100` | non-negative integer | Operational threshold for alerting on sustained ledger lag while RPC remains healthy. |
+| `INDEXER_MONITOR_MAX_CONSECUTIVE_ERRORS` | `5` | positive integer | Operational threshold aligned with the circuit-breaker failure budget. |
+
+Invalid values fail before the service starts, with the environment variable name and a non-sensitive validation message.

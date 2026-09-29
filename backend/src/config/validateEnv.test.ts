@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { validateEnv } from "./validateEnv";
+import { validateEnv, redactUrlForConfigLog } from "./validateEnv";
 
 // ---------------------------------------------------------------------------
 // Mock the logger so we can assert on log calls without depending on pino's
@@ -541,6 +541,105 @@ describe("validateEnv", () => {
         expect.objectContaining({ envVar: "RECONCILIATION_INTERVAL_MS" }),
         "environment variable validation issue",
       );
+    });
+  });
+
+  describe("Monitoring threshold validation", () => {
+    it("should use safe defaults for webhook and indexer monitoring thresholds", () => {
+      process.env = {
+        SOROBAN_DISABLED: "true",
+      };
+
+      const config = validateEnv();
+
+      expect(config.webhookMonitorPendingWarnThreshold).toBe(100);
+      expect(config.webhookMonitorRetryDueWarnThreshold).toBe(10);
+      expect(config.webhookMonitorDeadLetterAlertThreshold).toBe(1);
+      expect(config.indexerMonitorMaxLedgerLag).toBe(100);
+      expect(config.indexerMonitorMaxConsecutiveErrors).toBe(5);
+    });
+
+    it("should accept explicit webhook and indexer monitoring thresholds", () => {
+      process.env = {
+        SOROBAN_DISABLED: "true",
+        WEBHOOK_MONITOR_PENDING_WARN_THRESHOLD: "250",
+        WEBHOOK_MONITOR_RETRY_DUE_WARN_THRESHOLD: "25",
+        WEBHOOK_MONITOR_DEAD_LETTER_ALERT_THRESHOLD: "2",
+        INDEXER_MONITOR_MAX_LEDGER_LAG: "500",
+        INDEXER_MONITOR_MAX_CONSECUTIVE_ERRORS: "4",
+      };
+
+      const config = validateEnv();
+
+      expect(config.webhookMonitorPendingWarnThreshold).toBe(250);
+      expect(config.webhookMonitorRetryDueWarnThreshold).toBe(25);
+      expect(config.webhookMonitorDeadLetterAlertThreshold).toBe(2);
+      expect(config.indexerMonitorMaxLedgerLag).toBe(500);
+      expect(config.indexerMonitorMaxConsecutiveErrors).toBe(4);
+    });
+
+    it("should reject invalid webhook monitoring thresholds before startup", () => {
+      process.env = {
+        SOROBAN_DISABLED: "true",
+        WEBHOOK_MONITOR_PENDING_WARN_THRESHOLD: "0",
+      };
+
+      try {
+        validateEnv();
+      } catch (e) {}
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ envVar: "WEBHOOK_MONITOR_PENDING_WARN_THRESHOLD" }),
+        "environment variable validation issue",
+      );
+    });
+
+    it("should reject invalid indexer monitoring thresholds before startup", () => {
+      process.env = {
+        SOROBAN_DISABLED: "true",
+        INDEXER_MONITOR_MAX_CONSECUTIVE_ERRORS: "0",
+      };
+
+      try {
+        validateEnv();
+      } catch (e) {}
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ envVar: "INDEXER_MONITOR_MAX_CONSECUTIVE_ERRORS" }),
+        "environment variable validation issue",
+      );
+    });
+
+    it("should redact sensitive webhook URL material in validation logs", () => {
+      const rawUrl = "not-a-url?token=super-secret-token";
+      process.env = {
+        SOROBAN_DISABLED: "true",
+        WEBHOOK_DESTINATION_URL: rawUrl,
+      };
+
+      try {
+        validateEnv();
+      } catch (e) {}
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      assertNoLoggerOutputContains("super-secret-token");
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ webhookDestinationUrl: "[REDACTED_INVALID_URL]" }),
+        "WEBHOOK_DESTINATION_URL validation failed",
+      );
+    });
+
+    it("redactUrlForConfigLog should preserve host while redacting sensitive query fields", () => {
+      const redacted = redactUrlForConfigLog(
+        "https://receiver.example/hook?token=abc123&tenant=public&signature=deadbeef",
+      );
+
+      expect(redacted).toContain("https://receiver.example/hook");
+      expect(redacted).toContain("tenant=public");
+      expect(redacted).not.toContain("abc123");
+      expect(redacted).not.toContain("deadbeef");
     });
   });
 
