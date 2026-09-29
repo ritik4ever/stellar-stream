@@ -63,6 +63,20 @@ const fallbackPollIntervalSchema = z
     message: "must be a valid number >= 1000 (minimum 1 second)",
   });
 
+const nonNegativeIntegerSchema = z
+  .string()
+  .transform((val: string) => parseInt(val, 10))
+  .refine((val: number) => Number.isInteger(val) && val >= 0, {
+    message: "must be a non-negative integer",
+  });
+
+const positiveIntegerSchema = z
+  .string()
+  .transform((val: string) => parseInt(val, 10))
+  .refine((val: number) => Number.isInteger(val) && val > 0, {
+    message: "must be a positive integer",
+  });
+
 // Admin API key validation
 const adminApiKeySchema = z
   .string()
@@ -94,6 +108,11 @@ const envSchema = z.object({
   ARCHIVE_CRON_INTERVAL_MS: archiveCronIntervalSchema.optional().default(86400000),
   INDEXER_FALLBACK_POLLING_ENABLED: z.string().optional().default("false"),
   INDEXER_FALLBACK_POLL_INTERVAL_MS: fallbackPollIntervalSchema.optional().default(10000),
+  WEBHOOK_MONITOR_PENDING_WARN_THRESHOLD: positiveIntegerSchema.optional().default(100),
+  WEBHOOK_MONITOR_RETRY_DUE_WARN_THRESHOLD: positiveIntegerSchema.optional().default(10),
+  WEBHOOK_MONITOR_DEAD_LETTER_ALERT_THRESHOLD: positiveIntegerSchema.optional().default(1),
+  INDEXER_MONITOR_MAX_LEDGER_LAG: nonNegativeIntegerSchema.optional().default(100),
+  INDEXER_MONITOR_MAX_CONSECUTIVE_ERRORS: positiveIntegerSchema.optional().default(5),
   ALLOWED_ORIGINS: z.string().optional(),
 });
 
@@ -116,8 +135,31 @@ export interface ValidatedConfig {
   archiveCronIntervalMs: number;
   indexerFallbackPollingEnabled: boolean;
   indexerFallbackPollIntervalMs: number;
+  webhookMonitorPendingWarnThreshold: number;
+  webhookMonitorRetryDueWarnThreshold: number;
+  webhookMonitorDeadLetterAlertThreshold: number;
+  indexerMonitorMaxLedgerLag: number;
+  indexerMonitorMaxConsecutiveErrors: number;
   adminApiKey: string | null;
   allowedOrigins: string | undefined;
+}
+
+const SENSITIVE_CONFIG_KEY_REGEX = /(secret|token|password|signature|key)/i;
+
+export function redactUrlForConfigLog(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.username) url.username = "[REDACTED]";
+    if (url.password) url.password = "[REDACTED]";
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (SENSITIVE_CONFIG_KEY_REGEX.test(key)) {
+        url.searchParams.set(key, "[REDACTED]");
+      }
+    }
+    return url.toString();
+  } catch {
+    return SENSITIVE_CONFIG_KEY_REGEX.test(value) ? "[REDACTED_INVALID_URL]" : value;
+  }
 }
 
 export function validateEnv(): ValidatedConfig {
@@ -221,7 +263,10 @@ export function validateEnv(): ValidatedConfig {
   if (env.WEBHOOK_DESTINATION_URL) {
     const webhookValidation = urlSchema.safeParse(env.WEBHOOK_DESTINATION_URL);
     if (!webhookValidation.success) {
-      logger.error({ webhookDestinationUrl: env.WEBHOOK_DESTINATION_URL }, "WEBHOOK_DESTINATION_URL validation failed");
+      logger.error(
+        { webhookDestinationUrl: redactUrlForConfigLog(env.WEBHOOK_DESTINATION_URL) },
+        "WEBHOOK_DESTINATION_URL validation failed",
+      );
       webhookValidation.error.issues.forEach((issue: z.ZodIssue) => {
         logger.error({ issue: issue.message }, "WEBHOOK_DESTINATION_URL validation issue");
       });
@@ -282,6 +327,11 @@ export function validateEnv(): ValidatedConfig {
       archiveCronIntervalMs: env.ARCHIVE_CRON_INTERVAL_MS,
       indexerFallbackPollingEnabled: env.INDEXER_FALLBACK_POLLING_ENABLED,
       indexerFallbackPollIntervalMs: env.INDEXER_FALLBACK_POLL_INTERVAL_MS,
+      webhookMonitorPendingWarnThreshold: env.WEBHOOK_MONITOR_PENDING_WARN_THRESHOLD,
+      webhookMonitorRetryDueWarnThreshold: env.WEBHOOK_MONITOR_RETRY_DUE_WARN_THRESHOLD,
+      webhookMonitorDeadLetterAlertThreshold: env.WEBHOOK_MONITOR_DEAD_LETTER_ALERT_THRESHOLD,
+      indexerMonitorMaxLedgerLag: env.INDEXER_MONITOR_MAX_LEDGER_LAG,
+      indexerMonitorMaxConsecutiveErrors: env.INDEXER_MONITOR_MAX_CONSECUTIVE_ERRORS,
     },
     "configuration validated",
   );
@@ -290,7 +340,7 @@ export function validateEnv(): ValidatedConfig {
     port: env.PORT || 3001,
     sorobanEnabled: !sorobanDisabled,
     contractId: process.env.STELLAR_CONTRACT_ID || null,
-    serverPrivateKey: process.env.SERVER_PRIVATE_KEY || null,
+    serverPrivateKey: sorobanDisabled ? null : process.env.SERVER_PRIVATE_KEY || null,
     rpcUrl: process.env.SOROBAN_RPC_URL || env.RPC_URL || "https://soroban-testnet.stellar.org:443",
     networkPassphrase: process.env.NETWORK_PASSPHRASE || env.NETWORK_PASSPHRASE || "Test SDF Network ; September 2015",
     allowedAssets,
@@ -305,6 +355,11 @@ export function validateEnv(): ValidatedConfig {
     archiveCronIntervalMs: env.ARCHIVE_CRON_INTERVAL_MS,
     indexerFallbackPollingEnabled: process.env.INDEXER_FALLBACK_POLLING_ENABLED === "true",
     indexerFallbackPollIntervalMs: env.INDEXER_FALLBACK_POLL_INTERVAL_MS,
+    webhookMonitorPendingWarnThreshold: env.WEBHOOK_MONITOR_PENDING_WARN_THRESHOLD,
+    webhookMonitorRetryDueWarnThreshold: env.WEBHOOK_MONITOR_RETRY_DUE_WARN_THRESHOLD,
+    webhookMonitorDeadLetterAlertThreshold: env.WEBHOOK_MONITOR_DEAD_LETTER_ALERT_THRESHOLD,
+    indexerMonitorMaxLedgerLag: env.INDEXER_MONITOR_MAX_LEDGER_LAG,
+    indexerMonitorMaxConsecutiveErrors: env.INDEXER_MONITOR_MAX_CONSECUTIVE_ERRORS,
     adminApiKey,
     allowedOrigins: env.ALLOWED_ORIGINS,
   };

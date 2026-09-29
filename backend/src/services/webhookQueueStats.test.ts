@@ -142,11 +142,11 @@ describe("webhook monitoring smoke check", () => {
     queueDelivery({ maxAttempts: 2 });
     await processWebhookQueue();
 
-    const verdict = evaluateWebhookMonitoring({ deadLetters: 0, pending: 0 });
+    const verdict = evaluateWebhookMonitoring({ deadLetters: 1, pending: 0 });
 
     expect(verdict.pass).toBe(false);
     expect(verdict.checks.filter((check) => !check.pass).map((check) => check.name)).toEqual(
-      expect.arrayContaining(["pending == 0", "deadLetters == 0"]),
+      expect.arrayContaining(["pending == 0", "deadLetters == 1"]),
     );
   });
 

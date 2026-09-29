@@ -48,6 +48,7 @@
     "ts-node-dev": "^2.0.0",
     "typescript": "^7.0.2",
     "typescript-eslint": "^8.70.1",
+    "vite": "^6.4.0",
     "vitest": "^5.0.1"
   },
   "pnpm": {

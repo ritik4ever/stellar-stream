@@ -15,7 +15,11 @@ import { sqliteRestoreOutcome as sqliteRestoreOutcomeGauge } from "./metrics";
  *   migrations are forward-only, so work must stop until code and snapshot
  *   match again.
  */
-export type SqliteRestoreOutcome = "success" | "transient_delay" | "blocked";
+export type SqliteRestoreOutcome =
+  | "success"
+  | "transient_delay"
+  | "blocked"
+  | "interrupted";
 
 /**
  * Stable numeric encoding for the Prometheus gauge and for alert rules.
@@ -25,6 +29,7 @@ export const SQLITE_RESTORE_OUTCOME_CODES: Record<SqliteRestoreOutcome, number> 
   success: 0,
   transient_delay: 1,
   blocked: 2,
+  interrupted: 3,
 };
 
 export interface RestoreSchemaSnapshot {
@@ -32,6 +37,8 @@ export interface RestoreSchemaSnapshot {
   appliedVersions: number[];
   /** Schema versions the running code ships. */
   expectedVersions: number[];
+  /** Whether the database integrity check passed. */
+  integrityOk?: boolean;
 }
 
 export interface RestoreOutcomeCounts {
@@ -94,7 +101,13 @@ export function classifyRestoreOutcome(
   let outcome: SqliteRestoreOutcome;
   let detail: string;
 
-  if (unknown > 0) {
+  if (snapshot.integrityOk === false) {
+    outcome = "interrupted";
+    detail =
+      `The restored database backup was interrupted before completion or corrupted during ` +
+      `active writes. Owner action: discard the incomplete backup file, restore a valid ` +
+      `complete backup, and confirm this signal returns to success.`;
+  } else if (unknown > 0) {
     outcome = "blocked";
     detail =
       `The restored database is ahead of the running code: ${unknown} applied ` +
@@ -145,14 +158,27 @@ export function readRestoreSnapshot(
   db: any,
   migrationsDir?: string,
 ): RestoreSchemaSnapshot {
+  let integrityOk = true;
+  try {
+    const checkRows = db
+      .prepare("PRAGMA integrity_check;")
+      .all() as Array<{ integrity_check: string }>;
+    if (!checkRows.every((row) => row.integrity_check === "ok")) {
+      integrityOk = false;
+    }
+  } catch {
+    integrityOk = false;
+  }
+
   const expectedVersions = uniqueSorted(
     discoverMigrations(migrationsDir ?? getMigrationsDir()).map(
       (migration) => migration.version,
     ),
   );
   return {
-    appliedVersions: readAppliedSchemaVersions(db),
+    appliedVersions: integrityOk ? readAppliedSchemaVersions(db) : [],
     expectedVersions,
+    integrityOk,
   };
 }
 

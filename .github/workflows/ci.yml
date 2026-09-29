@@ -20,9 +20,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Install frontend dependencies
-        run: cd frontend && npm ci
-      - name: Build frontend
-        run: cd frontend && npm run build
+        with: {node-version: 20}
+      - run: cd frontend && npm ci --legacy-peer-deps && npm run build
+  compose-startup-script:
+    name: Compose Startup Script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/compose-up.test.sh

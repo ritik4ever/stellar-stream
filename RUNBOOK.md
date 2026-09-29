@@ -5,16 +5,18 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 
 ## Table of Contents
 1. [Reset SQLite Database](#reset-sqlite-database)
-2. [Rotate JWT Secret](#rotate-jwt-secret)
-3. [Force Indexer Reconcile](#force-indexer-reconcile)
-4. [Requeue Dead-Letter Webhooks](#requeue-dead-letter-webhooks)
-5. [Archive Old Streams Manually](#archive-old-streams-manually)
-6. [Indexer Falls Behind](#indexer-falls-behind)
-7. [Indexer Monitoring Outcome Signal](#indexer-monitoring-outcome-signal)
-8. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
-9. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
-10. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
-11. [Contract Invocation Timeout](#contract-invocation-timeout)
+2. [SQLite Restore from Backup](#sqlite-restore-from-backup)
+3. [Rotate JWT Secret](#rotate-jwt-secret)
+4. [Force Indexer Reconcile](#force-indexer-reconcile)
+5. [Requeue Dead-Letter Webhooks](#requeue-dead-letter-webhooks)
+6. [Archive Old Streams Manually](#archive-old-streams-manually)
+7. [Indexer Falls Behind](#indexer-falls-behind)
+8. [Indexer Monitoring Outcome Signal](#indexer-monitoring-outcome-signal)
+9. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
+10. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
+11. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
+12. [Contract Invocation Timeout](#contract-invocation-timeout)
+13. [Docker Compose Startup Failure](#docker-compose-startup-failure)
 
 ---
 
@@ -35,6 +37,216 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 **Expected Output:**
 - Backend logs show: `Database initialized.` and `migrate()` running.
 - A new `streams.db` file is created.
+
+---
+
+### SQLite Restore from Backup
+
+This section covers restoring a SQLite database from a backup (or from a fresh
+checkout) where the schema version in the file may differ from the running code.
+The procedure is reproducible in a clean environment with no undocumented local
+state.
+
+#### How restore detection works
+
+Every time the backend opens the database file, before applying any pending
+migrations, it reads the `schema_migrations` table and compares the recorded
+schema versions against the migrations bundled with the running code.
+The result is published as the `sqlite_restore_outcome` Prometheus gauge and
+logged at startup.  The signal carries counts and state only — never the
+database path, migration names, or user data — so it is safe to paste into an
+incident channel.
+
+| Outcome | Gauge value | What it means | Owner action |
+| --- | --- | --- | --- |
+| `success` | 0 | Schema matches the running code. | None. |
+| `transient_delay` | 1 | The restored file is behind the running code. Pending migrations are applied automatically on startup. | None while the backend starts cleanly. Verify the signal returns to `success` after restart. |
+| `blocked` | 2 | The restored file is ahead of the running code: it contains schema versions this build does not know. Forward-only migrations cannot reconcile the difference. | Deploy the code version that wrote the snapshot, or restore a snapshot taken with this build; then confirm the signal returns to `success`. |
+| `interrupted` | 3 | The restored database backup was interrupted before completion or corrupted during active writes. | Discard the incomplete backup file, restore a valid complete backup, and confirm the signal returns to success. |
+
+#### Taking a backup
+
+Always stop the backend before copying the database directory so WAL pages are
+fully checkpointed into the main file.
+
+```bash
+# 1. Stop the backend.
+pm2 stop stellar-stream-backend   # or: systemctl stop stellar-stream-backend
+
+# 2. Copy the entire data directory — include the -wal and -shm companions.
+cp -r /data /data-backup-$(date +%Y%m%d-%H%M%S)
+
+# 3. Restart.
+pm2 start stellar-stream-backend
+```
+
+If you cannot stop the service, you can use SQLite's online backup API via
+`sqlite3` to copy a consistent snapshot without locking the live file:
+
+```bash
+sqlite3 /data/streams.db ".backup '/data-backup/streams-$(date +%Y%m%d).db'"
+```
+
+The `-wal` and `-shm` files are not needed for a backup produced by `.backup`
+because the command writes a fully checkpointed copy.
+
+For a repeatable backup with preflight validation and an integrity check, use
+the repository helper. It writes beside the destination, checks
+`PRAGMA integrity_check`, and publishes the result only after verification:
+
+```bash
+npm run sqlite:backup -- /data-backup/streams-$(date +%Y%m%d-%H%M%S).db
+# Or: DB_PATH=/data/streams.db SQLITE_BACKUP_PATH=/data-backup/streams.db \
+#       bash scripts/sqlite-backup.sh
+```
+
+The helper fails before opening SQLite when `DB_PATH` is missing/unreadable,
+the destination directory is missing/unwritable, `DATABASE_URL` selects
+PostgreSQL, or `sqlite3` is unavailable. It never prints environment values.
+An interrupted backup or a failed integrity check removes only its temporary
+file and preserves any existing destination. A fresh Compose database is
+reported as `transient_delay` during startup until migrations complete.
+
+#### Restoring a backup in a clean environment
+
+These steps reproduce the expected restore outcome without undocumented local
+state.  Each scenario can be exercised from a fresh checkout.
+
+**Prerequisites:**
+- Access to the server filesystem and the backup file.
+- Backend service stopped.
+- `sqlite3` available for inspection.
+
+**Steps:**
+
+1. Stop the backend:
+   ```bash
+   pm2 stop stellar-stream-backend
+   ```
+
+2. Replace the database file with the backup:
+   ```bash
+   # Remove the live file and its WAL companions.
+   rm -f /data/streams.db /data/streams.db-wal /data/streams.db-shm
+
+   # Place the backup.
+   cp /data-backup/streams-20260101.db /data/streams.db
+   ```
+
+3. Inspect the schema versions recorded in the backup:
+   ```bash
+   sqlite3 /data/streams.db \
+     "SELECT version, name, applied_at FROM schema_migrations ORDER BY version;"
+   ```
+
+4. Start the backend:
+   ```bash
+   pm2 start stellar-stream-backend
+   ```
+
+5. Read the restore outcome signal immediately after startup:
+   ```bash
+   curl -s http://localhost:3001/metrics | grep sqlite_restore_outcome
+   ```
+
+**Expected output** for each scenario:
+
+| Backup vs. running code | `sqlite_restore_outcome` value | What happens |
+| --- | --- | --- |
+| Behind (fewer migrations applied) | `1` (transient_delay) | Startup applies the pending migrations automatically. No data is at risk. |
+| Matching (same versions) | `0` (success) | No migrations needed. Service starts normally. |
+| Ahead (unknown versions) | `2` (blocked) | Startup logs a warning. The service starts but the schema mismatch must be resolved before the service handles requests safely. See remediation below. |
+| Interrupted / Corrupt backup | `3` (interrupted) | Startup detects database corruption or incomplete write. The service must not use an incomplete backup. See remediation below. |
+| Fresh file / no schema_migrations | `1` (transient_delay) | All migrations are applied from scratch. Normal path for a clean install. |
+
+#### Restoring after a behind-code backup (transient_delay)
+
+This is the normal case.  The backup was taken at an older schema version; the
+running code ships additional migrations.
+
+1. Complete steps 1–4 from the restore procedure above.
+2. Check backend logs to confirm migrations ran:
+   ```bash
+   pm2 logs stellar-stream-backend --lines 50 | grep -i "migration\|schema\|restore"
+   ```
+   Expected: `SQLite restore outcome recorded` with `outcome: "transient_delay"` and
+   then each migration applied.
+3. Verify the signal resolves to `success` by comparing the live signal after startup:
+   ```bash
+   curl -s http://localhost:3001/metrics | grep sqlite_restore_outcome
+   # Expected: sqlite_restore_outcome 0
+   ```
+   Note: the startup-recorded gauge retains the value at the time the database was
+   opened (i.e., `1`); the live recomputed value will be `0`.  This is by design —
+   the gauge captures the restore state, not the post-migration state.
+4. Verify the database schema is current:
+   ```bash
+   sqlite3 /data/streams.db \
+     "SELECT version FROM schema_migrations ORDER BY version;"
+   ```
+   All expected migration version numbers should appear.
+
+#### Restoring a blocked backup (schema ahead of running code)
+
+This requires operator intervention: the backup contains schema versions the
+current build does not know, and forward-only migrations cannot undo them.
+
+**Option A — Roll forward: deploy the newer code.**
+If the backup was created by a newer build that is available, deploy that
+build instead.  Once the deployed code matches the schema in the backup, the
+signal returns to `success`.
+
+**Option B — Roll back: replace with a compatible backup.**
+If the newer build is unavailable or undesirable, restore a backup that was
+taken with the current (or earlier) schema version and repeat the procedure.
+
+Both options follow the same verification flow: after restarting, confirm
+`sqlite_restore_outcome` is `0`.
+
+**Diagnosis:**
+```bash
+# Count how many applied versions are unknown to the running code:
+sqlite3 /data/streams.db \
+  "SELECT COUNT(*) FROM schema_migrations;" # compare with discoverMigrations count
+
+# Read the startup log entry (never exposes the database path or migration names):
+pm2 logs stellar-stream-backend --lines 100 | grep -i "restore"
+```
+
+#### Restoring an interrupted or corrupt backup
+
+This indicates that the database backup was interrupted before completion (e.g. copied during active writes without proper checkpointing or lock) or corrupted. The startup integrity check (`PRAGMA integrity_check;`) detects this state and sets `sqlite_restore_outcome` to `3` (`interrupted`).
+
+**Owner Action:**
+1. Discard the incomplete or corrupted backup file.
+2. Restore a valid, complete backup (or a fresh backup taken when the service was stopped or using `.backup`).
+3. Restart the backend service.
+4. Confirm the signal returns to `success` (`0`).
+
+**Diagnosis:**
+```bash
+# Check the startup log for interrupted restore outcome (never exposes paths or secrets):
+pm2 logs stellar-stream-backend --lines 100 | grep -i "restore"
+```
+```
+
+#### Validation from a clean environment
+
+To confirm the restore behavior is reproducible without undocumented local state:
+
+1. From a fresh checkout, install dependencies: `cd backend && npm install`
+2. Run the restore-scenario tests (no running service or live database needed):
+   ```bash
+   cd backend
+   npx vitest run src/services/dbRestoreOutcome.restore.test.ts
+   ```
+   All 12 tests must pass.  They build temporary in-memory databases at
+   specific schema versions and verify the exact outcome signal and Prometheus
+   gauge value for each scenario.
+3. Optionally, run the full suite to confirm no regressions:
+   ```bash
+   cd backend && npx vitest run
+   ```
 
 ---
 
@@ -441,3 +653,74 @@ an explicit owner action instead of raw counters.
      jq '.result'
    ```
 6. **Escalate to the Soroban/SDK team** if the issue is on the Stellar network side (e.g., network congestion or protocol upgrade).
+
+---
+
+### Docker Compose Startup Failure
+
+**Symptom:** `docker compose up` hangs or fails with `dependency failed to start: container stellar-backend is unhealthy`, the frontend never starts, or `stellar-backend` shows `Restarting`.
+
+**Why:** the frontend has `depends_on: backend: condition: service_healthy`, so it waits on the backend healthcheck (`wget http://localhost:3001/api/health`, every 30s, 3 retries, 10s start period). If the backend exits during startup (for example, `validateEnv()` rejects the config), `restart: on-failure:5` restarts it up to 5 times. After that it stays stopped.
+
+#### Guarded startup
+
+Use the startup script instead of `docker compose up -d`. It either reaches a verified healthy state or stops with a rollback:
+
+```bash
+npm run compose:up        # or: bash scripts/compose-up.sh
+```
+
+| Phase | What happens | On failure |
+|-------|--------------|------------|
+| Preflight | Checks `docker compose`, `backend/.env`, the backend configuration (see below) and `docker compose config` | Exit `2`. Nothing is started |
+| Backend | `up -d --build redis backend`, then polls container health every `POLL_INTERVAL`s for up to `BACKEND_HEALTH_TIMEOUT`s | Prints `compose ps`, the last healthcheck probes and the last 40 log lines |
+| Recovery | Restarts the backend at most `MAX_RECOVERY_ATTEMPTS` times (default `1`). Config errors are **not** retried. `MAX_CRASH_RESTARTS` (default `3`) container restarts count as a crash loop | Rollback |
+| Frontend | Starts only after the backend is healthy. Waits up to `FRONTEND_HEALTH_TIMEOUT`s | Rollback |
+| Rollback | `docker compose down --remove-orphans`. The `backend-data` volume (SQLite) is **kept** | Exit `1`, `RESULT: FAIL` |
+
+It ends with a single `RESULT: PASS` or `RESULT: FAIL` line. Set `ROLLBACK=keep` to leave the containers running so you can inspect them.
+
+#### Configuration preflight
+
+Before starting any container, the script reads `backend/.env` (without sourcing it) and rejects settings that would leave the backend crash-looping or permanently unhealthy. Every check fails with exit `2` and a message that names the variable and the rule — **credential values are never printed** (only the variable name and, for format errors, `[<n> chars, redacted]`).
+
+| Check | Why it matters |
+|-------|----------------|
+| Env file has at least one setting | An empty environment can never satisfy `validateEnv()`, so the stack would start, crash-loop and roll back |
+| `CONTRACT_ID` + `SERVER_PRIVATE_KEY` present, each exactly 56 characters starting with `C` / `S` | Required by the backend unless `SOROBAN_DISABLED=true`; the `.env.example` placeholders are deliberately invalid |
+| `PORT` (when set) matches the Compose backend port (`3001`) | The container healthcheck and published port in `docker-compose.yml` are fixed, so any other `PORT` makes the backend stay `unhealthy` and the frontend never starts |
+| `RPC_URL`, `SOROBAN_RPC_URL`, `WEBHOOK_DESTINATION_URL` (when set) are `http(s)://` URLs | The backend rejects malformed URLs at startup |
+| `ALLOWED_ASSETS` (when set) lists at least one code | The backend rejects an empty allowlist at startup |
+
+A `DB_PATH` outside the persisted `/app/data` volume is a **warning**, not a failure: the stack still starts, but the SQLite file is recreated on every container start (a fresh database each time). Use the default `/app/data/streams.db` to persist data across restarts.
+
+Override the expected backend port for a customised compose file with `BACKEND_PORT=<port>`.
+
+#### Manual detection
+
+```bash
+docker compose ps                                   # STATUS: (unhealthy) / Restarting
+docker inspect -f '{{json .State.Health}}' stellar-backend | jq '.Log[-3:]'
+docker compose logs --tail 50 backend
+```
+
+#### Common causes
+
+| Log line | Fix |
+|----------|-----|
+| `env file .../backend/.env not found` | `cp backend/.env.example backend/.env` |
+| `has no settings (empty environment)` | Add `SOROBAN_DISABLED=true` for local runs, or fill in `CONTRACT_ID` and `SERVER_PRIVATE_KEY` |
+| `Soroban configuration incomplete` | Set a valid `CONTRACT_ID` and `SERVER_PRIVATE_KEY`, or `SOROBAN_DISABLED=true` for local runs |
+| `CONTRACT_ID is invalid` / `SERVER_PRIVATE_KEY is invalid` | The placeholder keys from `.env.example` are not valid. Replace them or set `SOROBAN_DISABLED=true` |
+| `PORT=... does not match the Compose backend port` | Remove `PORT` from `backend/.env` (default `3001`) or update `docker-compose.yml` consistently |
+| `EADDRINUSE` | Another process holds port 3001: `lsof -i :3001` |
+
+The preflight rows above are reported by `npm run compose:up` before anything is started; the `EADDRINUSE` row is only visible after start (or when running `docker compose up` directly).
+
+#### Rollback
+
+```bash
+docker compose down            # never add -v: it deletes the backend-data SQLite volume
+```
+
+After you fix the cause, re-run `npm run compose:up`. To check the script itself without Docker, run `npm run test:compose-up`.

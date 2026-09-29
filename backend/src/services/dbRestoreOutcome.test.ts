@@ -74,6 +74,19 @@ describe("classifyRestoreOutcome", () => {
     expect(signal.detail).toMatch(/owner action/i);
   });
 
+  it("reports interrupted when the database integrity check fails", () => {
+    const signal = classifyRestoreOutcome({
+      appliedVersions: [1, 2],
+      expectedVersions: [1, 2, 3, 4],
+      integrityOk: false,
+    });
+
+    expect(signal.outcome).toBe("interrupted");
+    expect(signal.outcomeCode).toBe(SQLITE_RESTORE_OUTCOME_CODES.interrupted);
+    expect(signal.detail).toMatch(/interrupted before completion|corrupted/i);
+    expect(signal.detail).toMatch(/owner action/i);
+  });
+
   it("prefers blocked over transient_delay when the database is both ahead and behind", () => {
     const signal = classifyRestoreOutcome({
       appliedVersions: [1, 5],
