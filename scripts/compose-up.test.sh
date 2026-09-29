@@ -58,7 +58,16 @@ exit 0
 STUB
 # No-op sleep so polling loops finish instantly.
 printf '#!/usr/bin/env bash\nexit 0\n' >"$WORK/bin/sleep"
-chmod +x "$WORK/bin/docker" "$WORK/bin/sleep"
+REAL_NODE="$(command -v node)"
+cat >"$WORK/bin/node" <<'NODE_STUB'
+#!/usr/bin/env bash
+if [[ "$1" == *"rpc-preflight.cjs" ]]; then
+  echo "$*" >>"$STUB_DIR/rpc-preflight-calls"
+  exec "$REAL_NODE" "$1" "${@:2}" --skip-connectivity
+fi
+exec "$REAL_NODE" "$@"
+NODE_STUB
+chmod +x "$WORK/bin/docker" "$WORK/bin/sleep" "$WORK/bin/node"
 
 # A minimal backend env that passes the configuration preflight: local mode
 # needs no Stellar credentials.
@@ -78,6 +87,7 @@ run_case() {
   mkdir -p "$STUB_DIR"
   write_valid_env "$STUB_DIR/env"
   env PATH="$WORK/bin:$PATH" STUB_SCENARIO="$scenario" \
+    REAL_NODE="$REAL_NODE" \
     BACKEND_ENV_FILE="$STUB_DIR/env" \
     BACKEND_HEALTH_TIMEOUT=10 FRONTEND_HEALTH_TIMEOUT=10 POLL_INTERVAL=5 \
     "$@" bash "$SCRIPT" >"$STUB_DIR/out" 2>&1
@@ -242,12 +252,13 @@ fi
 
 name="mainnet network with testnet RPC_URL fails preflight without starting"
 cat >"$WORK/net-mismatch.env" <<'EOF'
-SOROBAN_DISABLED=true
 STELLAR_NETWORK=mainnet
 RPC_URL=https://soroban-testnet.stellar.org:443
+CONTRACT_ID=CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+SERVER_PRIVATE_KEY=SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 EOF
 if run_case net_mismatch healthy 2 BACKEND_ENV_FILE="$WORK/net-mismatch.env" &&
-   check "$name" "mismatch reported" grep -q "points at a testnet endpoint but STELLAR_NETWORK=mainnet" "$CASE_DIR/out" &&
+  check "$name" "mismatch reported" grep -q "RPC_URL does not match STELLAR_NETWORK" "$CASE_DIR/out" &&
    check "$name" "compose up not called" bash -c "! grep -q ' up ' '$CASE_DIR/calls'"; then
   pass_case "$name"
 fi
@@ -265,36 +276,63 @@ fi
 
 name="testnet passphrase with STELLAR_NETWORK=mainnet fails preflight"
 cat >"$WORK/net-passphrase.env" <<'EOF'
-SOROBAN_DISABLED=true
 STELLAR_NETWORK=mainnet
 RPC_URL=https://rpc.provider.example:443
 NETWORK_PASSPHRASE=Test SDF Network ; September 2015
+CONTRACT_ID=CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+SERVER_PRIVATE_KEY=SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 EOF
 if run_case net_passphrase healthy 2 BACKEND_ENV_FILE="$WORK/net-passphrase.env" &&
-   check "$name" "passphrase mismatch reported" grep -q "NETWORK_PASSPHRASE is the testnet passphrase but STELLAR_NETWORK=mainnet" "$CASE_DIR/out" &&
+  check "$name" "passphrase mismatch reported" grep -q "NETWORK_PASSPHRASE does not match STELLAR_NETWORK" "$CASE_DIR/out" &&
    check "$name" "compose up not called" bash -c "! grep -q ' up ' '$CASE_DIR/calls'"; then
   pass_case "$name"
 fi
 
 name="consistent mainnet environment passes preflight and reaches healthy"
 cat >"$WORK/net-mainnet.env" <<'EOF'
-SOROBAN_DISABLED=true
 STELLAR_NETWORK=mainnet
 RPC_URL=https://soroban-rpc.stellar.org:443
 NETWORK_PASSPHRASE=Public Global Stellar Network ; September 2015
+CONTRACT_ID=CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+SERVER_PRIVATE_KEY=SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 EOF
 if run_case net_mainnet healthy 0 BACKEND_ENV_FILE="$WORK/net-mainnet.env" &&
-   check "$name" "stack reached healthy" grep -q "RESULT: PASS" "$CASE_DIR/out"; then
+  check "$name" "stack reached healthy" grep -q "RESULT: PASS" "$CASE_DIR/out" &&
+  check "$name" "RPC checked before startup" test -f "$CASE_DIR/rpc-preflight-calls"; then
   pass_case "$name"
 fi
 
-name="STELLAR_NETWORK=mainnet with no RPC_URL still starts (backend warns)"
+name="STELLAR_NETWORK=mainnet without RPC_URL uses mainnet default before startup"
 cat >"$WORK/net-mainnet-default-rpc.env" <<'EOF'
+STELLAR_NETWORK=mainnet
+CONTRACT_ID=CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+SERVER_PRIVATE_KEY=SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+EOF
+if run_case net_mainnet_default healthy 0 BACKEND_ENV_FILE="$WORK/net-mainnet-default-rpc.env" &&
+  check "$name" "stack reached healthy" grep -q "RESULT: PASS" "$CASE_DIR/out" &&
+  check "$name" "RPC checked before startup" test -f "$CASE_DIR/rpc-preflight-calls"; then
+  pass_case "$name"
+fi
+
+name="mainnet cannot bypass required Soroban config"
+cat >"$WORK/mainnet-disabled.env" <<'EOF'
 SOROBAN_DISABLED=true
 STELLAR_NETWORK=mainnet
 EOF
-if run_case net_mainnet_default healthy 0 BACKEND_ENV_FILE="$WORK/net-mainnet-default-rpc.env" &&
-   check "$name" "stack reached healthy" grep -q "RESULT: PASS" "$CASE_DIR/out"; then
+if run_case mainnet_disabled healthy 2 BACKEND_ENV_FILE="$WORK/mainnet-disabled.env" &&
+  check "$name" "disabled Soroban rejected" grep -q "only allowed for non-production testnet runs" "$CASE_DIR/out" &&
+  check "$name" "compose up not called" bash -c "! grep -q ' up ' '$CASE_DIR/calls'"; then
+  pass_case "$name"
+fi
+
+name="production cannot bypass required Soroban config"
+cat >"$WORK/production-disabled.env" <<'EOF'
+SOROBAN_DISABLED=true
+NODE_ENV=production
+EOF
+if run_case production_disabled healthy 2 BACKEND_ENV_FILE="$WORK/production-disabled.env" &&
+  check "$name" "disabled Soroban rejected" grep -q "only allowed for non-production testnet runs" "$CASE_DIR/out" &&
+  check "$name" "compose up not called" bash -c "! grep -q ' up ' '$CASE_DIR/calls'"; then
   pass_case "$name"
 fi
 

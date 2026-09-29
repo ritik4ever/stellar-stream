@@ -12,8 +12,10 @@
 #
 # Failure modes (issue #1205):
 #   - missing SECRET_KEY                 -> exits 1 before any build/deploy
+#   - malformed SECRET_KEY               -> exits 1 before any build/deploy
 #   - unknown STELLAR_NETWORK value      -> exits 1 before any build/deploy
 #   - RPC_URL/network mismatch           -> exits 1 before any build/deploy
+#   - RPC endpoint/credentials rejected  -> exits 1 before any build/deploy
 #   - soroban-cli missing                -> exits 1 before any build/deploy
 # All failures happen before `soroban contract deploy` runs, so a failed run
 # never leaves a half-deployed contract or overwrites contracts/contract_id.txt.
@@ -103,10 +105,21 @@ if [ -z "$SECRET_KEY" ]; then
     echo "Example: SECRET_KEY=\"S...\" ./scripts/deploy.sh"
     exit 1
 fi
+if [ ${#SECRET_KEY} -ne 56 ] || [[ "$SECRET_KEY" != S* ]]; then
+    echo -e "${RED}Error: SECRET_KEY must be a 56-character Stellar secret key starting with S${NC}"
+    echo "Received a value with ${#SECRET_KEY} characters; value redacted."
+    exit 1
+fi
 # Check if soroban-cli is installed
 if ! command -v soroban &> /dev/null; then
     echo -e "${RED}Error: soroban-cli is not installed${NC}"
     echo "Please install it from: https://soroban.stellar.org/docs/getting-started/setup#install-the-soroban-cli"
+    exit 1
+fi
+
+# Verify the selected RPC endpoint and any provider credentials before building.
+if ! node backend/scripts/rpc-preflight.cjs; then
+    echo -e "${RED}Error: Stellar RPC preflight failed; no contract build or deployment was started${NC}"
     exit 1
 fi
 
@@ -121,7 +134,7 @@ fi
 
 echo -e "${GREEN}Starting contract deployment...${NC}"
 echo "Network: $STELLAR_NETWORK"
-echo "RPC URL: $RPC_URL"
+echo "RPC endpoint: configured (credentials redacted)"
 echo "Passphrase: $NETWORK_PASSPHRASE"
 echo ""
 
@@ -167,13 +180,15 @@ DEPLOY_ARGS=(
     --network-passphrase "$NETWORK_PASSPHRASE"
     --rpc-url "$RPC_URL"
 )
-DEPLOY_OUTPUT=$(soroban contract deploy "${DEPLOY_ARGS[@]}" \
-    2>&1)
-DEPLOY_EXIT_CODE=$?
+if DEPLOY_OUTPUT=$(soroban contract deploy "${DEPLOY_ARGS[@]}" 2>&1); then
+    DEPLOY_EXIT_CODE=0
+else
+    DEPLOY_EXIT_CODE=$?
+fi
 
 if [ $DEPLOY_EXIT_CODE -ne 0 ]; then
-    echo -e "${RED}Error: Contract deployment failed${NC}"
-    echo "$DEPLOY_OUTPUT"
+    echo -e "${RED}Error: Contract deployment failed (CLI exit $DEPLOY_EXIT_CODE)${NC}"
+    echo "Raw CLI output is suppressed to avoid exposing RPC credentials. Check the RPC provider, network selection, and deployer funding."
     exit 1
 fi
 
@@ -189,7 +204,6 @@ fi
 if [ ${#CONTRACT_ID} -ne 56 ]; then
     echo -e "${RED}Error: Invalid contract ID format${NC}"
     echo "Expected 56 characters, got: ${#CONTRACT_ID}"
-    echo "Output was: $DEPLOY_OUTPUT"
     exit 1
 fi
 
