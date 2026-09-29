@@ -5,7 +5,7 @@ import { vi } from "vitest";
 let db: InstanceType<typeof Database>;
 vi.mock("./db", () => ({ getDb: () => db }));
 
-const { getStreamStats, getGlobalStats, resetStatsCache } = require("./stats");
+import { getStreamStats, getGlobalStats, resetStatsCache } from "./stats";
 
 function setupDb() {
   db = new Database(":memory:");

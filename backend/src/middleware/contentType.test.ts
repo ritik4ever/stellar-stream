@@ -19,7 +19,7 @@ describe("requireJsonContentType", () => {
   it("returns 415 for POST with missing Content-Type", () => {
     const req = {
       method: "POST",
-      headers: {},
+      headers: { "content-length": "42" },
     } as unknown as Request;
 
     let statusCode = 0;
@@ -46,7 +46,7 @@ describe("requireJsonContentType", () => {
   it("returns 415 for POST with text/plain", () => {
     const req = {
       method: "POST",
-      headers: { "content-type": "text/plain" },
+      headers: { "content-type": "text/plain", "content-length": "42" },
     } as unknown as Request;
 
     let statusCode = 0;
@@ -73,7 +73,7 @@ describe("requireJsonContentType", () => {
   it("returns 415 for PATCH with wrong Content-Type", () => {
     const req = {
       method: "PATCH",
-      headers: { "content-type": "text/html" },
+      headers: { "content-type": "text/html", "content-length": "42" },
     } as unknown as Request;
 
     let statusCode = 0;

@@ -81,17 +81,24 @@ describe("FilterBar URL Sync Integration", () => {
   const originalLocation = window.location;
   const originalHistory = window.history;
 
+  // jsdom exposes `location`/`history` as accessor properties, so they have to
+  // be redefined rather than assigned.
+  const stubWindowProp = (key: "location" | "history", value: unknown) => {
+    Object.defineProperty(window, key, {
+      value,
+      configurable: true,
+      writable: true,
+    });
+  };
+
   beforeEach(() => {
-    // Mock window.location
-    delete (window as any).location;
-    (window as any).location = {
+    stubWindowProp("location", {
       search: "",
       pathname: "/",
       href: "http://localhost/",
-    };
+    });
 
-    // Mock window.history
-    (window as any).history = {
+    stubWindowProp("history", {
       replaceState: vi.fn(),
       pushState: vi.fn(),
       back: vi.fn(),
@@ -99,19 +106,20 @@ describe("FilterBar URL Sync Integration", () => {
       go: vi.fn(),
       length: 1,
       state: null,
-    };
+    });
   });
 
   afterEach(() => {
     // Restore original window.location and window.history
-    (window as any).location = originalLocation;
-    (window as any).history = originalHistory;
+    stubWindowProp("location", originalLocation);
+    stubWindowProp("history", originalHistory);
     cleanup();
     vi.clearAllMocks();
   });
 
-  it("updates URL query param when status filter is changed to 'active' with useUrlFilters enabled", () => {
+  it("updates URL query param when status filter is changed to 'active' with URL sync enabled", () => {
     const handleChange = vi.fn();
+    const setUrlFilters = vi.fn();
     const mockFilters: ListStreamsFilters = {
       status: "",
       q: "",
@@ -120,12 +128,21 @@ describe("FilterBar URL Sync Integration", () => {
       recipient: "",
     };
 
-    render(<FilterBar filters={mockFilters} onChange={handleChange} useUrlFilters={true} />);
+    render(
+      <FilterBar
+        filters={mockFilters}
+        onChange={handleChange}
+        setUrlFilters={setUrlFilters}
+      />
+    );
 
     const statusSelect = screen.getByLabelText(/Status/i);
     fireEvent.change(statusSelect, { target: { value: "active" } });
 
     expect(handleChange).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "active" })
+    );
+    expect(setUrlFilters).toHaveBeenCalledWith(
       expect.objectContaining({ status: "active", page: 1 })
     );
   });
@@ -153,8 +170,9 @@ describe("FilterBar URL Sync Integration", () => {
     );
   });
 
-  it("updates asset param when asset filter changes with useUrlFilters enabled", () => {
+  it("updates asset param when asset filter changes with URL sync enabled", () => {
     const handleChange = vi.fn();
+    const setUrlFilters = vi.fn();
     const mockFilters: ListStreamsFilters = {
       status: "",
       q: "",
@@ -163,18 +181,28 @@ describe("FilterBar URL Sync Integration", () => {
       recipient: "",
     };
 
-    render(<FilterBar filters={mockFilters} onChange={handleChange} useUrlFilters={true} />);
+    render(
+      <FilterBar
+        filters={mockFilters}
+        onChange={handleChange}
+        setUrlFilters={setUrlFilters}
+      />
+    );
 
     const assetInput = screen.getByLabelText(/Asset Code/i);
     fireEvent.change(assetInput, { target: { value: "USDC", name: "asset" } });
 
     expect(handleChange).toHaveBeenCalledWith(
+      expect.objectContaining({ asset: "USDC" })
+    );
+    expect(setUrlFilters).toHaveBeenCalledWith(
       expect.objectContaining({ asset: "USDC", page: 1 })
     );
   });
 
-  it("resets to page 1 when Reset button is clicked with useUrlFilters enabled", () => {
+  it("resets to page 1 when Reset button is clicked with URL sync enabled", () => {
     const handleChange = vi.fn();
+    const setUrlFilters = vi.fn();
     const activeFilters: ListStreamsFilters = {
       status: "active",
       q: "test",
@@ -183,12 +211,25 @@ describe("FilterBar URL Sync Integration", () => {
       recipient: "",
     };
 
-    render(<FilterBar filters={activeFilters} onChange={handleChange} useUrlFilters={true} />);
+    render(
+      <FilterBar
+        filters={activeFilters}
+        onChange={handleChange}
+        setUrlFilters={setUrlFilters}
+      />
+    );
 
     const resetBtn = screen.getByText(/Reset All/i);
     fireEvent.click(resetBtn);
 
     expect(handleChange).toHaveBeenCalledWith({
+      status: "",
+      q: "",
+      asset: "",
+      sender: "",
+      recipient: "",
+    });
+    expect(setUrlFilters).toHaveBeenCalledWith({
       status: "",
       q: "",
       asset: "",
@@ -217,6 +258,7 @@ describe("FilterBar URL Sync Integration", () => {
 
   it("updates q param when search input has 3+ characters", () => {
     const handleChange = vi.fn();
+    const setUrlFilters = vi.fn();
     const mockFilters: ListStreamsFilters = {
       status: "",
       q: "",
@@ -225,12 +267,21 @@ describe("FilterBar URL Sync Integration", () => {
       recipient: "",
     };
 
-    render(<FilterBar filters={mockFilters} onChange={handleChange} useUrlFilters={true} />);
+    render(
+      <FilterBar
+        filters={mockFilters}
+        onChange={handleChange}
+        setUrlFilters={setUrlFilters}
+      />
+    );
 
     const searchInput = screen.getByLabelText(/Search ID \/ Address/i);
     fireEvent.change(searchInput, { target: { value: "abc", name: "q" } });
 
     expect(handleChange).toHaveBeenCalledWith(
+      expect.objectContaining({ q: "abc" })
+    );
+    expect(setUrlFilters).toHaveBeenCalledWith(
       expect.objectContaining({ q: "abc", page: 1 })
     );
   });

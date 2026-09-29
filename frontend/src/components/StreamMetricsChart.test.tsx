@@ -91,10 +91,10 @@ describe("StreamMetricsChart", () => {
 
   it("loading state has aria-busy attribute", () => {
     render(<StreamMetricsChart data={[]} loading={true} />);
-    expect(screen.getByRole("generic", { hidden: true })).toHaveAttribute(
-      "aria-busy",
-      "true",
-    );
+    const loadingState = screen
+      .getByText(/Loading Chart Data/i)
+      .closest(".chart-empty-state");
+    expect(loadingState).toHaveAttribute("aria-busy", "true");
   });
 
   // ── Error state ──────────────────────────────────────────────────────────
@@ -160,9 +160,8 @@ describe("StreamMetricsChart", () => {
 
       await vi.waitFor(() => {
         expect(fetchStats).toHaveBeenCalled();
+        expect(screen.getByTestId("bar-chart")).toBeInTheDocument();
       });
-
-      expect(screen.getByTestId("bar-chart")).toBeInTheDocument();
     });
 
     it("shows retry button on stats error", async () => {

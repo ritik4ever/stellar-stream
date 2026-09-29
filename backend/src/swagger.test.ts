@@ -4,7 +4,7 @@ import { swaggerDocument } from "./swagger";
 
 describe("OpenAPI 3.0 Spec Validation", () => {
   it("should be valid against the OpenAPI 3.0 schema", async () => {
-    const result = await SwaggerParser.validate(swaggerDocument as any);
+    const result = (await SwaggerParser.validate(swaggerDocument as any)) as any;
     expect(result).toBeDefined();
     expect(result.openapi).toBe("3.0.0");
     expect(result.info).toBeDefined();

@@ -36,19 +36,8 @@ const dbMocks = vi.hoisted(() => ({
       }),
     })),
   })),
-  syncFtsIndex: vi.fn(),
 }));
 
-const cacheMocks = vi.hoisted(() => ({
-  initCache: vi.fn(),
-  getCache: vi.fn(() => ({
-    get: vi.fn(),
-    set: vi.fn(),
-    del: vi.fn(),
-    clear: vi.fn(),
-    isConnected: vi.fn(() => true),
-  })),
-}));
 
 const eventHistoryMocks = vi.hoisted(() => ({
   recordEventWithDb: vi.fn((db: any, streamId: string, eventType: string, timestamp: number, actor?: string, amount?: number, metadata?: any) => {

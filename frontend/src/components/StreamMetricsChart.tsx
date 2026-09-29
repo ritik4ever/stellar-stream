@@ -36,7 +36,6 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
   const [refAreaRight, setRefAreaRight] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [stats, setStats] = useState<StreamStats | null>(null);
-  const [statsLoading, setStatsLoading] = useState(true);
   const [statsError, setStatsError] = useState<Error | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startRange: [number, number]; active: boolean } | null>(null);
@@ -52,12 +51,10 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
         const statsData = await fetchStats();
         if (mounted) {
           setStats(statsData);
-          setStatsLoading(false);
         }
       } catch (err) {
         if (mounted) {
           setStatsError(err as Error);
-          setStatsLoading(false);
         }
       }
     }
@@ -73,16 +70,13 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
   }, []);
 
   const handleRetry = () => {
-    setStatsLoading(true);
     setStatsError(null);
     fetchStats()
       .then((statsData) => {
         setStats(statsData);
-        setStatsLoading(false);
       })
       .catch((err) => {
         setStatsError(err as Error);
-        setStatsLoading(false);
       });
   };
 
@@ -200,7 +194,7 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
     pinchRef.current = null;
   };
 
-  if (loading || statsLoading) {
+  if (loading) {
     return (
       <div className="chart-empty-state" aria-live="polite" aria-busy="true">
         <div className="chart-empty-state__content">

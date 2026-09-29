@@ -54,7 +54,6 @@ function queueDelivery({ attempt = 0, maxAttempts = 3, nextRetryAt }: { attempt?
 
 async function drainQueue(maxRounds = 20) {
   for (let round = 0; round < maxRounds; round += 1) {
-    // eslint-disable-next-line no-await-in-loop
     await processWebhookQueue();
     if (getWebhookQueueStats().pending === 0) return round + 1;
   }

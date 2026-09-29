@@ -1,9 +1,10 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
-import { app } from "./index";
+import { app, rateLimiters } from "./index";
 import { initDb, getDb } from "./services/db";
 import { initCache, getCache } from "./services/cache";
-import { Keypair } from "@stellar/stellar-sdk";
+import { Account, Keypair, StrKey, nativeToScVal, xdr } from "@stellar/stellar-sdk";
+import { initSoroban } from "./services/streamStore";
 import jwt from "jsonwebtoken";
 import { getJwtSecret } from "./services/auth";
 import path from "path";
@@ -18,11 +19,18 @@ vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
     ...actual,
     rpc: {
       ...actual.rpc,
-      Server: vi.fn().mockImplementation(() => ({
-        getLatestLedger: mockGetLatestLedger,
-        simulateTransaction: mockSimulateTransaction,
-        prepareTransaction: vi.fn().mockImplementation((tx) => tx),
-      })),
+      // NOTE: the implementation must be a regular function so `new rpc.Server()`
+      // works — arrow functions are not constructable under `new`.
+      Server: vi.fn().mockImplementation(function () {
+        return {
+          getLatestLedger: mockGetLatestLedger,
+          simulateTransaction: mockSimulateTransaction,
+          prepareTransaction: vi.fn().mockImplementation((tx: unknown) => tx),
+          getAccount: vi.fn().mockResolvedValue(
+            new Account("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "1"),
+          ),
+        };
+      }),
       Api: {
         ...actual.rpc.Api,
         isSimulationSuccess: (response: any) => response.kind === "success",
@@ -34,6 +42,29 @@ vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
 
 // Use a separate test database
 const TEST_DB_PATH = path.join(__dirname, "..", "data", "test-streams.db");
+
+/** A valid (well-known) contract address used by the Soroban-backed routes. */
+const TEST_CONTRACT_ID = StrKey.encodeContract(Buffer.alloc(32));
+
+/** Builds an ScVal map so simulated contract returns parse like the real RPC. */
+function scvMap(values: Record<string, unknown>): xdr.ScVal {
+  return xdr.ScVal.scvMap(
+    Object.entries(values).map(
+      ([key, value]) =>
+        new xdr.ScMapEntry({
+          key: nativeToScVal(key, { type: "string" }),
+          val: nativeToScVal(value as any),
+        }),
+    ),
+  );
+}
+
+/** Resets the per-client counters the given limiter keeps for local requests. */
+function resetLimiter(limiter: { resetKey: (key: string) => void }): void {
+  for (const ip of ["127.0.0.1", "::ffff:127.0.0.1", "::1"]) {
+    limiter.resetKey(ip);
+  }
+}
 
 describe("Backend Integration Tests", () => {
   beforeAll(() => {
@@ -743,20 +774,29 @@ describe("Backend Integration Tests", () => {
     });
 
     describe("GET /api/streams/:id/claimable", () => {
-      beforeEach(() => {
+      beforeEach(async () => {
         vi.clearAllMocks();
+        // The route simulates against Soroban, so it needs a contract id and
+        // an initialised RPC client for these cases.
+        process.env.CONTRACT_ID = TEST_CONTRACT_ID;
+        await initSoroban();
+      });
+
+      afterEach(() => {
+        delete process.env.CONTRACT_ID;
       });
 
       it("should return 200 and the claimable amount from Soroban simulation", async () => {
         mockGetLatestLedger.mockResolvedValue({
           sequence: 12345,
           closeTime: "1716812160",
+          timestamp: "1716812160",
         });
 
         mockSimulateTransaction.mockResolvedValue({
           kind: "success",
           result: {
-            retval: 450,
+            retval: nativeToScVal(450, { type: "u64" }),
           },
         });
 
@@ -781,6 +821,7 @@ describe("Backend Integration Tests", () => {
         mockGetLatestLedger.mockResolvedValue({
           sequence: 12345,
           closeTime: "1716812160",
+          timestamp: "1716812160",
         });
 
         const response = await request(app).get(`/api/streams/${mockStream.id}/claimable`);
@@ -803,6 +844,7 @@ describe("Backend Integration Tests", () => {
         mockGetLatestLedger.mockResolvedValue({
           sequence: 12345,
           closeTime: "1716812160",
+          timestamp: "1716812160",
         });
 
         const response = await request(app).get(`/api/streams/${mockStream.id}/claimable`);
@@ -836,20 +878,30 @@ describe("Backend Integration Tests", () => {
         mockGetLatestLedger.mockResolvedValue({
           sequence: 12345,
           closeTime: "1716812160",
+          timestamp: "1716812160",
         });
         mockSimulateTransaction.mockResolvedValue({
           kind: "success",
-          result: { retval: 10 },
+          result: { retval: nativeToScVal(10, { type: "u64" }) },
         });
 
-        for (let i = 0; i < 31; i++) {
-          const response = await request(app).get(`/api/streams/${mockStream.id}/claimable`);
-          if (i < 30) {
-            expect(response.status).toBe(200);
-          } else {
-            expect(response.status).toBe(429);
-            expect(response.body.code).toBe("RATE_LIMIT_EXCEEDED");
+        const originalLimit = process.env.CLAIMABLE_RATE_LIMIT;
+        process.env.CLAIMABLE_RATE_LIMIT = "30";
+        resetLimiter(rateLimiters.claimableLimiter);
+
+        try {
+          for (let i = 0; i < 31; i++) {
+            const response = await request(app).get(`/api/streams/${mockStream.id}/claimable`);
+            if (i < 30) {
+              expect(response.status).toBe(200);
+            } else {
+              expect(response.status).toBe(429);
+              expect(response.body.code).toBe("RATE_LIMIT_EXCEEDED");
+            }
           }
+        } finally {
+          process.env.CLAIMABLE_RATE_LIMIT = originalLimit;
+          resetLimiter(rateLimiters.claimableLimiter);
         }
       });
     });
@@ -1312,10 +1364,10 @@ describe("Backend Integration Tests", () => {
       let senderToken: string;
       let testCounter = 0;
 
-      beforeEach(() => {
+      beforeEach(async () => {
         senderKeypair = Keypair.random();
         const now = Math.floor(Date.now() / 1000);
-        reconcileStreamId = `200-${testCounter++}`;
+        reconcileStreamId = String(2000 + testCounter++);
 
         const db = getDb();
         db.prepare(`
@@ -1337,6 +1389,14 @@ describe("Backend Integration Tests", () => {
           getJwtSecret(),
           { expiresIn: "1h" },
         );
+
+        // Reconciling reads on-chain state, so the RPC client must be live.
+        process.env.CONTRACT_ID = TEST_CONTRACT_ID;
+        await initSoroban();
+      });
+
+      afterEach(() => {
+        delete process.env.CONTRACT_ID;
       });
 
       it("should reconcile stream with on-chain state and update SQLite", async () => {
@@ -1344,7 +1404,7 @@ describe("Backend Integration Tests", () => {
         mockSimulateTransaction.mockResolvedValue({
           kind: "success",
           result: {
-            retval: {
+            retval: scvMap({
               sender: senderKeypair.publicKey(),
               recipient: Keypair.random().publicKey(),
               token: "USDC",
@@ -1356,7 +1416,7 @@ describe("Backend Integration Tests", () => {
               paused_at: null,
               paused_duration: 0,
               claimed_amount: 500,
-            },
+            }),
           },
         });
 
@@ -1393,7 +1453,7 @@ describe("Backend Integration Tests", () => {
         mockSimulateTransaction.mockResolvedValue({
           kind: "success",
           result: {
-            retval: {
+            retval: scvMap({
               sender: senderKeypair.publicKey(),
               recipient: Keypair.random().publicKey(),
               token: "USDC",
@@ -1405,7 +1465,7 @@ describe("Backend Integration Tests", () => {
               paused_at: null,
               paused_duration: 0,
               claimed_amount: 0,
-            },
+            }),
           },
         });
 
@@ -1483,7 +1543,7 @@ describe("Backend Integration Tests", () => {
 
         // Create a stream that has already completed
         const completedStream = {
-          id: "completed-test",
+          id: "87531",
           sender: "GC7Y4M77LNYKYF4K4V5A737W3G3L3T7XQWZJZL4R64Z43W3T7XZQK2L4",
           recipient: "GB4Z3ZK3X24Z3T7XZQK2L4R64Z43W3T7XZQK2L4R64Z43W3T7XZQK2L4",
           asset_code: "USDC",
@@ -1877,21 +1937,30 @@ describe("Backend Integration Tests", () => {
         durationSeconds: 3600,
       };
 
-      // Make 11 requests (limit is 10 per minute)
-      for (let i = 0; i < 11; i++) {
-        const response = await request(app)
-          .post("/api/streams")
-          .send(payload);
+      const originalLimit = process.env.MUTATION_RATE_LIMIT;
+      process.env.MUTATION_RATE_LIMIT = "10";
+      resetLimiter(rateLimiters.mutationLimiter);
 
-        if (i < 10) {
-          // First 10 should succeed or fail with auth error (no token), not rate limit
-          expect([200, 201, 401, 400]).toContain(response.status);
-        } else {
-          // 11th should be rate limited
-          expect(response.status).toBe(429);
-          expect(response.body.code).toBe("RATE_LIMIT_EXCEEDED");
-          expect(response.headers["retry-after"]).toBeDefined();
+      try {
+        // Make 11 requests (limit is 10 per minute)
+        for (let i = 0; i < 11; i++) {
+          const response = await request(app)
+            .post("/api/streams")
+            .send(payload);
+
+          if (i < 10) {
+            // First 10 should succeed or fail with auth error (no token), not rate limit
+            expect([200, 201, 401, 400]).toContain(response.status);
+          } else {
+            // 11th should be rate limited
+            expect(response.status).toBe(429);
+            expect(response.body.code).toBe("RATE_LIMIT_EXCEEDED");
+            expect(response.headers["retry-after"]).toBeDefined();
+          }
         }
+      } finally {
+        process.env.MUTATION_RATE_LIMIT = originalLimit;
+        resetLimiter(rateLimiters.mutationLimiter);
       }
     });
 
@@ -1907,21 +1976,30 @@ describe("Backend Integration Tests", () => {
         durationSeconds: 3600,
       };
 
-      // Make requests to hit the limit
-      for (let i = 0; i < 11; i++) {
-        await request(app).post("/api/streams").send(payload);
+      const originalLimit = process.env.MUTATION_RATE_LIMIT;
+      process.env.MUTATION_RATE_LIMIT = "10";
+      resetLimiter(rateLimiters.mutationLimiter);
+
+      try {
+        // Make requests to hit the limit
+        for (let i = 0; i < 11; i++) {
+          await request(app).post("/api/streams").send(payload);
+        }
+
+        // 11th request should have Retry-After header
+        const response = await request(app)
+          .post("/api/streams")
+          .send(payload);
+
+        expect(response.status).toBe(429);
+        expect(response.headers["retry-after"]).toBeDefined();
+        const retryAfter = parseInt(response.headers["retry-after"], 10);
+        expect(retryAfter).toBeGreaterThan(0);
+        expect(retryAfter).toBeLessThanOrEqual(60);
+      } finally {
+        process.env.MUTATION_RATE_LIMIT = originalLimit;
+        resetLimiter(rateLimiters.mutationLimiter);
       }
-
-      // 11th request should have Retry-After header
-      const response = await request(app)
-        .post("/api/streams")
-        .send(payload);
-
-      expect(response.status).toBe(429);
-      expect(response.headers["retry-after"]).toBeDefined();
-      const retryAfter = parseInt(response.headers["retry-after"], 10);
-      expect(retryAfter).toBeGreaterThan(0);
-      expect(retryAfter).toBeLessThanOrEqual(60);
     });
   });
 });

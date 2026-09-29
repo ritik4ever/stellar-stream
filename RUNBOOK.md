@@ -7,16 +7,19 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 1. [Reset SQLite Database](#reset-sqlite-database)
 2. [SQLite Restore from Backup](#sqlite-restore-from-backup)
 3. [Rotate JWT Secret](#rotate-jwt-secret)
-4. [Force Indexer Reconcile](#force-indexer-reconcile)
-5. [Requeue Dead-Letter Webhooks](#requeue-dead-letter-webhooks)
-6. [Archive Old Streams Manually](#archive-old-streams-manually)
-7. [Indexer Falls Behind](#indexer-falls-behind)
-8. [Indexer Monitoring Outcome Signal](#indexer-monitoring-outcome-signal)
-9. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
-10. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
-11. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
-12. [Contract Invocation Timeout](#contract-invocation-timeout)
-13. [Docker Compose Startup Failure](#docker-compose-startup-failure)
+4. [Rotate Server Signing Key](#rotate-server-signing-key)
+5. [Old Credential During Rollout](#old-credential-during-rollout)
+6. [Verify Secrets Rotation (Smoke Check)](#verify-secrets-rotation-smoke-check)
+7. [Force Indexer Reconcile](#force-indexer-reconcile)
+8. [Requeue Dead-Letter Webhooks](#requeue-dead-letter-webhooks)
+9. [Archive Old Streams Manually](#archive-old-streams-manually)
+10. [Indexer Falls Behind](#indexer-falls-behind)
+11. [Indexer Monitoring Outcome Signal](#indexer-monitoring-outcome-signal)
+12. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
+13. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
+14. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
+15. [Contract Invocation Timeout](#contract-invocation-timeout)
+16. [Docker Compose Startup Failure](#docker-compose-startup-failure)
 
 ---
 
@@ -256,6 +259,11 @@ To verify the rotation works without undocumented local state:
 3. Issue a new challenge via `GET /api/auth/challenge` and complete auth flow
 4. Verify `POST /api/auth/token` returns a valid JWT signed with the new secret.
 
+See also: [Old Credential During Rollout](#old-credential-during-rollout) for what
+happens to tokens issued before the restart, and
+[Verify Secrets Rotation (Smoke Check)](#verify-secrets-rotation-smoke-check) for a
+repeatable PASS/FAIL verification.
+
 ---
 
 ### Rotate Server Signing Key
@@ -290,6 +298,123 @@ To verify the rotation works without undocumented local state:
 
 **Note on Combined Rotation:**
 Both `JWT_SECRET` and `SERVER_SIGNING_KEY` can be rotated simultaneously by updating both environment variables and restarting once. The order of operations does not matter as both are loaded at startup.
+
+See also: [Old Credential During Rollout](#old-credential-during-rollout) and
+[Verify Secrets Rotation (Smoke Check)](#verify-secrets-rotation-smoke-check).
+
+---
+
+### Old Credential During Rollout
+
+`JWT_SECRET` and `SERVER_SIGNING_KEY` are read once, when the process starts
+(`backend/src/services/auth.ts`). The restart **is** the cutover: there is no
+grace period, no dual-credential acceptance, and no retry that can make an old
+credential valid again after the new process is up.
+
+Confirmed behavior — each cell is asserted by the smoke check below:
+
+| Credential presented to… | Instance still on the old credentials | Instance restarted with the new credentials |
+|---|---|---|
+| JWT issued before the rotation | accepted | **rejected — `401 invalid_token`** |
+| JWT issued after the rotation | **rejected — `401 invalid_token`** | accepted |
+| Challenge signed by the old server key | accepted | **rejected — `Challenge verification failed`** |
+| Challenge signed by the new server key | **rejected** | accepted |
+
+**What this means for a rolling deploy:**
+
+1. **The fleet is split for the length of the rollout.** While some instances have
+   restarted and others have not, the same client request can succeed or fail with
+   `401` depending on which instance answers. A burst of `401`s during the rollout is
+   the expected symptom, not a new failure mode.
+2. **Clients re-authenticate once, after the rollout.** Existing sessions cannot
+   survive the rotation: after cutover every client runs the SEP-10 flow again
+   (`GET /api/auth/challenge` → sign → `POST /api/auth/token`) and receives a JWT
+   signed with the new secret.
+3. **Never leave a mixed fleet running.** If the rollout stalls part-way, roll the
+   restarted instances back to the previous credentials rather than operating with
+   two credential sets; then retry the rollout. Both credentials are updated in a
+   single restart, so a half-applied environment file is a misconfiguration, not a
+   valid intermediate state.
+4. **Cutover is complete when the old credential is rejected everywhere.** Record
+   the time from "restart issued" to "old credential rejected" — the smoke check
+   prints it as `cutover time` and fails if it exceeds the documented budget.
+
+**Rollback:** restoring the previous `JWT_SECRET` / `SERVER_SIGNING_KEY` values and
+restarting returns the service to its previous behavior. Rotation touches no
+database state, so no data migration or restore is required.
+
+---
+
+### Verify Secrets Rotation (Smoke Check)
+
+A repeatable, one-command verification of both rotation procedures above,
+including the rollout window. It boots the real API twice — once with the current
+credentials and once with the rotated credentials — so it exercises the same
+restart an operator performs, and it reports a single PASS/FAIL verdict.
+
+**Run it:**
+
+```bash
+cd backend && npm run smoke:rotation
+# from the repository root, equivalently:
+npm run test:secrets-rotation
+```
+
+One-time setup: `cd backend && npm install`. The check needs no running service,
+no network access and no real credential — the secrets are throwaway values
+generated for the run.
+
+**What it verifies:**
+
+| Phase | Checks |
+| --- | --- |
+| 1 · baseline (old credentials) | old JWT signature verifies with the old secret; old JWT accepted by the running instance; challenge carries the old server key's signature; auth flow issues a JWT |
+| 2 · rollout window (old + new instances overlap) | rotated instance rejects the old JWT and the old-signed challenge; the not-yet-rotated instance rejects a JWT issued after rotation; new challenges are signed with the new server key |
+| 3 · cutover (rotated instance only) | cutover time measured and within budget (30 s); old credential still rejected; new JWT verifies with the new secret and is rejected by the old one; challenge verifies against the new server key only; auth flow issues a JWT signed with the new secret |
+
+**Sample output** (exit code `0`):
+
+```text
+Secrets rotation smoke check (RUNBOOK.md → Rotate JWT Secret / Rotate Server Signing Key)
+──────────────────────────────────────────────────────────────────────────
+  phase 1 · baseline (old credentials)
+    PASS  old JWT signature verifies with the old secret
+    PASS  old JWT is accepted by the running instance            status 200
+    PASS  challenge is signed by the old server signing key
+    PASS  auth flow issues a JWT signed with the old secret
+  phase 2 · rollout window (old + new instances)
+    PASS  rotated instance rejects the old JWT                   status 401
+    PASS  not-yet-rotated instance rejects a JWT issued after rotation  status 401
+    PASS  rotated instance rejects a challenge signed by the old server key
+    PASS  rotated instance signs new challenges with the new server key
+  phase 3 · cutover (rotated instance only)
+    PASS  cutover completed within the documented budget         31 ms
+    PASS  old JWT is still rejected after cutover                status 401
+    PASS  new JWT signature verifies with the new secret and is rejected by the old one
+    PASS  new JWT is accepted by the rotated instance            status 200
+    PASS  challenge verifies against the new server signing key only
+    PASS  auth flow issues a JWT signed with the new secret
+──────────────────────────────────────────────────────────────────────────
+  cutover time: 31 ms (budget 30000 ms)
+  RESULT: PASS (14/14 checks)
+```
+
+Any failed check is listed under `RESULT: FAIL (n/14 checks)` and the command
+exits non-zero, so it can gate a release or a CI job. The report contains only
+timings, HTTP statuses and pass/fail — never a secret value — so it is safe to
+paste into a pull request or an incident channel. The same file runs with the
+rest of the suite in CI (`backend/src/services/secrets-rotation.smoke.test.ts`).
+
+**Operator checklist for a live rotation:**
+
+| # | Step | Expected result |
+| --- | --- | --- |
+| 1 | Capture a token from before the rotation and call a protected endpoint with it | `200` (or non-`401`) |
+| 2 | Apply the new `JWT_SECRET` / `SERVER_SIGNING_KEY` and restart | Startup log confirms the credentials are configured |
+| 3 | Repeat step 1 against the restarted instance | `401 invalid_token` — old credential is dead |
+| 4 | Record the time from restart to step 3 | Matches the `cutover time` budget in the smoke check |
+| 5 | Run the SEP-10 flow and verify the returned JWT with the new secret | Signature verifies with the new secret and is rejected by the old one |
+| 6 | Run `npm run smoke:rotation` from a checkout | `RESULT: PASS (14/14 checks)`, exit code `0` |
 
 ---
 

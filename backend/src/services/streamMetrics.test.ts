@@ -1,11 +1,19 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 import Database from "better-sqlite3";
 import { vi } from "vitest";
 
 let db: InstanceType<typeof Database>;
 vi.mock("./db", () => ({ getDb: () => db }));
 
-const { getStreamMetrics, resetStreamMetricsCache } = await import("./streamMetrics");
+let getStreamMetrics: typeof import("./streamMetrics").getStreamMetrics;
+let resetStreamMetricsCache: typeof import("./streamMetrics").resetStreamMetricsCache;
+
+// Loaded lazily so the mocked ./db binding exists before the module evaluates.
+beforeAll(async () => {
+  const mod = await import("./streamMetrics");
+  getStreamMetrics = mod.getStreamMetrics;
+  resetStreamMetricsCache = mod.resetStreamMetricsCache;
+});
 
 function setupDb() {
   db = new Database(":memory:");

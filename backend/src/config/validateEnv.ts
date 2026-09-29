@@ -77,6 +77,14 @@ const positiveIntegerSchema = z
     message: "must be a positive integer",
   });
 
+// Webhook dead-letter pruning interval validation
+const deadLetterPruneIntervalSchema = z
+  .string()
+  .transform((val: string) => parseInt(val, 10))
+  .refine((val: number) => !isNaN(val) && val >= 60000, {
+    message: "must be a valid number >= 60000 (minimum 1 minute)",
+  });
+
 // Admin API key validation
 const adminApiKeySchema = z
   .string()
@@ -113,6 +121,9 @@ const envSchema = z.object({
   WEBHOOK_MONITOR_DEAD_LETTER_ALERT_THRESHOLD: positiveIntegerSchema.optional().default(1),
   INDEXER_MONITOR_MAX_LEDGER_LAG: nonNegativeIntegerSchema.optional().default(100),
   INDEXER_MONITOR_MAX_CONSECUTIVE_ERRORS: positiveIntegerSchema.optional().default(5),
+  WEBHOOK_DEAD_LETTER_PRUNE_INTERVAL_MS: deadLetterPruneIntervalSchema
+    .optional()
+    .default(86400000),
   ALLOWED_ORIGINS: z.string().optional(),
 });
 
@@ -140,6 +151,7 @@ export interface ValidatedConfig {
   webhookMonitorDeadLetterAlertThreshold: number;
   indexerMonitorMaxLedgerLag: number;
   indexerMonitorMaxConsecutiveErrors: number;
+  webhookDeadLetterPruneIntervalMs: number;
   adminApiKey: string | null;
   allowedOrigins: string | undefined;
 }
@@ -360,6 +372,7 @@ export function validateEnv(): ValidatedConfig {
     webhookMonitorDeadLetterAlertThreshold: env.WEBHOOK_MONITOR_DEAD_LETTER_ALERT_THRESHOLD,
     indexerMonitorMaxLedgerLag: env.INDEXER_MONITOR_MAX_LEDGER_LAG,
     indexerMonitorMaxConsecutiveErrors: env.INDEXER_MONITOR_MAX_CONSECUTIVE_ERRORS,
+    webhookDeadLetterPruneIntervalMs: env.WEBHOOK_DEAD_LETTER_PRUNE_INTERVAL_MS,
     adminApiKey,
     allowedOrigins: env.ALLOWED_ORIGINS,
   };

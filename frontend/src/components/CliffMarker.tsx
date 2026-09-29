@@ -8,14 +8,10 @@ interface CliffMarkerProps {
 }
 
 export function CliffMarker({ startAt, cliffSeconds, durationSeconds, now }: CliffMarkerProps) {
-  if (cliffSeconds === 0 || cliffSeconds === undefined) {
-    return null;
-  }
+  const hasCliff = !!cliffSeconds;
+  const cliffTimestamp = startAt + (cliffSeconds ?? 0);
 
-  const cliffTimestamp = startAt + cliffSeconds;
-  const cliffPercentage = (cliffSeconds / durationSeconds) * 100;
-  const hasReachedCliff = now >= cliffTimestamp;
-
+  // Hooks run unconditionally — the early return below must not skip them.
   const cliffDate = useMemo(() => {
     return new Date(cliffTimestamp * 1000).toLocaleDateString("en-US", {
       month: "short",
@@ -23,6 +19,13 @@ export function CliffMarker({ startAt, cliffSeconds, durationSeconds, now }: Cli
       year: "numeric",
     });
   }, [cliffTimestamp]);
+
+  if (!hasCliff) {
+    return null;
+  }
+
+  const cliffPercentage = (cliffSeconds / durationSeconds) * 100;
+  const hasReachedCliff = now >= cliffTimestamp;
 
   const cliffDaysFromStart = Math.ceil(cliffSeconds / (24 * 3600));
 

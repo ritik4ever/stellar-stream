@@ -220,6 +220,7 @@ Tests use the Express app directly (no port binding), so port conflicts should n
 Potential additions to the test suite:
 - [ ] Authentication flow tests
 - [x] Webhook delivery tests (see Webhook Monitoring Smoke Check)
+- [x] Secrets rotation verification (see Secrets Rotation Smoke Check)
 - [ ] Concurrent request handling
 - [ ] Performance benchmarks
 - [ ] Load testing
@@ -255,3 +256,42 @@ assumes — investigate before trusting the webhook health signal in production.
 
 The check prints only counts, never payloads, stream IDs, or the destination
 URL, so its output is safe to keep in a CI log.
+
+## Secrets Rotation Smoke Check
+
+`src/services/secrets-rotation.smoke.test.ts` is a repeatable smoke check for the
+secrets rotation procedures documented in
+[../RUNBOOK.md](../RUNBOOK.md#verify-secrets-rotation-smoke-check). It boots the
+real Express app twice — once with the current `JWT_SECRET` /
+`SERVER_SIGNING_KEY`, once with the rotated credentials — so the run reproduces
+the restart an operator performs, including the window where old and new
+instances overlap during a rolling deploy.
+
+```bash
+cd backend
+npm run smoke:rotation
+# from the repository root: npm run test:secrets-rotation
+```
+
+No running service, no network access and no real credential are required: the
+secrets are throwaway values generated for the run, and each instance uses its
+own temporary SQLite file.
+
+### Checklist
+
+Run this before releasing a change to `auth.ts`, the JWT/challenge routes, or a
+change to the documented rotation procedure in `RUNBOOK.md`.
+
+| # | Scenario | What to confirm | Expected result |
+| --- | --- | --- | --- |
+| 1 | Baseline | Old credentials before rotation | Old JWT verifies and is accepted; the challenge carries the old server key's signature |
+| 2 | Rollout window — old credential | Token issued before rotation sent to the rotated instance | `401 invalid_token` |
+| 3 | Rollout window — new credential | Token issued after rotation sent to the not-yet-rotated instance | `401 invalid_token` (a mixed fleet cannot share sessions) |
+| 4 | Rollout window — old challenge | Challenge signed by the old server key sent to the rotated instance | Rejected with `Challenge verification failed` |
+| 5 | Cutover time | Restart until the old credential is rejected | Printed as `cutover time`, within the 30 s budget |
+| 6 | Signature cutover | New JWT and new challenge verified against both credential sets | Verify with the new secret/key succeeds, verification with the old one fails |
+| 7 | Verdict | Overall result | `RESULT: PASS (14/14 checks)`, exit code `0` |
+
+A red run means rotation no longer behaves the way `RUNBOOK.md` documents —
+fix that before trusting the procedure in production. The report contains only
+timings, HTTP statuses and pass/fail, so its output is safe to keep in a CI log.

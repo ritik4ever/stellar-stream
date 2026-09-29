@@ -10,6 +10,7 @@
     "verify:dependencies": "node scripts/verify-dependencies.mjs",
     "compose:up": "bash scripts/compose-up.sh",
     "test:compose-up": "bash scripts/compose-up.test.sh",
+    "test:secrets-rotation": "cd backend && npm run smoke:rotation",
     "build": "cd backend && npm run build && cd ../frontend && npm run build",
     "deploy:contract": "./scripts/deploy.sh",
     "gen:bindings": "./scripts/generate-contract-bindings.sh",

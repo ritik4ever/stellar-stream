@@ -56,6 +56,8 @@ export interface StreamRecord {
   pausedDuration: number;
   cliffSeconds: number;
   metadata?: Record<string, string> | null;
+  /** Set when the stream has been soft-deleted; absent while it is live. */
+  archivedAt?: number;
 }
 
 export interface StreamProgress {
@@ -123,6 +125,7 @@ function rowToRecord(row: StreamRow): StreamRecord {
     pausedDuration: row.paused_duration ?? 0,
     cliffSeconds: row.cliff_seconds ?? 0,
     metadata,
+    archivedAt: row.archived_at ?? undefined,
   };
 }
 
@@ -161,7 +164,7 @@ function upsertStream(record: StreamRecord): void {
     canceledAt: record.canceledAt ?? null,
     completedAt: record.completedAt ?? null,
     refundedAmount: record.refundedAmount ?? null,
-    archivedAt: null,
+    archivedAt: record.archivedAt ?? null,
     pausedAt: record.pausedAt ?? null,
     pausedDuration: record.pausedDuration ?? 0,
     cliffSeconds: record.cliffSeconds ?? 0,
@@ -448,8 +451,15 @@ export function calculateProgress(
   stream: StreamRecord,
   at = nowInSeconds(),
 ): StreamProgress {
-  const effectiveAt =
-    stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
+  // Vesting stops when the stream is paused or canceled: anything after those
+  // points is no longer claimable by the recipient.
+  let effectiveAt = at;
+  if (stream.pausedAt !== undefined) {
+    effectiveAt = Math.min(effectiveAt, stream.pausedAt);
+  }
+  if (stream.canceledAt !== undefined) {
+    effectiveAt = Math.min(effectiveAt, stream.canceledAt);
+  }
 
   const elapsed = Math.max(0, Math.max(0, effectiveAt - stream.startAt) - stream.pausedDuration);
   const ratio = stream.durationSeconds <= 0 ? 1 : Math.min(1, elapsed / stream.durationSeconds);
@@ -927,7 +937,7 @@ export function refreshStreamStatuses(): number {
     SELECT * FROM streams 
     WHERE canceled_at IS NULL AND completed_at IS NULL AND paused_at IS NULL
       AND (start_at + duration_seconds) <= ?
-  `).all() as StreamRow[];
+  `).all(now) as StreamRow[];
 
   const result = db.prepare(`
     UPDATE streams SET completed_at = ?

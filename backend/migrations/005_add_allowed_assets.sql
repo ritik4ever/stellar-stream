@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS allowed_assets (
+  code TEXT PRIMARY KEY
+);
