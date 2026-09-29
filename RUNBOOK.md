@@ -673,7 +673,7 @@ Before starting any container, the script reads `backend/.env` (without sourcing
 | `CONTRACT_ID` + `SERVER_PRIVATE_KEY` present, each exactly 56 characters starting with `C` / `S` | Required by the backend unless `SOROBAN_DISABLED=true`; the `.env.example` placeholders are deliberately invalid |
 | `PORT` (when set) matches the Compose backend port (`3001`) | The container healthcheck and published port in `docker-compose.yml` are fixed, so any other `PORT` makes the backend stay `unhealthy` and the frontend never starts |
 | `RPC_URL`, `SOROBAN_RPC_URL`, `WEBHOOK_DESTINATION_URL` (when set) are `http(s)://` URLs | The backend rejects malformed URLs at startup |
-| `ALLOWED_ASSETS` (when set) lists at least one code | The backend rejects an empty allowlist at startup |
+| `STELLAR_NETWORK` (when set) is `testnet` or `mainnet`/`public`, and the well-known `RPC_URL`/`SOROBAN_RPC_URL` endpoints and `NETWORK_PASSPHRASE` belong to the selected network | The backend refuses to start on a testnet/mainnet mismatch (`network configuration mismatch`, exit 1), so the stack would crash-loop; the preflight catches it before anything starts |
 
 A `DB_PATH` outside the persisted `/app/data` volume is a **warning**, not a failure: the stack still starts, but the SQLite file is recreated on every container start (a fresh database each time). Use the default `/app/data/streams.db` to persist data across restarts.
 
@@ -696,6 +696,8 @@ docker compose logs --tail 50 backend
 | `Soroban configuration incomplete` | Set a valid `CONTRACT_ID` and `SERVER_PRIVATE_KEY`, or `SOROBAN_DISABLED=true` for local runs |
 | `CONTRACT_ID is invalid` / `SERVER_PRIVATE_KEY is invalid` | The placeholder keys from `.env.example` are not valid. Replace them or set `SOROBAN_DISABLED=true` |
 | `PORT=... does not match the Compose backend port` | Remove `PORT` from `backend/.env` (default `3001`) or update `docker-compose.yml` consistently |
+| `STELLAR_NETWORK must be "testnet" or "mainnet"` | Use `testnet` (default) or `mainnet` (aliases `public`, `main`) in `backend/.env` |
+| `points at a testnet endpoint but STELLAR_NETWORK=mainnet` (or the reverse) | Align `STELLAR_NETWORK`, `RPC_URL`/`SOROBAN_RPC_URL`, and `NETWORK_PASSPHRASE` with the network the contract was deployed to (see `DEPLOYMENT.md`, "Choose the Network First") |
 | `EADDRINUSE` | Another process holds port 3001: `lsof -i :3001` |
 
 The preflight rows above are reported by `npm run compose:up` before anything is started; the `EADDRINUSE` row is only visible after start (or when running `docker compose up` directly).

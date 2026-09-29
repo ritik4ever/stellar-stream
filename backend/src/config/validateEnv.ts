@@ -23,6 +23,141 @@ const stellarSecretKeySchema = z
 // URL validation
 const urlSchema = z.string().url("must be a valid URL");
 
+// ---------------------------------------------------------------------------
+// Stellar network selection (issue #1205)
+//
+// STELLAR_NETWORK chooses a network profile: "testnet" (default) or "mainnet"
+// (aliases: "public", "main"). Each profile carries the well-known public
+// endpoints so the other checks can tell a testnet RPC URL from a mainnet one
+// and fail fast on a mismatch instead of surfacing later as signing or lookup
+// failures on-chain. See DEPLOYMENT.md, "Network selection".
+// ---------------------------------------------------------------------------
+const NETWORK_PROFILES = {
+  testnet: {
+    rpcUrl: "https://soroban-testnet.stellar.org:443",
+    networkPassphrase: "Test SDF Network ; September 2015",
+  },
+  mainnet: {
+    rpcUrl: "https://soroban-rpc.stellar.org:443",
+    networkPassphrase: "Public Global Stellar Network ; September 2015",
+  },
+} as const;
+
+export type StellarNetworkName = keyof typeof NETWORK_PROFILES;
+
+const MAINNET_ALIASES = new Set(["mainnet", "public", "main"]);
+const TESTNET_ALIASES = new Set(["testnet", "test"]);
+
+/**
+ * Resolves the Stellar network before the legacy env-var mapping in
+ * validateEnv() overwrites process.env.STELLAR_NETWORK with the passphrase
+ * (documented fallback: STELLAR_NETWORK falls back to NETWORK_PASSPHRASE).
+ */
+function resolveStellarNetwork(): { name: StellarNetworkName; source: string } {
+  const rawValue = process.env.STELLAR_NETWORK?.trim();
+  if (rawValue) {
+    // Tolerate re-entry: the legacy mapping below copies NETWORK_PASSPHRASE into
+    // STELLAR_NETWORK when it was unset, so a passphrase in STELLAR_NETWORK is a
+    // valid network signal, not a typo.
+    if (rawValue === NETWORK_PROFILES.testnet.networkPassphrase) {
+      return { name: "testnet", source: "NETWORK_PASSPHRASE" };
+    }
+    if (rawValue === NETWORK_PROFILES.mainnet.networkPassphrase) {
+      return { name: "mainnet", source: "NETWORK_PASSPHRASE" };
+    }
+    const raw = rawValue.toLowerCase();
+    if (TESTNET_ALIASES.has(raw)) {
+      return { name: "testnet", source: "STELLAR_NETWORK" };
+    }
+    if (MAINNET_ALIASES.has(raw)) {
+      return { name: "mainnet", source: "STELLAR_NETWORK" };
+    }
+    logger.error({ stellarNetwork: process.env.STELLAR_NETWORK }, "STELLAR_NETWORK validation failed");
+    logger.error('STELLAR_NETWORK must be "testnet" or "mainnet" (aliases: "public", "main")');
+    process.exit(1);
+    throw new Error("Environment validation failed");
+  }
+  if (process.env.NETWORK_PASSPHRASE === NETWORK_PROFILES.mainnet.networkPassphrase) {
+    return { name: "mainnet", source: "NETWORK_PASSPHRASE" };
+  }
+  return { name: "testnet", source: "default" };
+}
+
+/**
+ * Cross-checks the selected network against the endpoints and passphrase that
+ * are actually configured, so a testnet/mainnet mismatch fails at startup
+ * instead of being discovered on-chain.
+ *
+ * Hard failures (exit 1):
+ *  - mainnet selected but a testnet RPC endpoint is configured (or vice versa)
+ *  - the well-known passphrase of the opposite network is configured
+ *
+ * Warnings (startup continues):
+ *  - mainnet selected with no RPC_URL (defaults to the testnet endpoint)
+ *  - mainnet selected but ADMIN_API_KEY / JWT_SECRET are unset
+ *
+ * Custom passphrases (local standalone nodes, futurenet) are allowed: only the
+ * well-known opposite-network passphrase is treated as a misconfiguration.
+ */
+function validateNetworkConsistency(network: StellarNetworkName): void {
+  const profile = NETWORK_PROFILES[network];
+  const opposite: StellarNetworkName = network === "mainnet" ? "testnet" : "mainnet";
+  const oppositeProfile = NETWORK_PROFILES[opposite];
+
+  const rpcUrl = process.env.RPC_URL || "";
+  const explicitRpc = rpcUrl.length > 0;
+
+  // Detect which public network a configured RPC endpoint belongs to.
+  const rpcTargetsMainnet =
+    explicitRpc && (/mainnet/i.test(rpcUrl) || rpcUrl === NETWORK_PROFILES.mainnet.rpcUrl);
+  const rpcTargetsTestnet = explicitRpc && /testnet/i.test(rpcUrl);
+
+  if (network === "mainnet" && rpcTargetsTestnet) {
+    logger.error({ rpcUrl: redactUrlForConfigLog(rpcUrl) }, "network configuration mismatch");
+    logger.error(
+      `STELLAR_NETWORK=mainnet but RPC_URL points at a testnet endpoint. ` +
+        `Set RPC_URL=${NETWORK_PROFILES.mainnet.rpcUrl} (or your mainnet RPC provider), or use STELLAR_NETWORK=testnet.`,
+    );
+    process.exit(1);
+    throw new Error("Environment validation failed");
+  }
+  if (network === "testnet" && rpcTargetsMainnet) {
+    logger.error({ rpcUrl: redactUrlForConfigLog(rpcUrl) }, "network configuration mismatch");
+    logger.error(
+      `STELLAR_NETWORK=testnet but RPC_URL points at a mainnet endpoint. ` +
+        `Set RPC_URL=${NETWORK_PROFILES.testnet.rpcUrl} or remove it to use the testnet default.`,
+    );
+    process.exit(1);
+    throw new Error("Environment validation failed");
+  }
+  if (network === "mainnet" && !explicitRpc) {
+    logger.warn(
+      `STELLAR_NETWORK=mainnet with no RPC_URL set — the default RPC is the public testnet endpoint ` +
+        `(${NETWORK_PROFILES.testnet.rpcUrl}). Set RPC_URL=${NETWORK_PROFILES.mainnet.rpcUrl} or a mainnet RPC provider.`,
+    );
+  }
+
+  const passphrase = process.env.NETWORK_PASSPHRASE;
+  if (passphrase === oppositeProfile.networkPassphrase) {
+    logger.error("network configuration mismatch");
+    logger.error(
+      `NETWORK_PASSPHRASE is the ${opposite} passphrase but STELLAR_NETWORK=${network} ` +
+        `(expected the ${network} passphrase). Align NETWORK_PASSPHRASE with STELLAR_NETWORK.`,
+    );
+    process.exit(1);
+    throw new Error("Environment validation failed");
+  }
+
+  if (network === "mainnet") {
+    if (!process.env.ADMIN_API_KEY) {
+      logger.warn("STELLAR_NETWORK=mainnet without ADMIN_API_KEY — admin endpoints will be inaccessible");
+    }
+    if (!process.env.JWT_SECRET) {
+      logger.warn("STELLAR_NETWORK=mainnet without JWT_SECRET — JWT authentication will not be configured");
+    }
+  }
+}
+
 // Port validation
 const portSchema = z
   .string()
@@ -118,6 +253,8 @@ const envSchema = z.object({
 
 export interface ValidatedConfig {
   port: number;
+  /** Resolved network profile: "testnet" (default) or "mainnet". */
+  stellarNetwork: StellarNetworkName;
   sorobanEnabled: boolean;
   contractId: string | null;
   serverPrivateKey: string | null;
@@ -163,6 +300,12 @@ export function redactUrlForConfigLog(value: string): string {
 }
 
 export function validateEnv(): ValidatedConfig {
+  // Resolve the selected Stellar network first, before the legacy mapping below
+  // overwrites process.env.STELLAR_NETWORK with the passphrase, and fail fast on
+  // an unknown value or a testnet/mainnet endpoint mismatch (issue #1205).
+  const network = resolveStellarNetwork();
+  validateNetworkConsistency(network.name);
+
   // Support backwards compatibility: map old variables to new ones if new ones are not set
   if (!process.env.STELLAR_CONTRACT_ID && process.env.CONTRACT_ID) {
     process.env.STELLAR_CONTRACT_ID = process.env.CONTRACT_ID;
@@ -332,12 +475,15 @@ export function validateEnv(): ValidatedConfig {
       webhookMonitorDeadLetterAlertThreshold: env.WEBHOOK_MONITOR_DEAD_LETTER_ALERT_THRESHOLD,
       indexerMonitorMaxLedgerLag: env.INDEXER_MONITOR_MAX_LEDGER_LAG,
       indexerMonitorMaxConsecutiveErrors: env.INDEXER_MONITOR_MAX_CONSECUTIVE_ERRORS,
+      stellarNetwork: network.name,
+      stellarNetworkSource: network.source,
     },
     "configuration validated",
   );
 
   return {
     port: env.PORT || 3001,
+    stellarNetwork: network.name,
     sorobanEnabled: !sorobanDisabled,
     contractId: process.env.STELLAR_CONTRACT_ID || null,
     serverPrivateKey: sorobanDisabled ? null : process.env.SERVER_PRIVATE_KEY || null,

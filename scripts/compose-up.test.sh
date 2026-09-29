@@ -236,6 +236,68 @@ if run_case db_outside healthy 0 BACKEND_ENV_FILE="$WORK/db-outside.env" &&
   pass_case "$name"
 fi
 
+# ── network selection preflight cases (issue #1205) ──────────────────────────
+# Mismatched networks are configuration errors: they stop with exit 2 and never
+# start containers, so nothing is retried or half-rolled-out.
+
+name="mainnet network with testnet RPC_URL fails preflight without starting"
+cat >"$WORK/net-mismatch.env" <<'EOF'
+SOROBAN_DISABLED=true
+STELLAR_NETWORK=mainnet
+RPC_URL=https://soroban-testnet.stellar.org:443
+EOF
+if run_case net_mismatch healthy 2 BACKEND_ENV_FILE="$WORK/net-mismatch.env" &&
+   check "$name" "mismatch reported" grep -q "points at a testnet endpoint but STELLAR_NETWORK=mainnet" "$CASE_DIR/out" &&
+   check "$name" "compose up not called" bash -c "! grep -q ' up ' '$CASE_DIR/calls'"; then
+  pass_case "$name"
+fi
+
+name="unknown STELLAR_NETWORK fails preflight without starting"
+cat >"$WORK/net-unknown.env" <<'EOF'
+SOROBAN_DISABLED=true
+STELLAR_NETWORK=stagenet
+EOF
+if run_case net_unknown healthy 2 BACKEND_ENV_FILE="$WORK/net-unknown.env" &&
+   check "$name" "invalid network reported" grep -q 'must be "testnet" or "mainnet"' "$CASE_DIR/out" &&
+   check "$name" "compose up not called" bash -c "! grep -q ' up ' '$CASE_DIR/calls'"; then
+  pass_case "$name"
+fi
+
+name="testnet passphrase with STELLAR_NETWORK=mainnet fails preflight"
+cat >"$WORK/net-passphrase.env" <<'EOF'
+SOROBAN_DISABLED=true
+STELLAR_NETWORK=mainnet
+RPC_URL=https://rpc.provider.example:443
+NETWORK_PASSPHRASE=Test SDF Network ; September 2015
+EOF
+if run_case net_passphrase healthy 2 BACKEND_ENV_FILE="$WORK/net-passphrase.env" &&
+   check "$name" "passphrase mismatch reported" grep -q "NETWORK_PASSPHRASE is the testnet passphrase but STELLAR_NETWORK=mainnet" "$CASE_DIR/out" &&
+   check "$name" "compose up not called" bash -c "! grep -q ' up ' '$CASE_DIR/calls'"; then
+  pass_case "$name"
+fi
+
+name="consistent mainnet environment passes preflight and reaches healthy"
+cat >"$WORK/net-mainnet.env" <<'EOF'
+SOROBAN_DISABLED=true
+STELLAR_NETWORK=mainnet
+RPC_URL=https://soroban-rpc.stellar.org:443
+NETWORK_PASSPHRASE=Public Global Stellar Network ; September 2015
+EOF
+if run_case net_mainnet healthy 0 BACKEND_ENV_FILE="$WORK/net-mainnet.env" &&
+   check "$name" "stack reached healthy" grep -q "RESULT: PASS" "$CASE_DIR/out"; then
+  pass_case "$name"
+fi
+
+name="STELLAR_NETWORK=mainnet with no RPC_URL still starts (backend warns)"
+cat >"$WORK/net-mainnet-default-rpc.env" <<'EOF'
+SOROBAN_DISABLED=true
+STELLAR_NETWORK=mainnet
+EOF
+if run_case net_mainnet_default healthy 0 BACKEND_ENV_FILE="$WORK/net-mainnet-default-rpc.env" &&
+   check "$name" "stack reached healthy" grep -q "RESULT: PASS" "$CASE_DIR/out"; then
+  pass_case "$name"
+fi
+
 echo
 echo "compose-up tests: $passed passed, $failed failed"
 (( failed == 0 ))

@@ -49,7 +49,7 @@ log()  { printf '[compose-up] %s\n' "$*"; }
 fail() { printf '[compose-up] FAIL: %s\n' "$*" >&2; }
 
 # Log lines emitted by validateEnv()/startServer() that a restart cannot fix.
-CONFIG_ERROR_PATTERN='Soroban configuration incomplete|Invalid environment|must be exactly 56 characters|must start with|failed to start server'
+CONFIG_ERROR_PATTERN='Soroban configuration incomplete|Invalid environment|must be exactly 56 characters|must start with|failed to start server|network configuration mismatch|STELLAR_NETWORK validation failed'
 
 rollback() {
   local reason="$1"
@@ -189,6 +189,61 @@ validate_backend_env() {
       exit 2
     fi
   done
+
+  # Network selection consistency (issue #1205). Mirrors backend validateEnv():
+  # STELLAR_NETWORK picks the profile (testnet default, mainnet via public/main)
+  # and the well-known endpoints/passphrases must match it. A mismatch is a
+  # configuration error, so it stops with exit 2 instead of crash-looping and
+  # relying on the restart/rollback path.
+  local network
+  network="$(printf '%s' "$(env_value STELLAR_NETWORK "$file")" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "$network" in
+    ""|testnet|test) network="testnet" ;;
+    mainnet|public|main) network="mainnet" ;;
+    *)
+      fail "STELLAR_NETWORK must be \"testnet\" or \"mainnet\" (got \"$(redact_value "$network")\")"
+      log "  supported values: testnet (default) or mainnet (aliases: public, main)."
+      exit 2
+      ;;
+  esac
+  for key in RPC_URL SOROBAN_RPC_URL; do
+    value="$(env_value "$key" "$file")"
+    case "$value" in
+      "") ;; # unset falls through to the network default
+      *testnet*)
+        if [[ "$network" != "testnet" ]]; then
+          fail "$key points at a testnet endpoint but STELLAR_NETWORK=$network"
+          log "  set $key to a mainnet RPC endpoint, or drop STELLAR_NETWORK to run against testnet."
+          exit 2
+        fi
+        ;;
+      *mainnet*|"https://soroban-rpc.stellar.org:443")
+        if [[ "$network" != "mainnet" ]]; then
+          fail "$key points at a mainnet endpoint but STELLAR_NETWORK=$network"
+          log "  set $key to a testnet RPC endpoint (default: https://soroban-testnet.stellar.org:443), or set STELLAR_NETWORK=mainnet."
+          exit 2
+        fi
+        ;;
+    esac
+  done
+  value="$(env_value NETWORK_PASSPHRASE "$file")"
+  case "$value" in
+    "") ;;
+    "Test SDF Network ; September 2015")
+      if [[ "$network" != "testnet" ]]; then
+        fail "NETWORK_PASSPHRASE is the testnet passphrase but STELLAR_NETWORK=$network"
+        log "  align NETWORK_PASSPHRASE with STELLAR_NETWORK, or unset it to use the selected network's default."
+        exit 2
+      fi
+      ;;
+    "Public Global Stellar Network ; September 2015")
+      if [[ "$network" != "mainnet" ]]; then
+        fail "NETWORK_PASSPHRASE is the mainnet passphrase but STELLAR_NETWORK=$network"
+        log "  align NETWORK_PASSPHRASE with STELLAR_NETWORK, or unset it to use the selected network's default."
+        exit 2
+      fi
+      ;;
+  esac
   value="$(env_value ALLOWED_ASSETS "$file")"
   if [[ -n "$value" && ! "$value" =~ [A-Za-z0-9] ]]; then
     fail "ALLOWED_ASSETS is set but lists no asset codes (expected e.g. USDC,XLM)"

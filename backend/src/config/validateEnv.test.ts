@@ -805,4 +805,148 @@ describe("validateEnv", () => {
       expect(exitSpy).not.toHaveBeenCalled();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Network selection: testnet vs mainnet (issue #1205)
+  // ---------------------------------------------------------------------------
+  describe("Network selection (STELLAR_NETWORK)", () => {
+    it("defaults to testnet when STELLAR_NETWORK is unset", () => {
+      process.env = { SOROBAN_DISABLED: "true" };
+
+      const config = validateEnv();
+
+      expect(config.stellarNetwork).toBe("testnet");
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    it("accepts the explicit testnet value (case/whitespace-insensitive)", () => {
+      process.env = { SOROBAN_DISABLED: "true", STELLAR_NETWORK: "  Testnet " };
+
+      const config = validateEnv();
+
+      expect(config.stellarNetwork).toBe("testnet");
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    it("maps mainnet aliases (public, main) to the mainnet profile", () => {
+      process.env = { SOROBAN_DISABLED: "true", STELLAR_NETWORK: "Public" };
+      expect(validateEnv().stellarNetwork).toBe("mainnet");
+
+      process.env = { SOROBAN_DISABLED: "true", STELLAR_NETWORK: "MAIN" };
+      expect(validateEnv().stellarNetwork).toBe("mainnet");
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    it("exits when STELLAR_NETWORK is not a recognized network name", () => {
+      process.env = { SOROBAN_DISABLED: "true", STELLAR_NETWORK: "stagenet" };
+
+      try {
+        validateEnv();
+      } catch (e) {}
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("must be \"testnet\" or \"mainnet\""),
+      );
+    });
+
+    it("exits when mainnet is selected but RPC_URL points at testnet", () => {
+      process.env = {
+        SOROBAN_DISABLED: "true",
+        STELLAR_NETWORK: "mainnet",
+        RPC_URL: "https://soroban-testnet.stellar.org:443",
+      };
+
+      try {
+        validateEnv();
+      } catch (e) {}
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ rpcUrl: expect.stringContaining("soroban-testnet") }),
+        "network configuration mismatch",
+      );
+      expect(loggerErrorSpy).toHaveBeenCalledWith(expect.stringContaining("RPC_URL points at a testnet endpoint"));
+    });
+
+    it("exits when testnet is selected but RPC_URL points at mainnet", () => {
+      process.env = {
+        SOROBAN_DISABLED: "true",
+        STELLAR_NETWORK: "testnet",
+        RPC_URL: "https://soroban-rpc.stellar.org:443",
+      };
+
+      try {
+        validateEnv();
+      } catch (e) {}
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ rpcUrl: expect.stringContaining("soroban-rpc") }),
+        "network configuration mismatch",
+      );
+      expect(loggerErrorSpy).toHaveBeenCalledWith(expect.stringContaining("RPC_URL points at a mainnet endpoint"));
+    });
+
+    it("exits when NETWORK_PASSPHRASE contradicts STELLAR_NETWORK=mainnet", () => {
+      process.env = {
+        SOROBAN_DISABLED: "true",
+        STELLAR_NETWORK: "mainnet",
+        RPC_URL: "https://rpc.provider.example:443",
+        NETWORK_PASSPHRASE: "Test SDF Network ; September 2015",
+      };
+
+      try {
+        validateEnv();
+      } catch (e) {}
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith("network configuration mismatch");
+      expect(loggerErrorSpy).toHaveBeenCalledWith(expect.stringContaining("Align NETWORK_PASSPHRASE with STELLAR_NETWORK"));
+    });
+
+    it("does not reject custom passphrases (local standalone node)", () => {
+      process.env = {
+        SOROBAN_DISABLED: "true",
+        STELLAR_NETWORK: "testnet",
+        RPC_URL: "http://localhost:8000/soroban/rpc",
+        NETWORK_PASSPHRASE: "Standalone Network ; February 2026",
+      };
+
+      const config = validateEnv();
+
+      expect(config.stellarNetwork).toBe("testnet");
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    it("warns but starts when mainnet is selected with no RPC_URL (default points at testnet)", () => {
+      process.env = {
+        SOROBAN_DISABLED: "true",
+        STELLAR_NETWORK: "mainnet",
+      };
+
+      const config = validateEnv();
+
+      expect(config.stellarNetwork).toBe("mainnet");
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringContaining("no RPC_URL set"));
+    });
+
+    it("still enforces credential checks when Soroban is enabled on mainnet", () => {
+      process.env = {
+        STELLAR_NETWORK: "mainnet",
+        RPC_URL: "https://rpc.mainnet-provider.example:443",
+        // no CONTRACT_ID / SERVER_PRIVATE_KEY
+      };
+
+      try {
+        validateEnv();
+      } catch (e) {}
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Soroban configuration incomplete"),
+      );
+    });
+  });
 });
