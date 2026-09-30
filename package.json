@@ -10,7 +10,10 @@
     "verify:dependencies": "node scripts/verify-dependencies.mjs",
     "compose:up": "bash scripts/compose-up.sh",
     "test:compose-up": "bash scripts/compose-up.test.sh",
-
+    "e2e:run": "bash scripts/e2e-run.sh",
+    "test:e2e-run": "bash scripts/e2e-run.test.sh",
+    "backend:ci": "bash scripts/backend-ci.sh",
+    "test:backend-ci": "bash scripts/backend-ci.test.sh",
     "sqlite:backup": "bash scripts/sqlite-backup.sh",
     "test:sqlite-backup": "bash scripts/sqlite-backup.test.sh",
     "build": "cd backend && npm run build && cd ../frontend && npm run build",

@@ -4,9 +4,13 @@ on:
   push:
     paths:
       - 'backend/**'
+      - 'scripts/backend-ci.*'
+      - '.github/workflows/backend-ci.yml'
   pull_request:
     paths:
       - 'backend/**'
+      - 'scripts/backend-ci.*'
+      - '.github/workflows/backend-ci.yml'
 
 jobs:
   lint-typecheck-test:
@@ -21,11 +25,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'nmp'
+          cache: 'npm'
           cache-dependency-path: backend/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Type-check
         run: npx tsc --noEmit
@@ -33,10 +37,16 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Unit tests with coverage
-        run: npx vitest run --coverage --coverage.thresholds.lines=80 --coverage.thresholds.branches=80
+      # Retries only flaky timeouts/locks, at most once, with clean recovery;
+      # deterministic assertion/schema failures fail immediately. See docs/backend-ci.md.
+      - name: Tests with coverage and flaky retry handling
+        run: bash ../scripts/backend-ci.sh
+        env:
+          BACKEND_RUN_TIMEOUT: 300
+          BACKEND_MAX_RETRIES: 1
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: coverage-report
           path: backend/coverage/
