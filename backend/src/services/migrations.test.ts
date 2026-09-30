@@ -27,6 +27,7 @@ const EXPECTED_STREAMS_COLUMNS = [
   "paused_at",
   "paused_duration",
   "metadata",
+  "tags",
 ];
 
 const EXPECTED_WEBHOOK_DEAD_LETTERS_COLUMNS = [
@@ -161,7 +162,7 @@ describe("database migrations", () => {
 
     runMigrations(db);
 
-    rollbackMigration(db, 4);
+    rollbackMigration(db, 5);
 
     expect(getTableColumns(db, "webhook_dead_letters")).toEqual([
       "id",
@@ -169,12 +170,14 @@ describe("database migrations", () => {
       "payload",
       "last_error",
       "failed_at",
+      "stream_id",
+      "event",
     ]);
 
     const applied = db
       .prepare("SELECT version FROM schema_migrations ORDER BY version")
       .all() as Array<{ version: number }>;
 
-    expect(applied.map((row) => row.version)).toEqual([1, 2, 3]);
+    expect(applied.map((row) => row.version)).toEqual([1, 2, 3, 4]);
   });
 });

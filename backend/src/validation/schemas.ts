@@ -53,6 +53,11 @@ export const unixTimestampSchema = z.coerce
   .int("startAt must be a valid UNIX timestamp in seconds.")
   .positive("startAt must be a valid UNIX timestamp in seconds.");
 
+export const tagsSchema = z
+  .array(z.string().trim().min(1, "Tag must not be empty").max(50, "Tag must be 50 characters or fewer"))
+  .max(5, "A stream can have at most 5 tags")
+  .optional();
+
 export const createStreamPayloadSchema = z
   .object({
     sender: stellarAccountIdSchema,
@@ -62,6 +67,7 @@ export const createStreamPayloadSchema = z
     durationSeconds: durationSecondsSchema,
     startAt: unixTimestampSchema.optional(),
     cliffSeconds: z.coerce.number().int().nonnegative().optional(),
+    tags: tagsSchema,
   })
   .superRefine((payload, ctx) => {
     if (payload.sender === payload.recipient) {
