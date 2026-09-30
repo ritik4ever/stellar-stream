@@ -28,6 +28,7 @@ import {
   getIndexerOutcomeSignal,
   refreshIndexerMetrics,
 } from "./indexerMonitor";
+import { INDEXER_OUTCOME_OWNER_ACTIONS } from "./indexerMonitor";
 import type { IndexerMonitoringSnapshot } from "./indexer";
 
 function makeSnapshot(
@@ -59,6 +60,12 @@ describe("classifyIndexerOutcome", () => {
     expect(signal.outcome).toBe("success");
     expect(signal.outcomeCode).toBe(INDEXER_OUTCOME_CODES.success);
     expect(signal.detail).toMatch(/no owner action is required/i);
+  });
+
+  it("ties each outcome to a documented owner action in the runbook", () => {
+    expect(INDEXER_OUTCOME_OWNER_ACTIONS.success).toMatch(/no owner action/i);
+    expect(INDEXER_OUTCOME_OWNER_ACTIONS.transient_delay).toMatch(/retry/i);
+    expect(INDEXER_OUTCOME_OWNER_ACTIONS.blocked).toMatch(/runbook/i);
   });
 
   it("reports transient_delay for a rate-limited poll while the retry budget is intact", () => {
