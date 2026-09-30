@@ -3792,3 +3792,307 @@ fn test_set_native_token_rejects_non_admin() {
     client.initialize(&admin, &native_token, &soroban_sdk::vec![&env]);
     client.set_native_token(&outsider, &replacement);
 }
+
+// =============================================================================
+// #1181 — Authority over stream state written by a previous build
+//
+// An upgraded WASM reads `Stream(id)` records that an older build serialized.
+// Authority must come from the `sender`/`recipient` recorded in that state,
+// and an unauthorized call must fail before any balance or stream change.
+// These tests seed the record directly (bypassing `create_stream`) and run
+// with auth enforcement on rather than `mock_all_auths`.
+// =============================================================================
+
+struct PriorBuild<'a> {
+    env: Env,
+    client: StellarStreamContractClient<'a>,
+    contract_id: Address,
+    token: token::Client<'a>,
+    sender: Address,
+    recipient: Address,
+    stream_id: u64,
+    stored: Stream,
+}
+
+/// Seeds a partially claimed stream as a previous build would have left it:
+/// 1000 total, 200 already claimed, linear over [0, 1000], ledger at t=500.
+fn prior_build_fixture(env: &Env) -> PriorBuild<'_> {
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(env, &contract_id);
+    let token_admin = Address::generate(env);
+    let token_id = create_token(env, &token_admin);
+    let sender = Address::generate(env);
+    let recipient = Address::generate(env);
+    let stream_id = 7_u64;
+
+    let stored = Stream {
+        sender: sender.clone(),
+        recipient: recipient.clone(),
+        token: token_id.clone(),
+        total_amount: 1000,
+        claimed_amount: 200,
+        start_time: 0,
+        end_time: 1000,
+        cliff_seconds: 0,
+        vesting_type: String::from_str(env, "linear"),
+        min_claim_interval_seconds: 0,
+        last_claim_time: 100,
+        canceled: false,
+        paused: false,
+        pause_started_at: None,
+        metadata: Some(make_metadata(env)),
+    };
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(stream_id), &stored);
+        env.storage()
+            .persistent()
+            .set(&DataKey::NextStreamId, &stream_id);
+    });
+    // Escrow holds the unclaimed balance.
+    token::StellarAssetClient::new(env, &token_id).mint(&contract_id, &800);
+    env.ledger().with_mut(|l| l.timestamp = 500);
+
+    // From here on only explicitly mocked signatures are accepted.
+    env.mock_auths(&[]);
+
+    PriorBuild {
+        env: env.clone(),
+        client,
+        contract_id,
+        token: token::Client::new(env, &token_id),
+        sender,
+        recipient,
+        stream_id,
+        stored,
+    }
+}
+
+impl PriorBuild<'_> {
+    /// Accept exactly one signature from `signer` for `fn_name(args)`.
+    fn sign(&self, signer: &Address, fn_name: &str, args: Vec<Val>) {
+        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+        self.env.mock_auths(&[MockAuth {
+            address: signer,
+            invoke: &MockAuthInvoke {
+                contract: &self.contract_id,
+                fn_name,
+                args,
+                sub_invokes: &[],
+            },
+        }]);
+    }
+
+    /// Stream record and every balance are exactly as the previous build left them.
+    fn assert_untouched(&self) {
+        assert_eq!(self.client.get_stream(&self.stream_id), self.stored);
+        assert_eq!(self.token.balance(&self.contract_id), 800);
+        assert_eq!(self.token.balance(&self.recipient), 0);
+        assert_eq!(self.token.balance(&self.sender), 0);
+    }
+}
+
+#[test]
+fn test_prior_build_stream_reads_back_unchanged() {
+    let env = Env::default();
+    let f = prior_build_fixture(&env);
+
+    assert_eq!(f.client.get_stream(&f.stream_id), f.stored);
+    assert_eq!(f.client.claimable(&f.stream_id, &500), 300);
+    f.assert_untouched();
+}
+
+#[test]
+fn test_prior_build_stream_claim_by_recorded_recipient_succeeds() {
+    let env = Env::default();
+    let f = prior_build_fixture(&env);
+
+    f.sign(
+        &f.recipient,
+        "claim",
+        (f.stream_id, f.recipient.clone(), 300_i128).into_val(&env),
+    );
+    assert_eq!(f.client.claim(&f.stream_id, &f.recipient, &300), 300);
+
+    let after = f.client.get_stream(&f.stream_id);
+    assert_eq!(after.claimed_amount, 500);
+    assert_eq!(after.last_claim_time, 500);
+    assert_eq!(f.token.balance(&f.recipient), 300);
+    assert_eq!(f.token.balance(&f.contract_id), 500);
+}
+
+#[test]
+fn test_prior_build_stream_claim_without_recipient_signature_fails_before_state_change() {
+    let env = Env::default();
+    let f = prior_build_fixture(&env);
+
+    assert!(f
+        .client
+        .try_claim(&f.stream_id, &f.recipient, &300)
+        .is_err());
+    f.assert_untouched();
+}
+
+#[test]
+fn test_prior_build_stream_claim_signed_by_other_address_fails_before_state_change() {
+    let env = Env::default();
+    let f = prior_build_fixture(&env);
+    let attacker = Address::generate(&env);
+
+    // Attacker signs, names the recorded recipient.
+    f.sign(
+        &attacker,
+        "claim",
+        (f.stream_id, f.recipient.clone(), 300_i128).into_val(&env),
+    );
+    assert!(f
+        .client
+        .try_claim(&f.stream_id, &f.recipient, &300)
+        .is_err());
+    f.assert_untouched();
+
+    // Attacker signs, names themself.
+    f.sign(
+        &attacker,
+        "claim",
+        (f.stream_id, attacker.clone(), 300_i128).into_val(&env),
+    );
+    assert!(f.client.try_claim(&f.stream_id, &attacker, &300).is_err());
+    f.assert_untouched();
+    assert_eq!(f.token.balance(&attacker), 0);
+}
+
+#[test]
+fn test_prior_build_stream_cancel_requires_recorded_sender() {
+    let env = Env::default();
+    let f = prior_build_fixture(&env);
+    let attacker = Address::generate(&env);
+
+    assert!(f.client.try_cancel(&f.stream_id, &f.sender).is_err());
+    f.assert_untouched();
+
+    f.sign(
+        &attacker,
+        "cancel",
+        (f.stream_id, f.sender.clone()).into_val(&env),
+    );
+    assert!(f.client.try_cancel(&f.stream_id, &f.sender).is_err());
+    f.assert_untouched();
+
+    f.sign(
+        &attacker,
+        "cancel",
+        (f.stream_id, attacker.clone()).into_val(&env),
+    );
+    assert!(f.client.try_cancel(&f.stream_id, &attacker).is_err());
+    f.assert_untouched();
+
+    // Recorded sender can cancel: unvested 500 refunded, vested 500 remains.
+    f.sign(
+        &f.sender,
+        "cancel",
+        (f.stream_id, f.sender.clone()).into_val(&env),
+    );
+    f.client.cancel(&f.stream_id, &f.sender);
+    let after = f.client.get_stream(&f.stream_id);
+    assert!(after.canceled);
+    assert_eq!(after.total_amount, 500);
+    assert_eq!(after.claimed_amount, 200);
+    assert_eq!(f.token.balance(&f.sender), 500);
+    assert_eq!(f.token.balance(&f.contract_id), 300);
+}
+
+#[test]
+fn test_prior_build_stream_pause_and_resume_require_recorded_sender() {
+    let env = Env::default();
+    let f = prior_build_fixture(&env);
+    let attacker = Address::generate(&env);
+
+    f.sign(
+        &attacker,
+        "pause_stream",
+        (f.stream_id, f.sender.clone()).into_val(&env),
+    );
+    assert!(f.client.try_pause_stream(&f.stream_id, &f.sender).is_err());
+    f.assert_untouched();
+
+    // The recorded recipient is not the owner and cannot pause either.
+    f.sign(
+        &f.recipient,
+        "pause_stream",
+        (f.stream_id, f.recipient.clone()).into_val(&env),
+    );
+    assert!(f
+        .client
+        .try_pause_stream(&f.stream_id, &f.recipient)
+        .is_err());
+    f.assert_untouched();
+
+    f.sign(
+        &f.sender,
+        "pause_stream",
+        (f.stream_id, f.sender.clone()).into_val(&env),
+    );
+    f.client.pause_stream(&f.stream_id, &f.sender);
+    let paused = f.client.get_stream(&f.stream_id);
+    assert!(paused.paused);
+
+    f.sign(
+        &attacker,
+        "resume_stream",
+        (f.stream_id, f.sender.clone()).into_val(&env),
+    );
+    assert!(f.client.try_resume_stream(&f.stream_id, &f.sender).is_err());
+    assert_eq!(f.client.get_stream(&f.stream_id), paused);
+}
+
+#[test]
+fn test_prior_build_stream_transfer_moves_claim_authority() {
+    let env = Env::default();
+    let f = prior_build_fixture(&env);
+    let new_recipient = Address::generate(&env);
+
+    // Only the recorded recipient may transfer; the sender cannot.
+    f.sign(
+        &f.sender,
+        "transfer_stream",
+        (f.stream_id, new_recipient.clone()).into_val(&env),
+    );
+    assert!(f
+        .client
+        .try_transfer_stream(&f.stream_id, &new_recipient)
+        .is_err());
+    f.assert_untouched();
+
+    f.sign(
+        &f.recipient,
+        "transfer_stream",
+        (f.stream_id, new_recipient.clone()).into_val(&env),
+    );
+    f.client.transfer_stream(&f.stream_id, &new_recipient);
+    assert_eq!(f.client.get_stream(&f.stream_id).recipient, new_recipient);
+
+    // The old recipient's signature no longer authorizes a claim.
+    f.sign(
+        &f.recipient,
+        "claim",
+        (f.stream_id, f.recipient.clone(), 300_i128).into_val(&env),
+    );
+    assert!(f
+        .client
+        .try_claim(&f.stream_id, &f.recipient, &300)
+        .is_err());
+    assert_eq!(f.client.get_stream(&f.stream_id).claimed_amount, 200);
+    assert_eq!(f.token.balance(&f.contract_id), 800);
+
+    f.sign(
+        &new_recipient,
+        "claim",
+        (f.stream_id, new_recipient.clone(), 300_i128).into_val(&env),
+    );
+    assert_eq!(f.client.claim(&f.stream_id, &new_recipient, &300), 300);
+    assert_eq!(f.token.balance(&new_recipient), 300);
+}

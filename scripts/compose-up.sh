@@ -49,7 +49,7 @@ log()  { printf '[compose-up] %s\n' "$*"; }
 fail() { printf '[compose-up] FAIL: %s\n' "$*" >&2; }
 
 # Log lines emitted by validateEnv()/startServer() that a restart cannot fix.
-CONFIG_ERROR_PATTERN='Soroban configuration incomplete|Invalid environment|must be exactly 56 characters|must start with|failed to start server'
+CONFIG_ERROR_PATTERN='Soroban configuration incomplete|Invalid environment|must be exactly 56 characters|must start with|failed to start server|network configuration mismatch|STELLAR_NETWORK validation failed'
 
 rollback() {
   local reason="$1"
@@ -189,6 +189,28 @@ validate_backend_env() {
       exit 2
     fi
   done
+
+  # Network selection consistency (issue #1205). Mirrors backend validateEnv():
+  # STELLAR_NETWORK picks the profile (testnet default, mainnet via public/main)
+  # and the well-known endpoints/passphrases must match it. A mismatch is a
+  # configuration error, so it stops with exit 2 instead of crash-looping and
+  # relying on the restart/rollback path.
+  local network
+  network="$(printf '%s' "$(env_value STELLAR_NETWORK "$file")" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  case "$network" in
+    ""|testnet|test) network="testnet" ;;
+    mainnet|public|main) network="mainnet" ;;
+    *)
+      fail "STELLAR_NETWORK must be \"testnet\" or \"mainnet\" (got \"$(redact_value "$network")\")"
+      log "  supported values: testnet (default) or mainnet (aliases: public, main)."
+      exit 2
+      ;;
+  esac
+  if [[ "$soroban_disabled" == "true" && ( "$network" == "mainnet" || "$(env_value NODE_ENV "$file" | tr '[:upper:]' '[:lower:]')" == "production" ) ]]; then
+    fail "SOROBAN_DISABLED=true is only allowed for non-production testnet runs"
+    log "  configure CONTRACT_ID and SERVER_PRIVATE_KEY for production or mainnet."
+    exit 2
+  fi
   value="$(env_value ALLOWED_ASSETS "$file")"
   if [[ -n "$value" && ! "$value" =~ [A-Za-z0-9] ]]; then
     fail "ALLOWED_ASSETS is set but lists no asset codes (expected e.g. USDC,XLM)"
@@ -207,6 +229,17 @@ validate_backend_env() {
         log "         Use the default /app/data/streams.db to persist SQLite across restarts."
         ;;
     esac
+  fi
+
+  if ! command -v node >/dev/null 2>&1; then
+    fail "Node.js is required to validate Stellar network settings before starting Compose"
+    exit 2
+  fi
+  local rpc_preflight_args=(--env-file "$file")
+  [[ "$soroban_disabled" == "true" ]] && rpc_preflight_args+=(--skip-connectivity)
+  if ! node "$ROOT_DIR/backend/scripts/rpc-preflight.cjs" "${rpc_preflight_args[@]}"; then
+    fail "Stellar network/RPC preflight failed; no containers were started"
+    exit 2
   fi
 }
 

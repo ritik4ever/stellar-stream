@@ -8,7 +8,7 @@ import { useTheme } from "./hooks/useTheme";
 import { DashboardPage } from "./pages/DashboardPage";
 import { SenderDashboard as SenderDashboardPage } from "./pages/SenderDashboard";
 
-const SenderDashboard = lazy(() =>
+const SenderDashboard = lazy() =>
   import("./components/SenderDashboard").then((m) => ({ default: m.SenderDashboard })),
 );
 const RecipientDashboard = lazy(() =>

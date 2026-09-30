@@ -7,6 +7,7 @@
     "dev": "ts-node-dev --respawn src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "preflight:deployment": "node scripts/deployment-preflight.cjs",
     "test": "vitest",
     "coverage": "vitest run --coverage",
     "smoke:rotation": "vitest run --coverage=false src/services/secrets-rotation.smoke.test.ts",

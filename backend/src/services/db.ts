@@ -342,15 +342,14 @@ function addColumnIfMissing(database: any, table: string, column: string, typeDe
  * only: the signal never carries the database path, migration names, or user
  * data, so it is safe to log, scrape, and paste into an incident channel.
  *
- * A database with no recorded schema yet (fresh install, not a restore) is
- * skipped so the live signal reports `success` once migrations have run.
+ * A database with no recorded schema yet (fresh install or empty volume) is
+ * recorded as `transient_delay`, because startup still has migrations to
+ * apply. This makes a fresh Compose volume observable without exposing paths
+ * or configuration values.
  */
 function recordSqliteRestoreOutcome(database: any): void {
   try {
     const signal = getLiveRestoreOutcomeSignal(database);
-    if (signal.counts.applied === 0) {
-      return;
-    }
     recordRestoreOutcome(signal);
     refreshRestoreMetrics(signal);
     if (signal.outcome === "blocked") {
