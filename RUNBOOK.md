@@ -112,6 +112,53 @@ An interrupted backup or a failed integrity check removes only its temporary
 file and preserves any existing destination. A fresh Compose database is
 reported as `transient_delay` during startup until migrations complete.
 
+#### Backup during active writes
+
+`.backup` uses SQLite's online backup API, which is safe to run against a
+database that other connections are writing to: it reads a checkpointed,
+internally consistent snapshot without taking an exclusive lock or requiring
+the backend to stop. The `npm run sqlite:backup` helper never sees a
+half-written file, because it copies to a temporary path in the destination
+directory and only publishes the file with an atomic `mv` after
+`PRAGMA integrity_check` passes on the copy (see `scripts/sqlite-backup.sh`).
+
+#### Backup interrupted before completion
+
+If the `.backup` command itself fails partway (process killed, disk full,
+`sqlite3` unavailable) or the resulting file fails `PRAGMA integrity_check`,
+the helper deletes only its temporary file via a `trap` and exits non-zero
+without touching the existing destination — a partial or interrupted backup
+can never replace a previously verified one. The database file being backed
+up is a read-only source to the backup command; an interrupted backup cannot
+corrupt it. A backup produced this way that is later restored and found
+corrupt is the `interrupted` restore outcome (gauge value `3`); see
+[SQLite Restore from Backup](#sqlite-restore-from-backup).
+
+#### Validating backup behavior from a clean environment
+
+Both properties above are exercised by automated tests that need no running
+service or pre-existing database, so they reproduce identically on a fresh
+checkout:
+
+```bash
+# Confirms the wrapper's control flow: argument/preflight checks, atomic
+# publish, and that a failed backup or integrity check preserves any
+# existing destination file untouched.
+npm run test:sqlite-backup
+
+# Confirms the documented claim above against a real SQLite database: starts
+# a background writer that continuously inserts rows, runs the backup helper
+# concurrently, and asserts the backup succeeds, passes its own integrity
+# check, is a valid point-in-time snapshot (row count no greater than the
+# live table at that moment), and that the live database is still healthy
+# afterward. Requires the real `sqlite3` CLI (present on the CI runner); it
+# skips with a clear message if the binary is not on PATH.
+npm run test:sqlite-backup-live
+```
+
+Both are run in CI on every push/PR (`.github/workflows/ci.yml`,
+`sqlite-backup-script` job).
+
 #### Restoring a backup in a clean environment
 
 These steps reproduce the expected restore outcome without undocumented local
