@@ -1,7 +1,7 @@
 name: Backend CI
 
 on:
-  push:
+  pull_request:
     paths:
       - 'backend/**'
   pull_request:
@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'nmp'
+          cache: 'npm'
           cache-dependency-path: backend/package-lock.json
 
       - name: Install dependencies
@@ -34,9 +34,45 @@ jobs:
         run: npm run lint
 
       - name: Unit tests with coverage
-        run: npx vitest run --coverage --coverage.thresholds.lines=80 --coverage.thresholds.branches=80
+        run: npx jest --coverage --coverageThreshold='{"global":{"lines":80,"branches":80}}'
 
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: backend/coverage/
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: backend/coverage/lcov.info
+          flags: backend
+          fail_ci_if_error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Playwright E2E
+        run: npx playwright test
+        working-directory: frontend
+
+  contracts-test:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo test
+        run: cargo test --all-features
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: contracts/target/coverage/lcov.info
+          flags: contracts
+          fail_ci_if_error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
