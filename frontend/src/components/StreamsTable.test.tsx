@@ -4,6 +4,12 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { StreamsTable, STREAMS_TABLE_VIRTUAL_OVERSCAN } from "./StreamsTable";
 import { Stream } from "../types/stream";
 
+// The table only needs `readyState` from the hook; stubbing it keeps the tests
+// free of real WebSocket connections.
+vi.mock("../hooks/useWebSocket", () => ({
+  useWebSocket: () => ({ readyState: 3, lastMessage: null }),
+}));
+
 const noop = vi.fn().mockResolvedValue(undefined);
 
 function createMockStream(id: string, status: Stream["progress"]["status"] = "active"): Stream {
@@ -172,9 +178,16 @@ describe("StreamsTable infinite scroll", () => {
     let observerCallback: IntersectionObserverCallback = () => {};
 
     vi.spyOn(window, "IntersectionObserver").mockImplementation(
-      (callback) => {
+      function (callback: IntersectionObserverCallback) {
         observerCallback = callback;
-        return { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn(), root: null, rootMargin: "", thresholds: [] };
+        return {
+          observe: vi.fn(),
+          disconnect: vi.fn(),
+          unobserve: vi.fn(),
+          root: null,
+          rootMargin: "",
+          thresholds: [],
+        } as unknown as IntersectionObserver;
       },
     );
 
@@ -199,9 +212,16 @@ describe("StreamsTable infinite scroll", () => {
     let observerCallback: IntersectionObserverCallback = () => {};
 
     vi.spyOn(window, "IntersectionObserver").mockImplementation(
-      (callback) => {
+      function (callback: IntersectionObserverCallback) {
         observerCallback = callback;
-        return { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn(), root: null, rootMargin: "", thresholds: [] };
+        return {
+          observe: vi.fn(),
+          disconnect: vi.fn(),
+          unobserve: vi.fn(),
+          root: null,
+          rootMargin: "",
+          thresholds: [],
+        } as unknown as IntersectionObserver;
       },
     );
 
@@ -225,9 +245,16 @@ describe("StreamsTable infinite scroll", () => {
     let observerCallback: IntersectionObserverCallback = () => {};
 
     vi.spyOn(window, "IntersectionObserver").mockImplementation(
-      (callback) => {
+      function (callback: IntersectionObserverCallback) {
         observerCallback = callback;
-        return { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn(), root: null, rootMargin: "", thresholds: [] };
+        return {
+          observe: vi.fn(),
+          disconnect: vi.fn(),
+          unobserve: vi.fn(),
+          root: null,
+          rootMargin: "",
+          thresholds: [],
+        } as unknown as IntersectionObserver;
       },
     );
 
@@ -250,7 +277,8 @@ describe("StreamsTable infinite scroll", () => {
 describe("StreamsTable WebSocket progress updates", () => {
   beforeEach(() => {
     localStorage.clear();
-    vi.stubEnv("VITE_WS_URL", "");
+    // The disconnected banner only renders when a WS URL is configured
+    vi.stubEnv("VITE_WS_URL", "ws://localhost:1234");
   });
 
   afterEach(() => {
@@ -272,9 +300,9 @@ describe("StreamsTable WebSocket progress updates", () => {
     
     render(<StreamsTable {...defaultProps} streams={streams} />);
     
-    // Initial progress for stream 1
-    const initialProgress = screen.getByText("20%");
-    expect(initialProgress).toBeInTheDocument();
+    // Initial progress for both mock streams (rendered with two decimal places)
+    const initialProgress = screen.getAllByText("20.00%");
+    expect(initialProgress).toHaveLength(2);
     
     // Full integration testing would require:
     // 1. Mocking useWebSocket hook to capture onMessage callback

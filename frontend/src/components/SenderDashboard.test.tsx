@@ -6,6 +6,28 @@ import { SenderDashboard } from "./SenderDashboard";
 import { Stream } from "../types/stream";
 import { StreamEvent } from "../services/api";
 
+// happy-dom gives ResponsiveContainer a zero-size box, so recharts never paints
+// its SVG. Stub it and render the bar chart's category labels from `data`.
+vi.mock("recharts", () => ({
+  ResponsiveContainer: ({ children }: any) => (
+    <div data-testid="responsive-container">{children}</div>
+  ),
+  BarChart: ({ data, children }: any) => (
+    <svg data-testid="bar-chart">
+      {(data ?? []).map((entry: any) => (
+        <span key={entry.name}>{entry.name}</span>
+      ))}
+      {children}
+    </svg>
+  ),
+  Bar: ({ dataKey }: any) => <g data-testid={`bar-${dataKey}`} />,
+  Cell: () => null,
+  XAxis: () => null,
+  YAxis: () => null,
+  CartesianGrid: () => null,
+  Tooltip: () => null,
+}));
+
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
@@ -182,7 +204,10 @@ describe("SenderDashboard - Enhanced Analytics & Activity", () => {
     const amountCard = screen
       .getByText("Total Amount Streamed")
       .closest("article");
-    expect(amountCard?.querySelector("strong")?.textContent).toContain("3000");
+    // Component formats the sum with locale grouping ("3,500")
+    expect(
+      amountCard?.querySelector("strong")?.textContent?.replace(/,/g, ""),
+    ).toBe("3500");
 
     expect(screen.getByText("Active Streams")).toBeInTheDocument();
     const activeCard = screen

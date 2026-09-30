@@ -41,9 +41,27 @@ const eventHistoryMocks = vi.hoisted(() => ({
   getStreamEventSummary: vi.fn(),
 }));
 
-vi.mock("./services/streamStore", () => streamStoreMocks);
-vi.mock("./services/eventHistory", () => eventHistoryMocks);
-vi.mock("./services/cache", () => cacheMocks);
+// Spread the real module so every export index.ts uses (constants such as
+// MIN_COMPARE_STREAMS, pure helpers, …) stays available, and only the members
+// listed above are stubbed.
+vi.mock("./services/streamStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./services/streamStore")>()),
+  ...streamStoreMocks,
+}));
+// The allow-list is configuration data, not the subject under test: stub it so
+// validation runs without an initialised database.
+vi.mock("./services/db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./services/db")>()),
+  getAllowedAssets: vi.fn(() => ["USDC", "XLM"]),
+}));
+vi.mock("./services/eventHistory", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./services/eventHistory")>()),
+  ...eventHistoryMocks,
+}));
+vi.mock("./services/cache", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./services/cache")>()),
+  ...cacheMocks,
+}));
 vi.mock("./services/auth", () => ({
   authMiddleware: vi.fn((req: any, res: any, next: any) => next()),
   adminJwtAuth: vi.fn((req: any, res: any, next: any) => next()),
@@ -163,10 +181,16 @@ const progressById: Record<string, TestProgress> = {
   },
 };
 
+// Express 5 exposes the router as `app.router`; older versions used `app._router`.
+function routeStack(): any[] {
+  const router = (app as any)._router ?? (app as any).router;
+  return router?.stack ?? [];
+}
+
 async function invokeListStreamsRoute(
   query: Record<string, unknown> = {},
 ): Promise<{ status: number; body: any }> {
-  const layer = (app as any)?._router?.stack?.find(
+  const layer = routeStack().find(
     (entry: any) => entry.route?.path === "/api/streams" && entry.route?.methods?.get,
   );
 
@@ -205,7 +229,7 @@ async function invokeSenderStreamsRoute(
   accountId: string,
   query: Record<string, unknown> = {},
 ): Promise<{ status: number; body: any }> {
-  const layer = (app as any)?._router?.stack?.find(
+  const layer = routeStack().find(
     (entry: any) => entry.route?.path === "/api/senders/:accountId/streams" && entry.route?.methods?.get,
   );
 
@@ -778,7 +802,7 @@ const sampleEvents: TestEvent[] = [
 function invokeGlobalEventsRoute(
   query: Record<string, unknown> = {},
 ): { status: number; body: any } {
-  const layer = (app as any)?._router?.stack?.find(
+  const layer = routeStack().find(
     (entry: any) => entry.route?.path === "/api/events" && entry.route?.methods?.get,
   );
 
@@ -816,7 +840,8 @@ describe("GET /api/events", () => {
     expect(status).toBe(200);
     expect(body.total).toBe(4);
     expect(body.page).toBe(1);
-    expect(body.limit).toBe(4);
+    // No limit in the query → the route falls back to PAGINATION_DEFAULT_LIMIT.
+    expect(body.limit).toBe(20);
     expect(body.data).toHaveLength(4);
     expect(body.data[0].streamId).toBe("stream-1");
   });
@@ -830,7 +855,11 @@ describe("GET /api/events", () => {
 
     expect(status).toBe(200);
     expect(body.total).toBe(2);
-    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith("created");
+    expect(eventHistoryMocks.countAllEvents).toHaveBeenCalledWith(
+      "created",
+      undefined,
+      undefined,
+    );
 
   });
 

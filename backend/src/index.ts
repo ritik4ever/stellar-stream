@@ -180,10 +180,10 @@ const listStreamsQuerySchema = z.object({
     )
     .optional(),
   sort: z
-    .enum(SORT_FIELDS)
+    .enum(SORT_FIELDS, { message: `sort must be one of ${SORT_FIELDS.join(", ")}` })
     .optional(),
   order: z
-    .enum(SORT_ORDERS)
+    .enum(SORT_ORDERS, { message: `order must be one of ${SORT_ORDERS.join(", ")}` })
     .optional(),
 });
 
@@ -208,13 +208,12 @@ const authChallengeLimiter = rateLimit({
   },
 });
 
-// Rate limiters for read and mutation endpoints
-const READ_RATE_LIMIT = Number(process.env.READ_RATE_LIMIT ?? 5000);
-const MUTATION_RATE_LIMIT = Number(process.env.MUTATION_RATE_LIMIT ?? 10);
-
+// Rate limiters for read and mutation endpoints.
+// The limit is resolved per request so it can be changed via env without a
+// restart (and so tests can exercise the limiter without re-importing the app).
 const readLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: READ_RATE_LIMIT,
+  max: () => Number(process.env.READ_RATE_LIMIT ?? 5000),
   standardHeaders: true,
   legacyHeaders: false,
   handler: (req: Request, res: Response, next: NextFunction) => {
@@ -231,7 +230,7 @@ const readLimiter = rateLimit({
 
 const mutationLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: MUTATION_RATE_LIMIT,
+  max: () => Number(process.env.MUTATION_RATE_LIMIT ?? 10),
   standardHeaders: true,
   legacyHeaders: false,
   handler: (req: Request, res: Response, next: NextFunction) => {
@@ -246,11 +245,9 @@ const mutationLimiter = rateLimit({
   },
 });
 
-const CLAIMABLE_RATE_LIMIT = Number(process.env.CLAIMABLE_RATE_LIMIT ?? 30);
-
 const claimableLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: CLAIMABLE_RATE_LIMIT,
+  max: () => Number(process.env.CLAIMABLE_RATE_LIMIT ?? 30),
   standardHeaders: true,
   legacyHeaders: false,
   handler: (req: Request, res: Response, next: NextFunction) => {
@@ -286,6 +283,18 @@ const reconcileLimiter = rateLimit({
     });
   },
 });
+
+/**
+ * The configured rate limiters, exposed for tests so suites can reset the
+ * per-client counters (and therefore exercise the 429 path) without reaching
+ * into Express internals.
+ */
+export const rateLimiters = {
+  readLimiter,
+  mutationLimiter,
+  claimableLimiter,
+  reconcileLimiter,
+};
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -1160,6 +1169,55 @@ app.get("/api/streams/:id", readLimiter, (req: Request, res: Response) => {
 });
 
 app.get(
+  "/api/streams/:id/claimable",
+  claimableLimiter,
+  async (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    try {
+      // Paused or canceled streams can never be claimed, so skip simulation.
+      if (stream.pausedAt !== undefined || stream.canceledAt !== undefined) {
+        const at = await getLatestLedgerTime();
+        res.json({
+          streamId: stream.id,
+          claimableAmount: 0,
+          assetCode: stream.assetCode,
+          at,
+        });
+        return;
+      }
+
+      const { claimableAmount, at } = await getOnChainClaimableAmount(stream.id);
+      res.json({
+        streamId: stream.id,
+        claimableAmount: Number(claimableAmount),
+        assetCode: stream.assetCode,
+        at,
+      });
+    } catch (error: unknown) {
+      logger.error({ err: error }, "failed to query claimable amount");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to query claimable amount.",
+      );
+      sendApiError(req, res, normalizedError.statusCode, normalizedError.message, {
+        code: normalizedError.code ?? "INTERNAL_ERROR",
+      });
+    }
+  },
+);
+
+app.get(
   "/api/recipients/:accountId/streams",
   readLimiter,
   (req: Request, res: Response) => {
@@ -1554,6 +1612,57 @@ app.post(
     }
 
     res.json({ canceled, failed });
+  },
+);
+
+// POST /api/streams/:id/mark-complete — sender marks a fully-vested stream as complete
+app.post(
+  "/api/streams/:id/mark-complete",
+  mutationLimiter,
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    const user = (req as any).user;
+    if (stream.sender !== user.accountId) {
+      sendApiError(req, res, 403, "Only the sender can complete this stream.", {
+        code: "FORBIDDEN",
+      });
+      return;
+    }
+
+    try {
+      const updated = markStreamComplete(parsedId.value);
+      res.json({
+        data: {
+          ...updated,
+          progress: calculateProgress(updated),
+        },
+      });
+    } catch (error: unknown) {
+      logger.error({ err: error, streamId: parsedId.value }, "failed to mark stream complete");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to mark stream complete.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        { code: normalizedError.code ?? "INTERNAL_ERROR" },
+      );
+    }
   },
 );
 

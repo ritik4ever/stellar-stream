@@ -11,11 +11,13 @@ type Story = StoryObj<typeof WalletButton>;
 
 const baseWallet = {
   installed: true,
-  address: null,
+  allowed: false,
+  address: null as string | null,
   status: 'idle' as const,
-  error: null,
+  error: null as string | null,
   connect: () => Promise.resolve(),
   disconnect: () => {},
+  signAction: () => Promise.resolve(''),
 };
 
 export const NotInstalled: Story = {

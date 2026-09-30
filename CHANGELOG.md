@@ -90,6 +90,7 @@ and this project currently tracks history by milestone date.
 
 ### Added
 
+- Repeatable secrets rotation verification: `npm run test:secrets-rotation` (or `cd backend && npm run smoke:rotation`) boots the API with the current and then the rotated `JWT_SECRET` / `SERVER_SIGNING_KEY`, asserts the old credential during the rollout window, verifies every signature against the credential in force, prints the cutover time and a `RESULT: PASS/FAIL` line, and exits non-zero on any failed check. Documented in [RUNBOOK.md](RUNBOOK.md#verify-secrets-rotation-smoke-check) together with the confirmed mixed-fleet behavior in [Old Credential During Rollout](RUNBOOK.md#old-credential-during-rollout).
 - Initial changelog scaffold for back-filled release history.
 - Docker Compose startup now runs a configuration preflight against `backend/.env` before starting any container. An empty environment, missing or invalid Soroban credentials, malformed URLs, an empty asset allowlist, or a `PORT` that does not match the Compose healthcheck port all fail with exit `2`, a useful non-sensitive message, and no partial rollout. See [RUNBOOK.md](RUNBOOK.md#docker-compose-startup-failure).
 - A `DB_PATH` outside the persisted `/app/data` volume now logs a startup warning that the SQLite database will be recreated on every container start.

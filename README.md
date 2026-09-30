@@ -502,6 +502,8 @@ When rotating sensitive operational credentials in production, follow these proc
    - Update `JWT_SECRET` in environment variables.
    - Perform a rolling restart of backend instances.
    - *Client Impact*: Existing active JWT tokens signed with the old secret will invalidate automatically, prompting clients to re-authenticate seamlessly via wallet signature challenge (`POST /api/auth/token`).
+   - *Rollout Window*: both credentials are read at process start, so while the fleet is mixed, requests routed to a restarted instance reject pre-rotation tokens (`401 invalid_token`) and requests routed to an instance that has not restarted reject post-rotation tokens. Finish the rollout promptly and have clients re-authenticate once, after cutover — see [Old Credential During Rollout](RUNBOOK.md#old-credential-during-rollout).
+   - *Verification*: run `npm run test:secrets-rotation` for a repeatable PASS/FAIL check that measures cutover time and verifies the JWT and challenge signatures before and after rotation — see [Verify Secrets Rotation (Smoke Check)](RUNBOOK.md#verify-secrets-rotation-smoke-check).
 
 3. **Rotating `WEBHOOK_SIGNING_SECRET`**
    - Generate a new secret key string ($\ge 32$ characters).

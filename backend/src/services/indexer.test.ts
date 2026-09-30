@@ -153,6 +153,7 @@ describe("indexer processEvent — StreamClaimed", () => {
     const calls = mockRecordEventWithDb.mock.calls;
     const claimedCall = calls.find((c: any[]) => c[2] === "claimed");
     expect(claimedCall).toBeDefined();
+    if (!claimedCall) throw new Error("expected a claimed event");
     expect(claimedCall[1]).toBe("7");
     expect(claimedCall[2]).toBe("claimed");
     expect(claimedCall[3]).toBe(Math.floor(new Date(event.ledgerClosedAt).getTime() / 1000));
@@ -175,6 +176,7 @@ it("records claimed events from the same poll", async () => {
 
     expect(createdCall).toBeDefined();
     expect(claimedCall).toBeDefined();
+    if (!createdCall || !claimedCall) throw new Error("expected created + claimed events");
     expect(claimedCall[4]).toBe(claimed.value.recipient);
     expect(claimedCall[5]).toBe(claimed.value.amount);
   });
@@ -424,6 +426,7 @@ describe("indexer additional coverage", () => {
 
     const createdCall = mockRecordEventWithDb.mock.calls.find((c: any[]) => c[2] === "created");
     expect(createdCall).toBeDefined();
+    if (!createdCall) throw new Error("expected a created event");
     expect(createdCall[1]).toBe("1");
     expect(createdCall[3]).toBe(Math.floor(new Date(created.ledgerClosedAt).getTime() / 1000));
   });

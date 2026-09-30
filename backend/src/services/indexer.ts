@@ -90,6 +90,8 @@ export function classifyRpcFailure(err: unknown): IndexerRpcFailureKind {
   if (
     statusCode === 503 ||
     statusCode === 504 ||
+    text.includes("503") ||
+    text.includes("504") ||
     text.includes("econnrefused") ||
     text.includes("econnreset") ||
     text.includes("etimedout") ||
@@ -430,11 +432,13 @@ async function indexEvents(): Promise<void> {
 }
 
 async function indexEventsWithFallback(db: any, currentLedger: number): Promise<void> {
+  const server = rpcServer;
+  if (!server) throw new Error("RPC server is not initialised");
   const startLedger = lastProcessedLedger + 1;
   let events;
 
   try {
-    events = await rpcServer.getEvents({
+    events = await server.getEvents({
       startLedger,
       filters: [
         {
@@ -468,6 +472,8 @@ async function indexEventsWithFallback(db: any, currentLedger: number): Promise<
 }
 
 async function indexEventsWithCursorPagination(db: any, currentLedger: number): Promise<void> {
+  const server = rpcServer;
+  if (!server) throw new Error("RPC server is not initialised");
   const startLedger = lastProcessedLedger + 1;
   let cursor: string | undefined;
   let maxLedgerSeen = lastProcessedLedger;
@@ -501,7 +507,7 @@ async function indexEventsWithCursorPagination(db: any, currentLedger: number): 
     let eventsResponse: rpc.Api.GetEventsResponse;
 
     try {
-      eventsResponse = await rpcServer.getEvents(request);
+      eventsResponse = await server.getEvents(request);
     } catch (err) {
       logger.error({ err }, "RPC getEvents failed during cursor pagination");
       throw err;
@@ -545,6 +551,9 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
     const value = scValToNative(event.value);
 
     if (topic.length < 2) return;
+    // Only the stream contract's events belong in the local event log; events
+    // published by other contracts may reuse the same event names.
+    if (topic[0] !== "Stream") return;
 
     const eventName = topic[1];
     const timestamp = Math.floor(new Date(event.ledgerClosedAt).getTime() / 1000);

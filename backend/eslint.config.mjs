@@ -27,6 +27,13 @@ export default tseslint.config(
       'src/config/validateEnv.ts',
       'src/services/webhook.ts',
       'src/services/webhookWorker.ts',
+      // CLI-style modules: the migration runner/standalone scripts deal in
+      // loosely-typed db handles and console output on purpose.
+      'src/services/migrations.ts',
+      'src/services/dbRestoreOutcome.ts',
+      'src/services/websocket.ts',
+      'src/utils/sorobanRetry.ts',
+      'src/migrations/0002_add_stream_indexes.ts',
     ],
     rules: {
       'no-console': 'off',

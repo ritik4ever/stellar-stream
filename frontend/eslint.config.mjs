@@ -42,6 +42,15 @@ export default tseslint.config(
     },
   },
   {
+    // Story fixtures: console callbacks are intentional (they demonstrate the
+    // handler wiring) and Storybook's `render` property is not a component.
+    files: ['src/**/*.stories.tsx'],
+    rules: {
+      'no-console': 'off',
+      'react-hooks/rules-of-hooks': 'off',
+    },
+  },
+  {
     files: ['**/*.test.ts', '**/*.test.tsx'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',

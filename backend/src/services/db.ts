@@ -265,42 +265,41 @@ class PostgresDatabase {
   }
 
   public prepare(sql: string): any {
-    const dbInstance = this;
+    // Arrow functions keep the statement methods bound to this instance
+    // without aliasing `this` to a local variable.
+    const bind = (params: any[]): any =>
+      params.length === 1 && typeof params[0] === "object" && params[0] !== null && !Array.isArray(params[0]) ? params[0] : params;
     return {
-      run(...params: any[]): any {
-        const paramObj = params.length === 1 && typeof params[0] === "object" && params[0] !== null && !Array.isArray(params[0]) ? params[0] : params;
-        const res = dbInstance.querySync(sql, paramObj);
+      run: (...params: any[]): any => {
+        const res = this.querySync(sql, bind(params));
         return {
           changes: res.rowCount,
           lastInsertRowid: 0,
         };
       },
-      get(...params: any[]): any {
-        const paramObj = params.length === 1 && typeof params[0] === "object" && params[0] !== null && !Array.isArray(params[0]) ? params[0] : params;
-        const res = dbInstance.querySync(sql, paramObj);
+      get: (...params: any[]): any => {
+        const res = this.querySync(sql, bind(params));
         return res.rows[0] || undefined;
       },
-      all(...params: any[]): any {
-        const paramObj = params.length === 1 && typeof params[0] === "object" && params[0] !== null && !Array.isArray(params[0]) ? params[0] : params;
-        const res = dbInstance.querySync(sql, paramObj);
+      all: (...params: any[]): any => {
+        const res = this.querySync(sql, bind(params));
         return res.rows;
       },
     };
   }
 
-  public transaction(fn: Function): any {
-    const dbInstance = this;
-    return (...args: any[]) => {
-      dbInstance.exec("BEGIN");
+  public transaction<T extends (...args: never[]) => unknown>(fn: T): T {
+    return ((...args: any[]) => {
+      this.exec("BEGIN");
       try {
-        const result = fn(...args);
-        dbInstance.exec("COMMIT");
+        const result = (fn as (...args: any[]) => unknown)(...args);
+        this.exec("COMMIT");
         return result;
       } catch (error) {
-        dbInstance.exec("ROLLBACK");
+        this.exec("ROLLBACK");
         throw error;
       }
-    };
+    }) as T;
   }
 
   public pragma(stmt: string): any {
@@ -393,4 +392,79 @@ export function initDb(): void {
   // Incremental schema patches for columns added after the baseline.
   addColumnIfMissing(db, "streams", "cliff_seconds", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "stream_archive", "cliff_seconds", "INTEGER NOT NULL DEFAULT 0");
+
+  seedAllowedAssets();
+}
+
+/**
+ * Seeds the allowed-asset allowlist from `ALLOWED_ASSETS` the first time the
+ * database is opened. Tests stub the env var between runs, so the list is
+ * re-seeded there to honour the current override.
+ */
+function seedAllowedAssets(): void {
+  try {
+    if (process.env.NODE_ENV === "test") {
+      db.exec("DELETE FROM allowed_assets");
+    }
+
+    const count = db
+      .prepare("SELECT COUNT(*) as count FROM allowed_assets")
+      .get() as { count: number };
+    if (count.count > 0) return;
+
+    const initialAssets = (process.env.ALLOWED_ASSETS || "USDC,XLM")
+      .split(",")
+      .map((asset) => asset.trim().toUpperCase())
+      .filter((asset) => asset.length > 0);
+
+    const insert = db.prepare("INSERT OR IGNORE INTO allowed_assets (code) VALUES (?)");
+    const seedAll = db.transaction((assets: string[]) => {
+      for (const asset of assets) {
+        insert.run(asset);
+      }
+    });
+    seedAll(initialAssets);
+  } catch (error) {
+    logger.warn({ err: error }, "failed to seed allowed assets");
+  }
+}
+
+/** Returns the allowlisted asset codes, in insertion order. */
+export function getAllowedAssets(): string[] {
+  try {
+    const rows = getDb()
+      .prepare("SELECT code FROM allowed_assets")
+      .all() as Array<{ code: string }>;
+    return rows.map((row) => row.code);
+  } catch {
+    return [];
+  }
+}
+
+/** Adds a code to the allowlist (upper-cased, no-op when already present). */
+export function addAllowedAsset(code: string): void {
+  getDb()
+    .prepare("INSERT OR IGNORE INTO allowed_assets (code) VALUES (?)")
+    .run(code.trim().toUpperCase());
+}
+
+/** Removes a code from the allowlist (upper-cased). */
+export function removeAllowedAsset(code: string): void {
+  getDb()
+    .prepare("DELETE FROM allowed_assets WHERE code = ?")
+    .run(code.trim().toUpperCase());
+}
+
+/** Full-text search over the streams FTS index; returns matching stream ids. */
+export function searchStreamsFts(query: string): string[] {
+  try {
+    const rows = getDb()
+      .prepare(
+        `SELECT stream_id FROM streams_fts WHERE streams_fts MATCH ? ORDER BY rank`,
+      )
+      .all(query) as Array<{ stream_id: string }>;
+    return rows.map((row) => row.stream_id);
+  } catch {
+    return [];
+  }
 }

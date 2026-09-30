@@ -175,6 +175,7 @@ describe("database migrations", () => {
       .prepare("SELECT version FROM schema_migrations ORDER BY version")
       .all() as Array<{ version: number }>;
 
-    expect(applied.map((row) => row.version)).toEqual([1, 2, 3]);
+    // Later migrations (005_add_allowed_assets) stay applied; only 4 is rolled back.
+    expect(applied.map((row) => row.version)).toEqual([1, 2, 3, 5]);
   });
 });

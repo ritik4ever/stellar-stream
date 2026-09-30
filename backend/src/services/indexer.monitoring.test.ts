@@ -189,6 +189,16 @@ afterEach(() => {
 //   • Prometheus outcome gauge is set to 0 (INDEXER_OUTCOME_CODES.success).
 // =============================================================================
 
+/** Arguments of the last call made on a vitest mock (Array.at needs ES2022). */
+function lastMockCall(mocked: ReturnType<typeof vi.fn>): unknown[] {
+  const calls = mocked.mock.calls as unknown[][];
+  return calls[calls.length - 1] ?? [];
+}
+
+function outcomeCallArgs(set: unknown): unknown[] {
+  return lastMockCall(set as ReturnType<typeof vi.fn>);
+}
+
 describe("Scenario A — lag increasing while RPC is healthy", () => {
   it("reports success when the checkpoint is behind but the circuit is closed and no failures have occurred", async () => {
     const cid = nextContractId();
@@ -280,7 +290,7 @@ describe("Scenario A — lag increasing while RPC is healthy", () => {
     const signal = refreshIndexerMetrics();
     expect(signal.outcome).toBe("success");
     expect(
-      (indexerOutcome.set as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0],
+      outcomeCallArgs(indexerOutcome.set)[0],
     ).toBe(INDEXER_OUTCOME_CODES.success);
   });
 
@@ -509,7 +519,7 @@ describe("Scenario B2 — exhausted retry budget (circuit open)", () => {
     const signal = refreshIndexerMetrics();
     expect(signal.outcome).toBe("blocked");
     expect(
-      (indexerOutcome.set as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0],
+      outcomeCallArgs(indexerOutcome.set)[0],
     ).toBe(INDEXER_OUTCOME_CODES.blocked);
   });
 

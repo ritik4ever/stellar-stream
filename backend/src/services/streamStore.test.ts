@@ -821,13 +821,6 @@ describe("createStream", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-describe("getStreamById", () => {
-  const frozenTime = Math.floor(Date.now() / 1000);
-
-  beforeEach(() => {
-    vi.resetModules();
-    vi.clearAllMocks();
-    vi.spyOn(Date, "now").mockReturnValue(frozenTime * 1000);
 
     mockState.nextId = 1;
     mockState.existingStreamIds = new Set<string>();
@@ -900,6 +893,30 @@ describe("getStreamById", () => {
     expect(stream.id).toBe("42");
   });
 });
+
+describe("getStreamById", () => {
+  const frozenTime = Math.floor(Date.now() / 1000);
+
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    vi.spyOn(Date, "now").mockReturnValue(frozenTime * 1000);
+
+    mockState.nextId = 1;
+    mockState.existingStreamIds = new Set<string>();
+    mockState.chainStreams = new Map<number, any>();
+    mockState.upsertedStreams = [];
+    mockState.createdEventIds = new Set<string>();
+
+    dbMocks.initDb.mockImplementation(() => undefined);
+    dbMocks.getDb.mockReturnValue(createDbMock());
+
+    delete process.env.SOROBAN_DISABLED;
+    delete process.env.SOROBAN_ENABLED;
+    process.env.CONTRACT_ID = "C1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890";
+    process.env.RPC_URL = "https://soroban-testnet.stellar.org:443";
+    process.env.STELLAR_SECRET_KEY = "SDUMMYSECRETKEY12345678901234567890123456789012345678901";
   });
 
   afterEach(() => {

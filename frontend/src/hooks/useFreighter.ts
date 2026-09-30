@@ -3,9 +3,9 @@ import {
   isConnected,
   isAllowed,
   requestAccess,
-  getPublicKey,
+  getAddress,
   signAuthEntry,
-  signBlob,
+  signMessage,
 } from "@stellar/freighter-api";
 import { getAuthChallenge, verifyAuthToken } from "../services/auth";
 import { setAuthToken } from "../services/api";
@@ -25,7 +25,7 @@ export interface FreighterState {
   connect: () => Promise<void>;
   disconnect: () => void;
   /**
-   * Sign an arbitrary action payload via Freighter's signBlob.
+   * Sign an arbitrary action payload with Freighter's `signMessage`.
    * The payload is JSON-serialised, UTF-8 encoded, then base64'd before signing.
    * Returns the base64 signature string from Freighter.
    */
@@ -34,6 +34,28 @@ export interface FreighterState {
 
 const STORAGE_KEY = "stellar_stream_auth_token";
 const NETWORK = "TESTNET";
+
+/**
+ * Freighter v6 reports failures through an `error` field on the response
+ * instead of throwing. Extract a human-readable message (or null on success).
+ */
+function apiErrorMessage(error: unknown): string | null {
+  if (!error) return null;
+  if (typeof error === "string") return error;
+  if (typeof error === "object") {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.length > 0) return message;
+  }
+  return "Freighter request failed.";
+}
+
+/** base64-encode the signature bytes returned by `signMessage`. */
+function encodeSignature(signedMessage: string | Uint8Array): string {
+  if (typeof signedMessage === "string") return signedMessage;
+  let binary = "";
+  for (const byte of signedMessage) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
 
 export function useFreighter(): FreighterState {
   const [installed, setInstalled] = useState(false);
@@ -51,7 +73,7 @@ export function useFreighter(): FreighterState {
         const connected = await isConnected();
         if (cancelled) return;
 
-        if (!connected) {
+        if (!connected.isConnected) {
           setInstalled(false);
           return;
         }
@@ -60,8 +82,9 @@ export function useFreighter(): FreighterState {
         const permitted = await isAllowed();
         if (cancelled) return;
 
-        if (permitted) {
-          const pk = await getPublicKey();
+        if (permitted.isAllowed) {
+          const access = await getAddress();
+          const pk = access.error ? null : access.address;
           const storedToken = localStorage.getItem(STORAGE_KEY);
           if (cancelled) return;
           if (pk && storedToken) {
@@ -86,8 +109,14 @@ export function useFreighter(): FreighterState {
     setError(null);
     setStatus("connecting");
     try {
-      const pk = await requestAccess();
-      if (!pk) throw new Error("Freighter did not return an account address.");
+      const access = await requestAccess();
+      const pk = access.error ? null : access.address;
+      if (!pk) {
+        throw new Error(
+          apiErrorMessage(access.error) ??
+            "Freighter did not return an account address.",
+        );
+      }
 
       setInstalled(true);
 
@@ -96,7 +125,19 @@ export function useFreighter(): FreighterState {
 
       // 2. Sign auth entry challenge using Freighter
       // Note: signAuthEntry is the modern way to sign SEP-10 txs in Freighter
-      const signedChallenge = await signAuthEntry(challengeXdr);
+      const signed = await signAuthEntry(challengeXdr, {
+        address: pk,
+        networkPassphrase: NETWORK === "TESTNET"
+          ? "Test SDF Network ; September 2015"
+          : undefined,
+      });
+      const signedChallenge = signed.error ? null : signed.signedAuthEntry;
+      if (!signedChallenge) {
+        throw new Error(
+          apiErrorMessage(signed.error) ??
+            "Freighter did not sign the authentication challenge.",
+        );
+      }
 
       // 3. Trade signed challenge for real JWT
       const token = await verifyAuthToken(signedChallenge);
@@ -135,10 +176,15 @@ export function useFreighter(): FreighterState {
     async (payload: Record<string, unknown>): Promise<string> => {
       const json = JSON.stringify(payload);
       const base64 = btoa(unescape(encodeURIComponent(json)));
-      const signed = await signBlob(base64, {
-        accountToSign: address ?? undefined,
+      const signed = await signMessage(base64, {
+        address: address ?? undefined,
       });
-      return signed;
+      const failure = apiErrorMessage(signed.error);
+      if (failure) throw new Error(failure);
+      if (signed.signedMessage == null) {
+        throw new Error("Freighter did not return a signature.");
+      }
+      return encodeSignature(signed.signedMessage);
     },
     [address],
   );

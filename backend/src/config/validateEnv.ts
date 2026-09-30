@@ -231,6 +231,14 @@ const positiveIntegerSchema = z
     message: 'must be a positive integer',
   });
 
+// Webhook dead-letter pruning interval validation
+const deadLetterPruneIntervalSchema = z
+  .string()
+  .transform((val: string) => parseInt(val, 10))
+  .refine((val: number) => !isNaN(val) && val >= 60000, {
+    message: "must be a valid number >= 60000 (minimum 1 minute)",
+  });
+
 // Admin API key validation
 const adminApiKeySchema = z
   .string()
@@ -261,6 +269,18 @@ const envSchema = z.object({
   DOMAIN: z.string().optional().default('localhost'),
   SOROBAN_DISABLED: z.string().optional(),
   INDEXER_POLL_INTERVAL_MS: indexerPollIntervalSchema.optional().default(10000),
+  RECONCILIATION_INTERVAL_MS: reconciliationIntervalSchema.optional().default(60000),
+  ARCHIVE_CRON_INTERVAL_MS: archiveCronIntervalSchema.optional().default(86400000),
+  INDEXER_FALLBACK_POLLING_ENABLED: z.string().optional().default("false"),
+  INDEXER_FALLBACK_POLL_INTERVAL_MS: fallbackPollIntervalSchema.optional().default(10000),
+  WEBHOOK_MONITOR_PENDING_WARN_THRESHOLD: positiveIntegerSchema.optional().default(100),
+  WEBHOOK_MONITOR_RETRY_DUE_WARN_THRESHOLD: positiveIntegerSchema.optional().default(10),
+  WEBHOOK_MONITOR_DEAD_LETTER_ALERT_THRESHOLD: positiveIntegerSchema.optional().default(1),
+  INDEXER_MONITOR_MAX_LEDGER_LAG: nonNegativeIntegerSchema.optional().default(100),
+  INDEXER_MONITOR_MAX_CONSECUTIVE_ERRORS: positiveIntegerSchema.optional().default(5),
+  WEBHOOK_DEAD_LETTER_PRUNE_INTERVAL_MS: deadLetterPruneIntervalSchema
+    .optional()
+    .default(86400000),
   RECONCILIATION_INTERVAL_MS: reconciliationIntervalSchema
     .optional()
     .default(60000),
@@ -315,6 +335,7 @@ export interface ValidatedConfig {
   webhookMonitorDeadLetterAlertThreshold: number;
   indexerMonitorMaxLedgerLag: number;
   indexerMonitorMaxConsecutiveErrors: number;
+  webhookDeadLetterPruneIntervalMs: number;
   adminApiKey: string | null;
   allowedOrigins: string | undefined;
 }
@@ -656,6 +677,8 @@ export function validateEnv(): ValidatedConfig {
     webhookMonitorDeadLetterAlertThreshold:
       env.WEBHOOK_MONITOR_DEAD_LETTER_ALERT_THRESHOLD,
     indexerMonitorMaxLedgerLag: env.INDEXER_MONITOR_MAX_LEDGER_LAG,
+    indexerMonitorMaxConsecutiveErrors: env.INDEXER_MONITOR_MAX_CONSECUTIVE_ERRORS,
+    webhookDeadLetterPruneIntervalMs: env.WEBHOOK_DEAD_LETTER_PRUNE_INTERVAL_MS,
     indexerMonitorMaxConsecutiveErrors:
       env.INDEXER_MONITOR_MAX_CONSECUTIVE_ERRORS,
     adminApiKey,
