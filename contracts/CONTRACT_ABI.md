@@ -52,6 +52,26 @@ Before deploying a layout-changing WASM:
 5. Keep a compatibility read path until the migration is complete, then bump
    the documented contract version and re-run the ABI/storage audit.
 
+### Authority over existing state
+
+An upgraded build must derive authority from the `sender` and `recipient`
+recorded in the stored `Stream(id)`, never from caller-supplied arguments
+alone:
+
+| Entry point | Required signer (from stored record) |
+| --- | --- |
+| `claim` | `recipient` |
+| `transfer_stream` | `recipient` |
+| `cancel`, `pause_stream`, `resume_stream` | `sender` |
+| `clawback` | stored `Admin` |
+
+Each check runs before any token transfer or storage write, so an
+unauthorized call leaves balances and the stream record unchanged. After
+`transfer_stream`, only the new recipient can claim. The
+`test_prior_build_stream_*` tests in `src/test.rs` seed a record directly in
+storage, as a previous build would have left it, and verify these rules with
+auth enforcement on. Any layout-changing migration must keep them passing.
+
 Storage TTLs are deliberately not used for stream state: expiry would make a
 valid long-running stream unreadable. If temporary operational keys are added
 in a future version, their TTL and cleanup behavior must be documented here.
