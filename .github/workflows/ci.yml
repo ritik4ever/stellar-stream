@@ -7,8 +7,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: {node-version: 20}
-      - run: cd backend && npm ci --legacy-peer-deps && (npm run build || npx tsc --noEmit || true)
+        with:
+          node-version: '20'
+      - name: Install backend dependencies
+        run: cd backend && npm ci
+      - name: Build backend
+        run: cd backend && npm run build
+
   frontend-build:
     name: Frontend Build
     runs-on: ubuntu-latest
