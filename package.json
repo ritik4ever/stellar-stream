@@ -1,6 +1,6 @@
 {
   "name": "stellar-stream",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Real-time payment streaming platform built on Stellar",
   "private": true,
   "scripts": {
@@ -10,7 +10,6 @@
     "verify:dependencies": "node scripts/verify-dependencies.mjs",
     "compose:up": "bash scripts/compose-up.sh",
     "test:compose-up": "bash scripts/compose-up.test.sh",
-
     "sqlite:backup": "bash scripts/sqlite-backup.sh",
     "test:sqlite-backup": "bash scripts/sqlite-backup.test.sh",
     "build": "cd backend && npm run build && cd ../frontend && npm run build",
