@@ -1229,7 +1229,7 @@ fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
         return 0;
     }
 
-    stream.total_amount * (elapsed as i128) / (total_duration as i128)
+    stream.total_amount.checked_mul(elapsed as i128).unwrap_or(0) / (total_duration as i128)
 }
 
 #[cfg(test)]
