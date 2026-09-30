@@ -1,3 +1,7 @@
 [toolchain]
 channel = "nightly-2024-12-01"
+# Pin the toolchain to a specific nightly to avoid toolchain mismatch failures in Contract CI.
+# If a mismatch is detected, verify the installed toolchain with `rustup show` and
+# re-run `rustup toolchain install nightly-2024-12-01 --target wasm32-unknown-unknown`
+# before retrying the workflow. Roll back by reverting this file to the last known-good commit.
 targets = ["wasm32-unknown-unknown"]

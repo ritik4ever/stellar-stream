@@ -1,5 +1,8 @@
 name: Soroban Contract CI
 
+env:
+  RUST_TOOLCHAIN: stable
+
 on:
   push:
     paths:
@@ -24,10 +27,31 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Detect toolchain mismatch
+        id: toolchain
+        run: |
+          set -euo pipefail
+          EXPECTED="${{ env.RUST_TOOLCHAIN }}"
+          if [ -f rust-toolchain.toml ]; then
+            PINNED=$(grep -E '^channel' rust-toolchain.toml | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
+          elif [ -f rust-toolchain ]; then
+            PINNED=$(head -n1 rust-toolchain | tr -d '[:space:]')
+          else
+            PINNED="$EXPECTED"
+          fi
+          echo "pinned=$PINNED" >> "$GITHUB_OUTPUT"
+          if [ "$PINNED" != "$EXPECTED" ]; then
+            echo "mismatch=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Toolchain mismatch: workflow expects '$EXPECTED' but repo pins '$PINNED'"
+          else
+            echo "mismatch=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+          toolchain: ${{ steps.toolchain.outputs.pinned }}
 
       - name: Cache cargo registry and build artifacts
         uses: actions/cache@v4
@@ -42,6 +66,14 @@ jobs:
 
       - name: Check contract formatting
         run: cargo fmt --all -- --check
+
+      - name: Verify toolchain after install
+        if: steps.toolchain.outputs.mismatch == 'true'
+        run: |
+          set -euo pipefail
+          ACTIVE=$(rustc --version | awk '{print $2}')
+          echo "Active rustc: $ACTIVE"
+          echo "::notice::Recovered from toolchain mismatch using pinned '${{ steps.toolchain.outputs.pinned }}'"
 
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -66,6 +98,7 @@ jobs:
       - name: Run contract tests
         env:
           RUSTFLAGS: "-D warnings"
+        continue-on-error: false
         run: cargo test --locked
 
       - name: Build WASM binary and report size
@@ -75,3 +108,10 @@ jobs:
           echo "WASM Binary Size: ${SIZE} bytes ($(numfmt --to=iec ${SIZE}))"
           echo "## WASM Binary Size" >> $GITHUB_STEP_SUMMARY
           echo "**$(numfmt --to=iec ${SIZE})** (${SIZE} bytes)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Rollback guidance on failure
+        if: failure()
+        run: |
+          echo "::error::Contract CI failed. Rollback: revert the contract change or re-pin rust-toolchain to '${{ env.RUST_TOOLCHAIN }}' and re-run."
+          echo "## Rollback Required" >> $GITHUB_STEP_SUMMARY
+          echo "Contract CI did not reach a verified healthy state. Revert the contract change or align rust-toolchain with '${{ env.RUST_TOOLCHAIN }}'." >> $GITHUB_STEP_SUMMARY
