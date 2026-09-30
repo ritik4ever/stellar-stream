@@ -864,6 +864,7 @@ fn test_vested_amount_fuzz_invariants() {
         paused: false,
         pause_started_at: None,
         metadata: None,
+        require_mutual_cancel: false,
     };
 
     let mut seed: u64 = 0xDEADBEEFCAFEBABE;
@@ -1574,6 +1575,7 @@ fn test_resume_stream_panic_on_missing_timestamp() {
         paused: true,
         pause_started_at: None,
         metadata: None,
+        require_mutual_cancel: false,
     };
 
     env.as_contract(&contract_id, || {
@@ -3842,6 +3844,7 @@ fn prior_build_fixture(env: &Env) -> PriorBuild<'_> {
         paused: false,
         pause_started_at: None,
         metadata: Some(make_metadata(env)),
+        require_mutual_cancel: false,
     };
 
     env.as_contract(&contract_id, || {
@@ -4095,4 +4098,784 @@ fn test_prior_build_stream_transfer_moves_claim_authority() {
     );
     assert_eq!(f.client.claim(&f.stream_id, &new_recipient, &300), 300);
     assert_eq!(f.token.balance(&new_recipient), 300);
+}
+
+// ===========================================================================
+// Multi-sig Mutual Cancel Tests (#700)
+// ===========================================================================
+
+/// Helper: create a mutual-cancel stream. Returns (contract_id, client, sender, recipient, token, stream_id).
+fn setup_mutual_cancel_stream(
+    env: &Env,
+) -> (
+    Address,
+    StellarStreamContractClient,
+    Address,
+    Address,
+    token::Client,
+    u64,
+) {
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(env, &contract_id);
+    let admin = Address::generate(env);
+    let sender = Address::generate(env);
+    let recipient = Address::generate(env);
+    let token_addr = create_token(env, &admin);
+    let token_sac = token::StellarAssetClient::new(env, &token_addr);
+    let token = token::Client::new(env, &token_addr);
+
+    token_sac.mint(&sender, &10_000);
+
+    // start_time = current ledger time, end_time = 2000 seconds later.
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    let start_time = 1000u64;
+    let end_time = 3000u64;
+
+    let stream_id = client.create_stream_mutual_cancel(
+        &sender,
+        &recipient,
+        &token_addr,
+        &2000,
+        &start_time,
+        &end_time,
+        &0,
+        &None,
+    );
+
+    (contract_id, client, sender, recipient, token, stream_id)
+}
+
+// ---------------------------------------------------------------------------
+// Test: mutual cancel flag stored correctly
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_mutual_cancel_flag_stored_on_stream() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, _sender, _recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    let stream = client.get_stream(&stream_id);
+    assert!(stream.require_mutual_cancel, "require_mutual_cancel should be true");
+}
+
+#[test]
+fn test_non_mutual_cancel_flag_default_false() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_addr = create_token(&env, &admin);
+    let token_sac = token::StellarAssetClient::new(&env, &token_addr);
+    token_sac.mint(&sender, &10_000);
+
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    let stream_id = client.create_stream(
+        &sender,
+        &recipient,
+        &token_addr,
+        &2000,
+        &1000,
+        &3000,
+        &0,
+        &None,
+    );
+
+    let stream = client.get_stream(&stream_id);
+    assert!(!stream.require_mutual_cancel, "require_mutual_cancel should default to false");
+}
+
+// ---------------------------------------------------------------------------
+// Test: single-party cancel rejected for mutual-cancel streams
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_single_party_cancel_rejected_for_mutual_cancel_stream() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, _recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    let result = client.try_cancel(&stream_id, &sender);
+    assert!(
+        result.is_err(),
+        "single-party cancel on mutual-cancel stream should fail"
+    );
+    // Stream should NOT be canceled.
+    let stream = client.get_stream(&stream_id);
+    assert!(!stream.canceled, "stream should not be canceled");
+}
+
+#[test]
+fn test_single_party_cancel_returns_mutual_cancel_unauthorized_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, _recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    let result = client.try_cancel(&stream_id, &sender);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::MutualCancelUnauthorized)),
+        "error should be MutualCancelUnauthorized"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: propose_cancel - sender proposes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_propose_cancel_by_sender_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, _recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+
+    let result = client.try_propose_cancel(&stream_id, &sender);
+    assert!(result.is_ok(), "propose_cancel by sender should succeed");
+
+    let proposal = client.get_cancel_proposal(&stream_id);
+    assert!(proposal.is_some(), "proposal should be stored");
+
+    let p = proposal.unwrap();
+    assert_eq!(p.proposer, sender);
+    assert_eq!(p.proposed_at, 1500);
+    assert_eq!(p.expires_at, 1500 + 604800);
+}
+
+#[test]
+fn test_propose_cancel_by_recipient_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, _sender, recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+
+    let result = client.try_propose_cancel(&stream_id, &recipient);
+    assert!(result.is_ok(), "propose_cancel by recipient should succeed");
+
+    let proposal = client.get_cancel_proposal(&stream_id);
+    let p = proposal.unwrap();
+    assert_eq!(p.proposer, recipient);
+}
+
+// ---------------------------------------------------------------------------
+// Test: propose_cancel - unauthorized third party
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_propose_cancel_by_stranger_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, _sender, _recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    let stranger = Address::generate(&env);
+    let result = client.try_propose_cancel(&stream_id, &stranger);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::MutualCancelUnauthorized)),
+        "stranger should get MutualCancelUnauthorized"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: duplicate propose
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_propose_cancel_duplicate_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, _recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    client.propose_cancel(&stream_id, &sender);
+
+    // Second proposal should fail.
+    let result = client.try_propose_cancel(&stream_id, &sender);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::MutualCancelAlreadyProposed)),
+        "duplicate proposal should return MutualCancelAlreadyProposed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: CancelProposed event emitted
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_propose_cancel_emits_cancel_proposed_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, _recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    client.propose_cancel(&stream_id, &sender);
+
+    let last_event = env.events().all().last().unwrap();
+    assert_eq!(
+        last_event.1,
+        (symbol_short!("Cancel"), symbol_short!("Proposed")).into_val(&env)
+    );
+    let event_data: CancelProposed = last_event.2.into_val(&env);
+    assert_eq!(event_data.stream_id, stream_id);
+    assert_eq!(event_data.proposed_by, sender);
+    assert_eq!(event_data.expires_at, 1500 + 604800);
+}
+
+// ---------------------------------------------------------------------------
+// Test: confirm_cancel - happy path (sender proposes, recipient confirms)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_confirm_cancel_by_counterparty_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, recipient, token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    // Advance time to midpoint (2000) — half of 1000..3000 range
+    env.ledger().with_mut(|l| l.timestamp = 2000);
+
+    client.propose_cancel(&stream_id, &sender);
+
+    let result = client.try_confirm_cancel(&stream_id, &recipient);
+    assert!(result.is_ok(), "confirm_cancel by recipient should succeed");
+
+    let stream = client.get_stream(&stream_id);
+    assert!(stream.canceled, "stream should be canceled after confirm");
+
+    // Half of 2000 = 1000 tokens vested, so sender gets 1000 refunded.
+    assert_eq!(token.balance(&sender), 10_000 - 2000 + 1000);
+}
+
+#[test]
+fn test_confirm_cancel_recipient_proposes_sender_confirms() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, recipient, token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 2000);
+
+    // Recipient proposes; sender confirms.
+    client.propose_cancel(&stream_id, &recipient);
+    let result = client.try_confirm_cancel(&stream_id, &sender);
+    assert!(result.is_ok(), "confirm_cancel by sender should succeed");
+
+    let stream = client.get_stream(&stream_id);
+    assert!(stream.canceled);
+
+    // Sender funded 2000, half vested so sender gets 1000 back.
+    assert_eq!(token.balance(&sender), 10_000 - 2000 + 1000);
+}
+
+// ---------------------------------------------------------------------------
+// Test: confirm_cancel - same party cannot confirm their own proposal
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_confirm_cancel_by_proposer_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, _recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    client.propose_cancel(&stream_id, &sender);
+
+    // Sender tries to confirm their own proposal.
+    let result = client.try_confirm_cancel(&stream_id, &sender);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::MutualCancelUnauthorized)),
+        "proposer should not be able to confirm their own proposal"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: confirm_cancel - stranger cannot confirm
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_confirm_cancel_by_stranger_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, _recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    client.propose_cancel(&stream_id, &sender);
+
+    let stranger = Address::generate(&env);
+    let result = client.try_confirm_cancel(&stream_id, &stranger);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::MutualCancelUnauthorized)),
+        "stranger should not be able to confirm cancel"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: confirm_cancel - expired proposal fails
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_confirm_cancel_after_expiry_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    // Propose at t=1500.
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    client.propose_cancel(&stream_id, &sender);
+
+    // Advance time past 7-day expiry (604800 seconds).
+    env.ledger().with_mut(|l| l.timestamp = 1500 + 604800 + 1);
+
+    let result = client.try_confirm_cancel(&stream_id, &recipient);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::MutualCancelNotProposed)),
+        "expired proposal should return MutualCancelNotProposed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: confirm_cancel clears the proposal from storage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_confirm_cancel_removes_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 2000);
+    client.propose_cancel(&stream_id, &sender);
+    client.confirm_cancel(&stream_id, &recipient);
+
+    let proposal = client.get_cancel_proposal(&stream_id);
+    assert!(proposal.is_none(), "proposal should be removed after confirm");
+}
+
+// ---------------------------------------------------------------------------
+// Test: CancelConfirmed event emitted
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_confirm_cancel_emits_cancel_confirmed_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 2000);
+    client.propose_cancel(&stream_id, &sender);
+    client.confirm_cancel(&stream_id, &recipient);
+
+    let events = env.events().all();
+    let found = events.iter().any(|e| {
+        let topics: soroban_sdk::Vec<Val> = e.1.try_into_val(&env).unwrap_or_else(|_| soroban_sdk::Vec::new(&env));
+        if topics.len() < 2 {
+            return false;
+        }
+        let t0: Option<soroban_sdk::Symbol> = topics.get(0).and_then(|v| v.try_into_val(&env).ok());
+        let t1: Option<soroban_sdk::Symbol> = topics.get(1).and_then(|v| v.try_into_val(&env).ok());
+        t0 == Some(Symbol::new(&env, "Cancel")) && t1 == Some(Symbol::new(&env, "Confirmed"))
+    });
+    assert!(found, "CancelConfirmed event should be emitted");
+}
+
+// ---------------------------------------------------------------------------
+// Test: expire_cancel - sweeps an expired proposal
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_expire_cancel_sweeps_expired_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, _recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    // Propose at t=1500.
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    client.propose_cancel(&stream_id, &sender);
+
+    // Advance past 7-day window.
+    env.ledger().with_mut(|l| l.timestamp = 1500 + 604800 + 1);
+
+    let anyone = Address::generate(&env);
+    let result = client.try_expire_cancel(&stream_id, &anyone);
+    assert!(result.is_ok(), "expire_cancel should succeed after expiry");
+
+    let proposal = client.get_cancel_proposal(&stream_id);
+    assert!(proposal.is_none(), "proposal should be cleared after expire");
+}
+
+#[test]
+fn test_expire_cancel_stream_continues_after_expired_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, recipient, token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    // Propose at t=1500, advance past expiry, sweep.
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    client.propose_cancel(&stream_id, &sender);
+
+    env.ledger().with_mut(|l| l.timestamp = 1500 + 604800 + 1);
+    let anyone = Address::generate(&env);
+    client.expire_cancel(&stream_id, &anyone);
+
+    // Stream should not be canceled.
+    let stream = client.get_stream(&stream_id);
+    assert!(!stream.canceled, "stream should continue after expired proposal");
+
+    // Recipient should still be able to claim at end time.
+    env.ledger().with_mut(|l| l.timestamp = 3000);
+    let claimable = client.claimable(&stream_id, &3000);
+    assert_eq!(claimable, 2000, "full amount should be claimable after expiry");
+
+    let claimed = client.claim(&stream_id, &recipient, &2000);
+    assert_eq!(claimed, 2000);
+    assert_eq!(token.balance(&recipient), 2000);
+}
+
+// ---------------------------------------------------------------------------
+// Test: expire_cancel - fails if proposal not yet expired
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_expire_cancel_fails_before_expiry() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, _recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    client.propose_cancel(&stream_id, &sender);
+
+    // Try to expire 1 second before the 7-day window ends.
+    env.ledger().with_mut(|l| l.timestamp = 1500 + 604799);
+
+    let anyone = Address::generate(&env);
+    let result = client.try_expire_cancel(&stream_id, &anyone);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::MutualCancelNotProposed)),
+        "expire_cancel should fail before expiry"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: expire_cancel - fails if no proposal exists
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_expire_cancel_fails_with_no_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, _sender, _recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 2000);
+    let anyone = Address::generate(&env);
+    let result = client.try_expire_cancel(&stream_id, &anyone);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::MutualCancelNotProposed)),
+        "expire_cancel with no proposal should fail"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: CancelExpired event emitted
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_expire_cancel_emits_cancel_expired_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, _recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    client.propose_cancel(&stream_id, &sender);
+
+    env.ledger().with_mut(|l| l.timestamp = 1500 + 604800 + 1);
+    let anyone = Address::generate(&env);
+    client.expire_cancel(&stream_id, &anyone);
+
+    let events = env.events().all();
+    let found = events.iter().any(|e| {
+        let topics: soroban_sdk::Vec<Val> = e.1.try_into_val(&env).unwrap_or_else(|_| soroban_sdk::Vec::new(&env));
+        if topics.len() < 2 {
+            return false;
+        }
+        let t0: Option<soroban_sdk::Symbol> = topics.get(0).and_then(|v| v.try_into_val(&env).ok());
+        let t1: Option<soroban_sdk::Symbol> = topics.get(1).and_then(|v| v.try_into_val(&env).ok());
+        t0 == Some(Symbol::new(&env, "Cancel")) && t1 == Some(Symbol::new(&env, "Expired"))
+    });
+    assert!(found, "CancelExpired event should be emitted");
+}
+
+// ---------------------------------------------------------------------------
+// Test: get_cancel_proposal returns None when no proposal
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_get_cancel_proposal_returns_none_when_empty() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, _sender, _recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    let proposal = client.get_cancel_proposal(&stream_id);
+    assert!(proposal.is_none(), "no proposal should return None");
+}
+
+// ---------------------------------------------------------------------------
+// Test: propose_cancel fails on already-canceled stream
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_propose_cancel_on_already_canceled_stream_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Use a regular (non-mutual) stream, cancel it, then try to propose.
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_addr = create_token(&env, &admin);
+    let token_sac = token::StellarAssetClient::new(&env, &token_addr);
+    token_sac.mint(&sender, &10_000);
+
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    let stream_id = client.create_stream(&sender, &recipient, &token_addr, &2000, &1000, &3000, &0, &None);
+
+    // Cancel normally.
+    env.ledger().with_mut(|l| l.timestamp = 2000);
+    client.cancel(&stream_id, &sender);
+
+    // Trying to propose on a canceled stream should panic.
+    let result = client.try_propose_cancel(&stream_id, &sender);
+    assert!(result.is_err(), "propose on canceled stream should fail");
+}
+
+// ---------------------------------------------------------------------------
+// Test: confirm_cancel fails when no proposal exists
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_confirm_cancel_no_proposal_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, _sender, recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    let result = client.try_confirm_cancel(&stream_id, &recipient);
+    assert!(result.is_err(), "confirm without proposal should panic/fail");
+}
+
+// ---------------------------------------------------------------------------
+// Test: full mutual cancel lifecycle with correct token amounts
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_mutual_cancel_full_lifecycle_token_conservation() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, recipient, token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    // Initial state: sender spent 2000 tokens.
+    let sender_initial = token.balance(&sender);
+    let recipient_initial = token.balance(&recipient);
+    assert_eq!(sender_initial, 10_000 - 2000);
+    assert_eq!(recipient_initial, 0);
+
+    // Advance to 25% through stream (1000 -> 2000 range, t=1500 = halfway of 2000 = 50%
+    // Actually: start=1000, end=3000, so duration=2000. At t=1500, elapsed=500, vested=500.
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+
+    // Recipient proposes cancel.
+    client.propose_cancel(&stream_id, &recipient);
+
+    // Sender confirms.
+    client.confirm_cancel(&stream_id, &sender);
+
+    // Vested at t=1500: 500/2000 * 2000 = 500 tokens
+    // Sender refund = 2000 - 500 = 1500
+    let sender_after = token.balance(&sender);
+    assert_eq!(sender_after, sender_initial + 1500, "sender should get 1500 back");
+
+    // Recipient can still claim vested amount (500).
+    let claimable = client.claimable(&stream_id, &1500);
+    assert_eq!(claimable, 500, "recipient should have 500 claimable after cancel");
+
+    let claimed = client.claim(&stream_id, &recipient, &500);
+    assert_eq!(claimed, 500);
+    assert_eq!(token.balance(&recipient), 500);
+
+    // Token conservation: 8000 (sender) + 1500 (refund) = 9500 + 500 (recipient) = 10000.
+    let total = token.balance(&sender) + token.balance(&recipient);
+    assert_eq!(total, 10_000, "total tokens should be conserved");
+}
+
+// ---------------------------------------------------------------------------
+// Test: propose_cancel requires authentication
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_propose_cancel_requires_auth() {
+    let env = Env::default();
+    // Do NOT mock_all_auths - test that auth is actually required.
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_addr = create_token(&env, &admin);
+    let token_sac = token::StellarAssetClient::new(&env, &token_addr);
+
+    env.mock_all_auths_allowing_non_root_auth();
+    token_sac.mint(&sender, &10_000);
+
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    let stream_id = client.create_stream_mutual_cancel(
+        &sender, &recipient, &token_addr, &2000, &1000, &3000, &0, &None,
+    );
+
+    // No auth mock set up for propose_cancel.
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    let result = client.try_propose_cancel(&stream_id, &sender);
+    assert!(result.is_err(), "propose_cancel without auth should fail");
+}
+
+// ---------------------------------------------------------------------------
+// Test: existing normal cancel still works for non-mutual streams
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_normal_cancel_still_works_for_non_mutual_stream() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_addr = create_token(&env, &admin);
+    let token_sac = token::StellarAssetClient::new(&env, &token_addr);
+    let token = token::Client::new(&env, &token_addr);
+    token_sac.mint(&sender, &10_000);
+
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    let stream_id = client.create_stream(
+        &sender, &recipient, &token_addr, &2000, &1000, &3000, &0, &None,
+    );
+
+    env.ledger().with_mut(|l| l.timestamp = 2000);
+    // Single-party cancel should work fine on non-mutual stream.
+    client.cancel(&stream_id, &sender);
+
+    let stream = client.get_stream(&stream_id);
+    assert!(stream.canceled, "non-mutual stream should cancel normally");
+    assert_eq!(token.balance(&sender), 10_000 - 2000 + 1000);
+}
+
+// ---------------------------------------------------------------------------
+// Test: propose then expire then re-propose works
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_propose_after_expire_works() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, _recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    // First proposal at t=1500.
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    client.propose_cancel(&stream_id, &sender);
+
+    // Expire at t = 1500 + 604800 + 1.
+    let expire_time = 1500 + 604800 + 1;
+    env.ledger().with_mut(|l| l.timestamp = expire_time);
+    let anyone = Address::generate(&env);
+    client.expire_cancel(&stream_id, &anyone);
+
+    // Second proposal should succeed (no existing proposal).
+    env.ledger().with_mut(|l| l.timestamp = expire_time + 1);
+    let result = client.try_propose_cancel(&stream_id, &sender);
+    assert!(result.is_ok(), "second propose after expiry should succeed");
+
+    let proposal = client.get_cancel_proposal(&stream_id);
+    assert!(proposal.is_some(), "new proposal should be stored");
+    assert_eq!(proposal.unwrap().proposed_at, expire_time + 1);
+}
+
+// ---------------------------------------------------------------------------
+// Test: confirm_cancel at exactly expiry boundary (not expired yet)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_confirm_cancel_at_exact_expiry_boundary_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_contract_id, client, sender, recipient, _token, stream_id) =
+        setup_mutual_cancel_stream(&env);
+
+    env.ledger().with_mut(|l| l.timestamp = 1500);
+    client.propose_cancel(&stream_id, &sender);
+
+    // Exactly at expiry (not past it, so should succeed).
+    env.ledger().with_mut(|l| l.timestamp = 1500 + 604800);
+    let result = client.try_confirm_cancel(&stream_id, &recipient);
+    assert!(result.is_ok(), "confirm at exact expiry should succeed (not yet expired)");
 }

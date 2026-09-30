@@ -90,6 +90,9 @@ pub mod escrow {
 const NATIVE_SENTINEL: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 const MAX_TEMPLATES_PER_SENDER: u32 = 10;
 
+/// 7-day window in seconds for mutual cancel proposals.
+const MUTUAL_CANCEL_EXPIRY_SECONDS: u64 = 7 * 24 * 60 * 60; // 604800
+
 // ---------------------------------------------------------------------------
 // Stream struct
 // ---------------------------------------------------------------------------
@@ -113,8 +116,25 @@ pub struct Stream {
     pub canceled: bool,
     pub paused: bool,
     pub pause_started_at: Option<u64>,
-
     pub metadata: Option<Map<String, String>>,
+    /// When true, both sender and recipient must agree to cancel this stream.
+    pub require_mutual_cancel: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Mutual cancel proposal storage type
+// ---------------------------------------------------------------------------
+
+/// Stored under DataKey::MutualCancelProposal(stream_id).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MutualCancelProposal {
+    /// The party that initiated the cancel proposal (sender or recipient).
+    pub proposer: Address,
+    /// Ledger timestamp when the proposal was created.
+    pub proposed_at: u64,
+    /// Ledger timestamp after which this proposal expires.
+    pub expires_at: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -133,17 +153,12 @@ pub enum DataKey {
     ChildToParent(u64),
     NativeToken,
     AllowedTokens,
+    /// Stores a MutualCancelProposal for the given stream_id.
+    MutualCancelProposal(u64),
 }
 
 // ---------------------------------------------------------------------------
 // Events
-//
-// All events share three mandatory fields:
-//   stream_id  – identifies the stream this event belongs to
-//   actor      – the on-chain address that triggered the event
-//   timestamp  – ledger close time (Unix seconds) at the moment of emission
-//
-// Additional fields carry event-specific data (amounts, addresses, etc.).
 // ---------------------------------------------------------------------------
 
 /// Emitted once when a new stream is created via `create_stream` or as a
@@ -284,6 +299,47 @@ pub struct StreamTransferred {
     // --- event-specific fields ---
     pub old_recipient: Address,
     pub new_recipient: Address,
+}
+
+// ---------------------------------------------------------------------------
+// Mutual Cancel Events
+// ---------------------------------------------------------------------------
+
+/// Emitted when a party (sender or recipient) proposes to cancel a mutual-cancel stream.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CancelProposed {
+    pub stream_id: u64,
+    /// The party who proposed the cancel.
+    pub actor: Address,
+    pub timestamp: u64,
+    pub proposed_by: Address,
+    /// Timestamp after which this proposal expires and becomes invalid.
+    pub expires_at: u64,
+}
+
+/// Emitted when the second party confirms the cancel proposal, completing the cancellation.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CancelConfirmed {
+    pub stream_id: u64,
+    /// The party who confirmed (i.e., the counter-party to the proposer).
+    pub actor: Address,
+    pub timestamp: u64,
+    pub confirming_party: Address,
+    /// Amount refunded to the sender.
+    pub refunded_amount: i128,
+}
+
+/// Emitted when an expired cancel proposal is swept away, allowing the stream to continue.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CancelExpired {
+    pub stream_id: u64,
+    /// The address that triggered the expiry sweep.
+    pub actor: Address,
+    pub timestamp: u64,
+    pub proposed_by: Address,
 }
 
 #[contract]
@@ -429,6 +485,7 @@ impl StellarStreamContract {
             template.vesting_type,
             0,
             None,
+            false,
         )
     }
 
@@ -456,6 +513,37 @@ impl StellarStreamContract {
             String::from_str(&env, "linear"),
             min_claim_interval_seconds,
             metadata,
+            false,
+        )
+    }
+
+    /// Creates a stream with mutual cancel enabled. Both sender and recipient
+    /// must agree (via `propose_cancel` + `confirm_cancel`) to cancel this stream.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_stream_mutual_cancel(
+        env: Env,
+        sender: Address,
+        recipient: Address,
+        token: Address,
+        total_amount: i128,
+        start_time: u64,
+        end_time: u64,
+        min_claim_interval_seconds: u64,
+        metadata: Option<Map<String, String>>,
+    ) -> u64 {
+        create_stream_with_config(
+            &env,
+            sender,
+            recipient,
+            token,
+            total_amount,
+            start_time,
+            end_time,
+            0,
+            String::from_str(&env, "linear"),
+            min_claim_interval_seconds,
+            metadata,
+            true,
         )
     }
 
@@ -534,6 +622,7 @@ impl StellarStreamContract {
                 paused: false,
                 pause_started_at: None,
                 metadata: None,
+                require_mutual_cancel: false,
             };
 
             env.storage()
@@ -749,63 +838,202 @@ impl StellarStreamContract {
         Ok(amount)
     }
 
-    pub fn cancel(env: Env, stream_id: u64, sender: Address) {
-        let mut stream = read_stream(&env, stream_id);
+    /// Cancels a stream. For streams with `require_mutual_cancel = true`, single-party
+    /// cancel is rejected — use `propose_cancel` + `confirm_cancel` instead.
+    pub fn cancel(env: Env, stream_id: u64, sender: Address) -> Result<(), ContractError> {
+        let stream = read_stream(&env, stream_id);
         if stream.sender != sender {
             panic!("sender mismatch");
         }
         sender.require_auth();
 
+        // Reject single-party cancel for mutual-cancel streams.
+        if stream.require_mutual_cancel {
+            return Err(ContractError::MutualCancelUnauthorized);
+        }
+
+        execute_cancel(&env, stream_id, sender);
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Mutual Cancel
+    // -----------------------------------------------------------------------
+
+    /// Proposes a cancel for a mutual-cancel stream. The proposer must be either
+    /// the sender or recipient. If a proposal already exists, panics with
+    /// MutualCancelAlreadyProposed. Emits `CancelProposed`.
+    pub fn propose_cancel(
+        env: Env,
+        stream_id: u64,
+        proposer: Address,
+    ) -> Result<(), ContractError> {
+        proposer.require_auth();
+
+        let stream = read_stream(&env, stream_id);
         if stream.canceled {
-            return;
+            panic!("stream already canceled");
+        }
+
+        // Proposer must be sender or recipient.
+        if stream.sender != proposer && stream.recipient != proposer {
+            return Err(ContractError::MutualCancelUnauthorized);
+        }
+
+        // Check that no proposal already exists.
+        let existing: Option<MutualCancelProposal> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MutualCancelProposal(stream_id));
+        if existing.is_some() {
+            return Err(ContractError::MutualCancelAlreadyProposed);
         }
 
         let now = env.ledger().timestamp();
-        stream.canceled = true;
+        let expires_at = now.saturating_add(MUTUAL_CANCEL_EXPIRY_SECONDS);
 
-        let vested = vested_amount(&stream, now);
-        let sender_refund = stream.total_amount - vested;
-
-        let min_end = if now > stream.start_time {
-            now
-        } else {
-            stream.start_time
+        let proposal = MutualCancelProposal {
+            proposer: proposer.clone(),
+            proposed_at: now,
+            expires_at,
         };
-        if min_end < stream.end_time {
-            stream.end_time = min_end;
-            stream.total_amount = vested;
-        }
-
-        if sender_refund > 0 {
-            let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
-            let actual_token = if is_native {
-                env.storage()
-                    .instance()
-                    .get(&DataKey::NativeToken)
-                    .unwrap_or_else(|| panic!("not initialized"))
-            } else {
-                stream.token.clone()
-            };
-            let token_client = TokenClient::new(&env, &actual_token);
-            let contract_address = env.current_contract_address();
-
-            token_client.transfer(&contract_address, &sender, &sender_refund);
-        }
 
         env.storage()
             .persistent()
-            .set(&DataKey::Stream(stream_id), &stream);
+            .set(&DataKey::MutualCancelProposal(stream_id), &proposal);
 
         env.events().publish(
-            (symbol_short!("Stream"), symbol_short!("Canceled")),
-            StreamCanceled {
+            (symbol_short!("Cancel"), symbol_short!("Proposed")),
+            CancelProposed {
                 stream_id,
-                actor: sender.clone(),
+                actor: proposer.clone(),
                 timestamp: now,
-                sender,
-                refunded_amount: sender_refund,
+                proposed_by: proposer,
+                expires_at,
             },
         );
+
+        Ok(())
+    }
+
+    /// Confirms a mutual cancel proposed by the other party. The confirmer must be
+    /// the counter-party (if proposer was sender, confirmer must be recipient and vice versa).
+    /// Validates that the proposal has not expired. Executes the cancel and emits `CancelConfirmed`.
+    pub fn confirm_cancel(
+        env: Env,
+        stream_id: u64,
+        confirmer: Address,
+    ) -> Result<(), ContractError> {
+        confirmer.require_auth();
+
+        let stream = read_stream(&env, stream_id);
+        if stream.canceled {
+            panic!("stream already canceled");
+        }
+
+        // Load the proposal.
+        let proposal: MutualCancelProposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MutualCancelProposal(stream_id))
+            .unwrap_or_else(|| panic!("no cancel proposal found"));
+
+        let now = env.ledger().timestamp();
+
+        // Validate proposal has not expired.
+        if now > proposal.expires_at {
+            return Err(ContractError::MutualCancelNotProposed);
+        }
+
+        // Confirmer must be the counter-party.
+        let expected_confirmer = if proposal.proposer == stream.sender {
+            stream.recipient.clone()
+        } else {
+            stream.sender.clone()
+        };
+
+        if confirmer != expected_confirmer {
+            return Err(ContractError::MutualCancelUnauthorized);
+        }
+
+        // Remove the proposal before executing cancel.
+        env.storage()
+            .persistent()
+            .remove(&DataKey::MutualCancelProposal(stream_id));
+
+        // Calculate refund amount before executing cancel.
+        let vested = vested_amount(&stream, now);
+        let refunded_amount = stream.total_amount - vested;
+
+        // Execute the actual cancel logic.
+        execute_cancel(&env, stream_id, stream.sender.clone());
+
+        env.events().publish(
+            (symbol_short!("Cancel"), symbol_short!("Confirmed")),
+            CancelConfirmed {
+                stream_id,
+                actor: confirmer.clone(),
+                timestamp: now,
+                confirming_party: confirmer,
+                refunded_amount,
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Allows anyone to sweep an expired cancel proposal, clearing it from storage
+    /// and emitting `CancelExpired` so the stream can continue normally.
+    pub fn expire_cancel(
+        env: Env,
+        stream_id: u64,
+        caller: Address,
+    ) -> Result<(), ContractError> {
+        caller.require_auth();
+
+        let _stream = read_stream(&env, stream_id);
+
+        let proposal: MutualCancelProposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MutualCancelProposal(stream_id))
+            .ok_or(ContractError::MutualCancelNotProposed)?;
+
+        let now = env.ledger().timestamp();
+
+        // Proposal must be expired.
+        if now <= proposal.expires_at {
+            return Err(ContractError::MutualCancelNotProposed);
+        }
+
+        let proposed_by = proposal.proposer.clone();
+
+        // Remove the expired proposal.
+        env.storage()
+            .persistent()
+            .remove(&DataKey::MutualCancelProposal(stream_id));
+
+        env.events().publish(
+            (symbol_short!("Cancel"), symbol_short!("Expired")),
+            CancelExpired {
+                stream_id,
+                actor: caller,
+                timestamp: now,
+                proposed_by,
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Returns the current active cancel proposal for the given stream, if any.
+    pub fn get_cancel_proposal(
+        env: Env,
+        stream_id: u64,
+    ) -> Option<MutualCancelProposal> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MutualCancelProposal(stream_id))
     }
 
     pub fn transfer_stream(env: Env, stream_id: u64, new_recipient: Address) {
@@ -1023,19 +1251,6 @@ impl StellarStreamContract {
     // -----------------------------------------------------------------------
     // Native XLM stream support (#688)
     // -----------------------------------------------------------------------
-    //
-    // `NativeToken` is the address of the SAC (Stellar Asset Contract) that
-    // wraps native XLM for this network — the only address a Soroban
-    // contract can present to the standard SEP-41 token interface to move
-    // native balances; there is no lower-level, SAC-free path for a contract
-    // to debit/credit XLM. Before this, that address could only be set once,
-    // at `initialize()`, with no way to view or correct it afterward: a
-    // wrong or stale address (e.g. after a network migration) permanently
-    // broke every native-token stream (`create_stream`/`clawback` both
-    // `panic!("not initialized")` on the missing key) with no recovery short
-    // of redeploying the whole contract. `get_native_token`/`set_native_token`
-    // give admins visibility and a correction path, matching the pattern
-    // already used for `AllowedTokens`.
 
     /// Returns the configured native-XLM SAC address, if any.
     pub fn get_native_token(env: Env) -> Option<Address> {
@@ -1091,6 +1306,7 @@ fn create_stream_with_config(
     vesting_type: String,
     min_claim_interval_seconds: u64,
     metadata: Option<Map<String, String>>,
+    require_mutual_cancel: bool,
 ) -> u64 {
     sender.require_auth();
 
@@ -1158,6 +1374,7 @@ fn create_stream_with_config(
         paused: false,
         pause_started_at: None,
         metadata: metadata.clone(),
+        require_mutual_cancel,
     };
 
     env.storage()
@@ -1189,6 +1406,62 @@ fn create_stream_with_config(
     );
 
     next_id
+}
+
+/// Internal helper: executes the actual cancel logic (token refund + stream update + event).
+/// Used by both `cancel` (single-party) and `confirm_cancel` (mutual).
+fn execute_cancel(env: &Env, stream_id: u64, sender: Address) {
+    let mut stream = read_stream(env, stream_id);
+
+    if stream.canceled {
+        return;
+    }
+
+    let now = env.ledger().timestamp();
+    stream.canceled = true;
+
+    let vested = vested_amount(&stream, now);
+    let sender_refund = stream.total_amount - vested;
+
+    let min_end = if now > stream.start_time {
+        now
+    } else {
+        stream.start_time
+    };
+    if min_end < stream.end_time {
+        stream.end_time = min_end;
+        stream.total_amount = vested;
+    }
+
+    if sender_refund > 0 {
+        let is_native = stream.token.to_string() == String::from_str(env, NATIVE_SENTINEL);
+        let actual_token = if is_native {
+            env.storage()
+                .instance()
+                .get(&DataKey::NativeToken)
+                .unwrap_or_else(|| panic!("not initialized"))
+        } else {
+            stream.token.clone()
+        };
+        let token_client = TokenClient::new(env, &actual_token);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&contract_address, &sender, &sender_refund);
+    }
+
+    env.storage()
+        .persistent()
+        .set(&DataKey::Stream(stream_id), &stream);
+
+    env.events().publish(
+        (symbol_short!("Stream"), symbol_short!("Canceled")),
+        StreamCanceled {
+            stream_id,
+            actor: sender.clone(),
+            timestamp: now,
+            sender,
+            refunded_amount: sender_refund,
+        },
+    );
 }
 
 fn read_template(env: &Env, template_id: u64) -> StreamTemplate {

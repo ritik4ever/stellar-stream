@@ -19,4 +19,5 @@ Stream {
     paused: false,
     pause_started_at: None,
     metadata: None,
+    require_mutual_cancel: false,
 }

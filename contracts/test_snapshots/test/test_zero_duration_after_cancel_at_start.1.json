@@ -324,9 +324,25 @@
                     },
                     {
                       "key": {
+                        "symbol": "last_claim_time"
+                      },
+                      "val": {
+                        "u64": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "metadata"
                       },
                       "val": "void"
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_claim_interval_seconds"
+                      },
+                      "val": {
+                        "u64": 0
+                      }
                     },
                     {
                       "key": {
@@ -348,6 +364,14 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "require_mutual_cancel"
+                      },
+                      "val": {
+                        "bool": false
                       }
                     },
                     {
@@ -383,6 +407,14 @@
                           "hi": 0,
                           "lo": 0
                         }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "vesting_type"
+                      },
+                      "val": {
+                        "string": "linear"
                       }
                     }
                   ]
@@ -1278,6 +1310,14 @@
               "map": [
                 {
                   "key": {
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "cliff_seconds"
                   },
                   "val": {
@@ -1297,6 +1337,14 @@
                     "symbol": "metadata"
                   },
                   "val": "void"
+                },
+                {
+                  "key": {
+                    "symbol": "min_claim_interval_seconds"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
                 },
                 {
                   "key": {
@@ -1332,6 +1380,14 @@
                 },
                 {
                   "key": {
+                    "symbol": "timestamp"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "token"
                   },
                   "val": {
@@ -1355,6 +1411,14 @@
                       "hi": 0,
                       "lo": 1000
                     }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "vesting_type"
+                  },
+                  "val": {
+                    "string": "linear"
                   }
                 }
               ]
@@ -1531,6 +1595,25 @@
               "map": [
                 {
                   "key": {
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "refunded_amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 1000
+                    }
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "sender"
                   },
                   "val": {
@@ -1543,6 +1626,14 @@
                   },
                   "val": {
                     "u64": 1
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "timestamp"
+                  },
+                  "val": {
+                    "u64": 500
                   }
                 }
               ]
@@ -1653,9 +1744,25 @@
                 },
                 {
                   "key": {
+                    "symbol": "last_claim_time"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "metadata"
                   },
                   "val": "void"
+                },
+                {
+                  "key": {
+                    "symbol": "min_claim_interval_seconds"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
                 },
                 {
                   "key": {
@@ -1677,6 +1784,14 @@
                   },
                   "val": {
                     "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "require_mutual_cancel"
+                  },
+                  "val": {
+                    "bool": false
                   }
                 },
                 {
@@ -1712,6 +1827,14 @@
                       "hi": 0,
                       "lo": 0
                     }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "vesting_type"
+                  },
+                  "val": {
+                    "string": "linear"
                   }
                 }
               ]

@@ -91,9 +91,25 @@
                     },
                     {
                       "key": {
+                        "symbol": "last_claim_time"
+                      },
+                      "val": {
+                        "u64": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "metadata"
                       },
                       "val": "void"
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_claim_interval_seconds"
+                      },
+                      "val": {
+                        "u64": 0
+                      }
                     },
                     {
                       "key": {
@@ -115,6 +131,14 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "require_mutual_cancel"
+                      },
+                      "val": {
+                        "bool": false
                       }
                     },
                     {
@@ -150,6 +174,14 @@
                           "hi": 0,
                           "lo": 1000
                         }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "vesting_type"
+                      },
+                      "val": {
+                        "string": "linear"
                       }
                     }
                   ]
@@ -265,7 +297,7 @@
             "data": {
               "vec": [
                 {
-                  "string": "caught panic 'pause timestamp missing' from contract function 'Symbol(obj#27)'"
+                  "string": "caught panic 'pause timestamp missing' from contract function 'Symbol(obj#37)'"
                 },
                 {
                   "u64": 1

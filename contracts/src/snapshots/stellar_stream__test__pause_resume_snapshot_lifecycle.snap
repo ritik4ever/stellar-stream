@@ -21,4 +21,5 @@ Stream {
         1500,
     ),
     metadata: None,
+    require_mutual_cancel: false,
 }

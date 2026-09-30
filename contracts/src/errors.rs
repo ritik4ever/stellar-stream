@@ -12,4 +12,10 @@ pub enum ContractError {
     EscrowInactive = 3,
     /// Claim rejected because the stream's minimum claim interval has not elapsed.
     ClaimTooFrequent = 4,
+    /// Cancel proposal not found or already processed.
+    MutualCancelNotProposed = 5,
+    /// A cancel proposal already exists for this stream.
+    MutualCancelAlreadyProposed = 6,
+    /// The caller is not authorized to confirm this cancel proposal.
+    MutualCancelUnauthorized = 7,
 }

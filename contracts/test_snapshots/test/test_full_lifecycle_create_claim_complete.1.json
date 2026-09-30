@@ -360,9 +360,25 @@
                     },
                     {
                       "key": {
+                        "symbol": "last_claim_time"
+                      },
+                      "val": {
+                        "u64": 1000
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "metadata"
                       },
                       "val": "void"
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_claim_interval_seconds"
+                      },
+                      "val": {
+                        "u64": 0
+                      }
                     },
                     {
                       "key": {
@@ -384,6 +400,14 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "require_mutual_cancel"
+                      },
+                      "val": {
+                        "bool": false
                       }
                     },
                     {
@@ -419,6 +443,14 @@
                           "hi": 0,
                           "lo": 1000
                         }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "vesting_type"
+                      },
+                      "val": {
+                        "string": "linear"
                       }
                     }
                   ]
@@ -1420,6 +1452,14 @@
               "map": [
                 {
                   "key": {
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "cliff_seconds"
                   },
                   "val": {
@@ -1439,6 +1479,14 @@
                     "symbol": "metadata"
                   },
                   "val": "void"
+                },
+                {
+                  "key": {
+                    "symbol": "min_claim_interval_seconds"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
                 },
                 {
                   "key": {
@@ -1474,6 +1522,14 @@
                 },
                 {
                   "key": {
+                    "symbol": "timestamp"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "token"
                   },
                   "val": {
@@ -1497,6 +1553,14 @@
                       "hi": 0,
                       "lo": 1000
                     }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "vesting_type"
+                  },
+                  "val": {
+                    "string": "linear"
                   }
                 }
               ]
@@ -1726,7 +1790,26 @@
               "map": [
                 {
                   "key": {
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 400
+                    }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "claimed_amount"
                   },
                   "val": {
                     "i128": {
@@ -1749,6 +1832,14 @@
                   },
                   "val": {
                     "u64": 1
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "timestamp"
+                  },
+                  "val": {
+                    "u64": 400
                   }
                 }
               ]
@@ -1986,12 +2077,31 @@
               "map": [
                 {
                   "key": {
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "amount"
                   },
                   "val": {
                     "i128": {
                       "hi": 0,
                       "lo": 600
+                    }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "claimed_amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 1000
                     }
                   }
                 },
@@ -2009,6 +2119,73 @@
                   },
                   "val": {
                     "u64": 1
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "timestamp"
+                  },
+                  "val": {
+                    "u64": 1000
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "Stream"
+              },
+              {
+                "symbol": "Completed"
+              }
+            ],
+            "data": {
+              "map": [
+                {
+                  "key": {
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "stream_id"
+                  },
+                  "val": {
+                    "u64": 1
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "timestamp"
+                  },
+                  "val": {
+                    "u64": 1000
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "total_amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 1000
+                    }
                   }
                 }
               ]
@@ -2176,9 +2353,25 @@
                 },
                 {
                   "key": {
+                    "symbol": "last_claim_time"
+                  },
+                  "val": {
+                    "u64": 1000
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "metadata"
                   },
                   "val": "void"
+                },
+                {
+                  "key": {
+                    "symbol": "min_claim_interval_seconds"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
                 },
                 {
                   "key": {
@@ -2200,6 +2393,14 @@
                   },
                   "val": {
                     "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "require_mutual_cancel"
+                  },
+                  "val": {
+                    "bool": false
                   }
                 },
                 {
@@ -2235,6 +2436,14 @@
                       "hi": 0,
                       "lo": 1000
                     }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "vesting_type"
+                  },
+                  "val": {
+                    "string": "linear"
                   }
                 }
               ]
