@@ -29,3 +29,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash scripts/e2e-run.test.sh
+  backend-ci-script:
+    name: Backend CI Script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/backend-ci.test.sh
