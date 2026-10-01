@@ -1,7 +1,10 @@
 # Operational Runbook
 
 This runbook provides step-by-step procedures for common operational tasks in StellarStream.  
-For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**.## Table of Contents
+For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**.
+
+## Table of Contents
+
 1. [Reset SQLite Database](#reset-sqlite-database)
 2. [SQLite Restore from Backup](#sqlite-restore-from-backup)
 3. [Rotate JWT Secret](#rotate-jwt-secret)
@@ -10,12 +13,13 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 6. [Archive Old Streams Manually](#archive-old-streams-manually)
 7. [Indexer Falls Behind](#indexer-falls-behind)
 8. [Indexer Monitoring Outcome Signal](#indexer-monitoring-outcome-signal)
-9. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
-10. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
-11. [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal)
-12. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
-13. [Contract Invocation Timeout](#contract-invocation-timeout)
-14. [Docker Compose Startup Failure](#docker-compose-startup-failure)
+9. [Verify Indexer Monitoring (repeatable)](#verify-indexer-monitoring-repeatable)
+10. [Verify SQLite Restore Before Start](#verify-sqlite-restore-before-start)
+11. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
+12. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
+13. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
+14. [Contract Invocation Timeout](#contract-invocation-timeout)
+15. [Docker Compose Startup Failure](#docker-compose-startup-failure)
 
 ---
 
@@ -281,20 +285,15 @@ cd backend && npx vitest run
 **Expected Output:**
 
 - All existing user sessions are invalidated.
-- Users will be prompted to re-connect their wallets and sign a new challenge.**Validation from Clean Environment:**
+- Users will be prompted to re-connect their wallets and sign a new challenge.
+
+**Validation from Clean Environment:**
 To verify the rotation works without undocumented local state:
+
 1. Provision a fresh backend instance (or container) with the new `JWT_SECRET` only
 2. No database migration or prior state required - the secret is read at startup
 3. Issue a new challenge via `GET /api/auth/challenge` and complete auth flow
 4. Verify `POST /api/auth/token` returns a valid JWT signed with the new secret.
-5. Read the outcome signal (see [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal)):
-   ```bash
-   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
-     "http://localhost:3001/api/secrets-rotation/monitoring?credential=jwt_secret" | jq .outcome
-   # Expected after rotation completes: "success"
-   # While pre-rotation tokens are still accepted: "transient_delay"
-   # If new-credential artifacts are rejected: "blocked" — restart once and re-check.
-   ```
 
 ---
 
@@ -322,22 +321,19 @@ To verify the rotation works without undocumented local state:
 
 - All existing SEP-10 challenges issued with the old key become invalid.
 - New challenges via `GET /api/auth/challenge` are signed with the new key.
-- Clients must request a new challenge and re-sign to authenticate.**Validation from Clean Environment:**
+- Clients must request a new challenge and re-sign to authenticate.
+
+**Validation from Clean Environment:**
 To verify the rotation works without undocumented local state:
+
 1. Provision a fresh backend instance (or container) with the new `SERVER_SIGNING_KEY` only
 2. No database migration or prior state required - the key is read at startup
 3. Issue a new challenge via `GET /api/auth/challenge?accountId=<client>`
 4. Client signs the challenge and submits via `POST /api/auth/token`
 5. Verify a valid JWT is returned (signed with current `JWT_SECRET`)
-6. Read the outcome signal (see [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal)):
-   ```bash
-   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
-     "http://localhost:3001/api/secrets-rotation/monitoring?credential=server_signing_key" | jq .outcome
-   # Expected after rotation completes: "success"
-   ```
 
 **Note on Combined Rotation:**
-Both `JWT_SECRET` and `SERVER_SIGNING_KEY` can be rotated simultaneously by updating both environment variables and restarting once. The order of operations does not matter as both are loaded at startup. Verify with `GET /api/secrets-rotation/monitoring?credential=both` (or omit the parameter) — see [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal).
+Both `JWT_SECRET` and `SERVER_SIGNING_KEY` can be rotated simultaneously by updating both environment variables and restarting once. The order of operations does not matter as both are loaded at startup.
 
 ---
 
@@ -536,6 +532,70 @@ an explicit owner action instead of raw counters.
 
 ---
 
+### Verify Indexer Monitoring (repeatable)
+The repeatable, CI-safe verification of the two failure modes this runbook
+section cluster covers — `lag increasing while RPC is healthy` and
+`RPC rate limit or disconnection` (issue #1228):
+
+```bash
+cd backend
+npx vitest run src/services/indexer.monitoring.test.ts   # outcome classification
+npx vitest run src/services/indexer.cursorage.test.ts    # cursor age + poll path
+```
+
+The classification suite drives the outcome signal through both failure modes;
+the cursor-age suite drives the **production poll path** (`indexEvents`) against
+a programmable RPC through three scenarios — both fail on any violated
+expectation:
+
+1. **Healthy poll** — lag returns to 0, cursor age fresh, zero errors,
+   `indexer_outcome` = success.
+2. **Lag increasing while RPC is healthy** — `indexer_ledger_lag` grows across
+   polls while `getLatestLedger` keeps answering; the cursor age grows
+   (`indexer_last_success_timestamp_seconds` frozen) and `indexer_errors_total`
+   climbs.
+3. **RPC rate limit / disconnection** — the failure is classified
+   (`rate_limited` / `disconnected`, never a raw provider message), the outcome
+   escalates to `blocked` once the circuit opens, and open-circuit polls stop
+   hitting the RPC entirely.
+
+**Cursor-age alerting:** `indexer_last_success_timestamp_seconds` (unix seconds
+of the last successful poll) is published on `/metrics`. Alert when
+`now - indexer_last_success_timestamp_seconds` exceeds a few poll intervals —
+it distinguishes a stalled indexer (timestamp frozen, lag gauges may look
+normal) from a healthy one (timestamp refreshes every successful poll).
+
+---
+
+### Verify SQLite Restore Before Start
+Run **before** starting the backend on a restored `streams.db` (issue #1221).
+The verifier is read-only — it never migrates or repairs — so a failing check
+means the operator decides deliberately instead of startup silently catching
+the schema up (a partial rollout):
+
+```bash
+cd backend
+npx ts-node --transpile-only src/services/restoreVerify.ts [path/to/streams.db]
+```
+
+Omitting the path verifies `DB_PATH` (or the default `backend/data/streams.db`).
+Checks, in order — the first failure exits non-zero:
+
+| Check | PASS means |
+| --- | --- |
+| `file_exists` | the restored file is present |
+| `sqlite_open` / `integrity_check` | a sound SQLite database (`PRAGMA integrity_check` = ok) |
+| `schema_version` | restored schema matches this build's migrations, using the same `success` / `transient_delay` / `blocked` classification as the live `sqlite_restore_outcome` signal — `transient_delay` (backup older than code) still FAILs here so migration is a deliberate operator step |
+| `row_counts` | `streams=N stream_events=M` readable, to compare against the backup manifest |
+| `indexer_cursor` | the poller will resume from the restore point, never rewind (missing row → FAIL with the fix) |
+
+All lines `PASS` → start the backend. Any `FAIL` → error messages carry paths,
+versions and counts only (never file contents or credentials); see
+[Force Indexer Reconcile](#force-indexer-reconcile) to set a missing cursor and
+[Reset SQLite Database](#reset-sqlite-database) to start from scratch.
+
+---
+
 ### Webhook Dead-Letter Spike
 
 **Symptoms:**
@@ -616,62 +676,6 @@ an explicit owner action instead of raw counters.
 1. `blocked` with `counts.deadLetters > 0` — the destination has remained unavailable. Follow [Webhook Dead-Letter Spike](#webhook-dead-letter-spike).
 2. `blocked` with `counts.pending > 0` and no destination configured — set `WEBHOOK_DESTINATION_URL` in the backend `.env` and restart the service.
 3. `transient_delay` — take no action while the queued count is falling. If it stops draining, inspect the worker log for `webhook delivery scheduled for retry` and confirm the destination is reachable.
-
----
-
-### Secrets Rotation Outcome Signal
-
-**Symptoms:**
-
-- Alert on the `secrets_rotation_outcome` Prometheus gauge changing from `0`.
-- `GET /api/secrets-rotation/monitoring` returns `outcome: "blocked"`.
-- Users report being logged out repeatedly during a `JWT_SECRET` / `SERVER_SIGNING_KEY` rotation.
-
-This is the observable state of the rotation procedure documented in
-[Rotate JWT Secret](#rotate-jwt-secret) and [Rotate Server Signing Key](#rotate-server-signing-key).
-The backend records that a credential was provisioned at startup (never its value) and
-classifies the rollout so an operator can tell a completed rotation from one that still
-needs attention.
-
-**Outcome meanings:**
-
-| Outcome           | Gauge value | Meaning                                                                                                                            | Owner action                                                                                                         |
-| ----------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `success`         | 0           | No rotation recorded (fresh process), or the rotation completed: artifacts signed with the previous credential are rejected.        | None.                                                                                                                |
-| `transient_delay` | 1           | Old-credential artifacts (tokens or challenges) are still being accepted. Expected while outstanding sessions and in-flight challenges clear. | None while the stale-acceptance count falls toward zero; it clears as clients re-authenticate.                     |
-| `blocked`         | 2           | Fresh-credential artifacts are being rejected: the configured credential failed validation, or the restart step was missed.          | Follow the runbook rotation steps: correct the credential value, restart the backend **once**, and re-read the signal. Do not restart in a loop. |
-
-**Diagnosis:**
-
-1. Read the signal. It reports enumerated state and counts only — never a secret value, a token, a signature, or a raw verification message, so it is safe to paste into an incident channel:
-   ```bash
-   # Whole-process signal (latest rotation of any credential)
-   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
-     http://localhost:3001/api/secrets-rotation/monitoring | jq
-
-   # Scoped to one credential (jwt_secret | server_signing_key | both)
-   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
-     "http://localhost:3001/api/secrets-rotation/monitoring?credential=jwt_secret" | jq
-   ```
-2. Cross-check the gauge on the Prometheus scrape:
-   ```bash
-   curl -s http://localhost:3001/metrics | grep secrets_rotation_outcome
-   ```
-3. `stale_accepted=true` / `fresh_rejected=true` query parameters let an operator or
-   automated check feed an observation in (e.g. from an auth attempt with a pre-rotation
-   token) without ever passing the credential itself. The endpoint never verifies
-   credentials and never echoes anything secret.
-
-**Remediation:**
-
-1. `blocked` — re-run the rotation procedure from the top: generate the new credential,
-   update `JWT_SECRET` / `SERVER_SIGNING_KEY` in the environment, and restart once. The
-   signal returns to `success` when the process runs on the new credential.
-2. `transient_delay` persisting beyond the session lifetime — confirm the restart
-   actually happened (`rotationCount` should have incremented at startup); if clients
-   still hold old artifacts, force re-authentication or wait for expiry.
-3. After any rotation, record what was rotated and when, and confirm the signal reads
-   `success` (gauge `0`) before closing the change window.
 
 ---
 
