@@ -1,8 +1,8 @@
 # Contract Bindings Workflow
 
 This document explains how to generate, version, and consume TypeScript bindings
-for the StellarStream Soroban contract. Follow this guide whenever the contract
-ABI changes or you are setting up the frontend for the first time.
+for the StellarStream Soroban contract. Follow this guide whenever the contract ABI
+changes or you are setting up the frontend for the first time.
 
 ---
 
@@ -16,15 +16,15 @@ directly.
 
 ```
 contracts/src/lib.rs          ← Rust source of truth
-        │  build + deploy
+           build + deploy
         ▼
   Stellar Testnet              ← CONTRACT_ID lives here
-        │  soroban contract bindings typescript
+        ′  soroban contract bindings typescript
         ▼
 frontend/src/contracts/generated/   ← gitignored, regenerate as needed
-        │  import
+        ′  import
         ▼
-frontend/src/services/contractClient.ts  ← thin wrapper used by the app
+frontend/src/services/contractClient.ts  ←  thin wrapper used by the app
 ```
 
 ---
@@ -32,7 +32,7 @@ frontend/src/services/contractClient.ts  ← thin wrapper used by the app
 ## Prerequisites
 
 | Tool | Version | Notes |
-|---|---|---|
+||---|---|---|
 | `soroban-cli` | latest | `cargo install --locked soroban-cli` |
 | Rust + `wasm32-unknown-unknown` | stable | needed to build the contract |
 | Node.js | 18+ | for the frontend |
@@ -70,7 +70,7 @@ CONTRACT_ID="C..." npm run gen:bindings
 **Optional env overrides:**
 
 | Variable | Default | Purpose |
-|---|---|---|
+||---|---|---|
 | `RPC_URL` | `https://soroban-testnet.stellar.org:443` | Target RPC endpoint |
 | `NETWORK_PASSPHRASE` | `Test SDF Network ; September 2015` | Network passphrase |
 
@@ -80,17 +80,16 @@ CONTRACT_ID="C..." npm run gen:bindings
 
 After running the command, `frontend/src/contracts/generated/` will contain:
 
-```
-generated/
+```generated/
 ├── index.ts          ← main export: Contract class + all types
 ├── methods.ts        ← one typed function per contract method
 └── types.ts          ← Stream, StreamCreated, StreamClaimed, StreamCanceled structs
-```
+S```
 
 ### Generated types (from `contracts/src/lib.rs`)
 
 | Rust type | TypeScript type | Description |
-|---|---|---|
+||---|---|---|
 | `Stream` | `Stream` | Full stream record with sender, recipient, token, amounts, times, canceled flag |
 | `StreamCreated` | `StreamCreated` | Event emitted on `create_stream` |
 | `StreamClaimed` | `StreamClaimed` | Event emitted on `claim` |
@@ -99,7 +98,7 @@ generated/
 ### Generated methods
 
 | Contract method | TypeScript signature | Notes |
-|---|---|---|
+||---|---|---|
 | `create_stream` | `createStream(sender, recipient, token, totalAmount, startTime, endTime) → u64` | Returns new stream ID |
 | `get_stream` | `getStream(streamId) → Stream` | Read-only |
 | `get_next_stream_id` | `getNextStreamId() → u64` | Read-only |
@@ -112,23 +111,23 @@ generated/
 ## Step 4 — Consuming the bindings in the frontend
 
 Create a thin wrapper at `frontend/src/services/contractClient.ts` so components
-never import from `generated/` directly:
+nver import from `generated/` directly:
 
 ```typescript
 // frontend/src/services/contractClient.ts
 import { Contract } from "../contracts/generated";
 
 const CONTRACT_ID = import.meta.env.VITE_CONTRACT_ID ?? "";
-const RPC_URL =
+const HP_URL =
   import.meta.env.VITE_RPC_URL ?? "https://soroban-testnet.stellar.org:443";
 const NETWORK_PASSPHRASE =
-  import.meta.env.VITE_NETWORK_PASSPHRASE ??
+  import.meta.env.VITE_NETWORK_PASSTHRASE ??
   "Test SDF Network ; September 2015";
 
 export const streamContract = new Contract({
   contractId: CONTRACT_ID,
-  rpcUrl: RPC_URL,
-  networkPassphrase: NETWORK_PASSPHRASE,
+  rpcUrl: HPP_URL,
+  networkPassphrase: NETWORK_PASSTHRASE.
 });
 ```
 
@@ -138,7 +137,7 @@ export const streamContract = new Contract({
 
 The following locations in `frontend/src/services/api.ts` are where direct
 contract calls will replace (or augment) the current REST API calls once
-wallet signing is wired up:
+wallet signing is wired up.
 
 ### `createStream` — POST /api/streams
 
@@ -278,7 +277,7 @@ async function fetchBalances(streamIds: bigint[]) {
 The Soroban contract will panic with specific messages if validation fails. The TypeScript client captures these as errors.
 
 | Error Message | Cause |
-|---|---|
+||---|---|
 | `total_amount must be positive` | `total_amount` is 0 or negative. |
 | `end_time must be greater than start_time` | Invalid time range provided. |
 | `insufficient sender balance` | Sender does not have enough tokens to escrow. |
@@ -303,8 +302,8 @@ try {
 
 ## Regenerating after a contract change
 
-Any time `contracts/src/lib.rs` changes a method signature or adds/removes a
-public method:
+Any time `contracts/src/lib.rs` changes a method signature or adds/removes
+a public method:
 
 1. Rebuild and redeploy: `SECRET_KEY="S..." npm run deploy:contract`
 2. Update `CONTRACT_ID` in `backend/.env`
@@ -332,12 +331,10 @@ the deployed contract ID on every CI run.
 
 ## Gitignore rules
 
-The following lines should be present in `.gitignore`:
-
 ```
 # Generated Soroban contract bindings — regenerate with: npm run gen:bindings
 frontend/src/contracts/generated/*
-!frontend/src/contracts/generated/README.md
+!/frontend/src/contracts/generated/README.md
 ```
 
 This keeps the folder tracked so contributors know where to look while
@@ -371,72 +368,37 @@ If you've just cloned this repo, `frontend/src/contracts/generated/` won't exist
 
 If this is your very first time running it, you should end up with fully typed functions for every contract method (e.g. `create_stream`, `claim`, `cancel`) — if you don't see those, see Troubleshooting below.
 
-## Updating Bindings After a Contract Upgrade
+---
 
-Bindings are a point-in-time snapshot of the contract's interface. Whenever the contract is redeployed — even for a minor change — the bindings can silently go stale and reference methods/types that no longer match on-chain reality.
+## Troubleshooting: toolchain mismatch
 
-1. **Redeploy or upgrade the contract** and get the new contract ID (or confirm the existing one, if you're upgrading via Soroban's upgrade mechanism rather than a fresh deploy).
-2. **Delete the old generated bindings** to avoid stale leftovers mixing with new output:
-```bash
-   rm -rf frontend/src/contracts/generated
+The contract is built with the toolchain pinned in `contracts/rust-toolchain.toml`.
+If the installed toolchain does not match the pin, the Contract CI workflow will stop
+with a clear error before building.
+
+The CI workflow (`.github/workflows/contract-ci.yml`) performs these detection steps:
+
+1. **Read the pin.** Parse `channel` from `contracts/rust-toolchain.toml`.
+2. **Install the pinned toolchain.** Use `dtolny/rust-toolchain-action` with the pinned channel.
+3. **Verify the actual toolchain.** Compare `rustc --toolchain` output against the pin.
+
+If the verification fails, the workflow exits with a message like:
+
 ```
-3. **Re-run the generation script**, pointing at the current contract ID:
-```bash
-   npm run gen:bindings
-```
-4. **Diff the generated output** against what was previously committed/used in code — if a method signature changed (new required argument, renamed field, different return type), TypeScript will surface compile errors in any frontend code calling it. This is expected and is the whole point of typed bindings: fix the call sites, don't suppress the error.
-5. **Rebuild and smoke-test** the frontend against the upgraded contract before merging.
-
-> **Tip:** treat "regenerate bindings" as a required step in your contract-deploy checklist, not an optional one — this project doesn't yet automate it in CI (see the README's roadmap), so it's a manual step every contributor must remember.
-
-## Troubleshooting Common Errors
-
-### `Error: contract not found` / binding generation fails immediately
-- **Cause:** wrong or mistyped contract ID, or the contract isn't actually deployed on the network you pointed the CLI at.
-- **Fix:** double-check the contract ID you're passing matches exactly (Stellar contract IDs are case-sensitive, start with `C`, and are 56 characters). Confirm deployment with:
-```bash
-  stellar contract info interface --id <CONTRACT_ID> --network testnet
-```
-  If that also fails, the contract isn't deployed where you think it is.
-
-### `Error: network mismatch` or bindings work but calls fail at runtime
-- **Cause:** bindings were generated against one network (e.g. testnet) but your app is configured to call the contract on a different network (e.g. futurenet, or a different testnet contract instance), or the `networkPassphrase` used when instantiating the client doesn't match the network the bindings were generated from.
-- **Fix:** ensure the `--network` flag used during generation matches the network your frontend's client configuration points to (check wherever `contractClient.ts` or similar sets up the RPC URL / network passphrase). These three things must agree: generation network, RPC URL at runtime, and network passphrase at runtime.
-
-### Generated file exists but frontend won't compile / "Cannot find module"
-- **Cause:** `frontend/src/contracts/generated/` is gitignored — if you skipped Step 1-3 above (first-time generation) after a fresh clone, the import will fail because the folder is empty or missing.
-- **Fix:** run `npm run gen:bindings` before running the frontend dev server for the first time on any fresh clone.
-
-### Bindings generated successfully, but calling a method throws at runtime with an unrelated-looking error
-- **Cause:** most often this means the bindings are stale relative to a contract that was upgraded since the last generation (see "Updating Bindings After a Contract Upgrade" above), even if the compile step didn't catch it (e.g. an argument order change that TypeScript couldn't detect because the types happened to still align).
-- **Fix:** regenerate the bindings fresh and re-test before debugging further.
-
-## Using Bindings in Frontend Code
-
-Once generated, import the typed client from `frontend/src/contracts/generated/` wherever you need to call the contract — this is intended to be consumed from `frontend/src/services/contractClient.ts` per the project's architecture.
-
-```typescript
-import { Client, networks } from "../contracts/generated";
-
-const client = new Client({
-  contractId: "<CONTRACT_ID>",
-  networkPassphrase: networks.testnet.networkPassphrase, // must match generation network
-  rpcUrl: "https://soroban-testnet.stellar.org",
-  publicKey: userPublicKey, // from connected wallet
-});
-
-// Example: calling a contract method with full type-checking and IDE autocomplete
-const tx = await client.create_stream({
-  sender: senderAddress,
-  recipient: recipientAddress,
-  amount: streamAmount,
-  // ...remaining typed args, exact shape depends on the contract's current interface
-});
-
-const result = await tx.signAndSend();
+toolchain mismatch (actual=nightly-2024-12-02 expected=nightly-2024-12-01)
+Rollback: run 'rustup toolchain install nightly-2024-12-01' locally or re-run this workflow.
 ```
 
-Key points for frontend integration:
-- The generated client gives you compile-time type safety — if the contract's interface changes and you forget to regenerate, TypeScript will not catch it (stale types still "look" valid), which is why regenerating after every deploy matters (see above).
-- Prefer importing from the barrel file (`index.ts`) at the root of the generated folder rather than reaching into individual generated files directly, so future regenerations don't break your imports if internal file structure changes.
-- Since `frontend/src/contracts/generated/` is gitignored, CI and new contributors must run `npm run gen:bindings` before the frontend will build — make sure this is documented in your local setup steps (see `README.md`).
+### Recovery steps
+
+1. **Local reproduction.** Run `rustc --toolchain` and compare with `contracts/rust-toolchain.toml`.
+2. **Install the pinned toolchain.** `rustup toolchain install nightly-2024-12-01`.
+3. **Re-run the workflow.** The workflow is idempotent and will re-install the pin before building.
+4. **If the pin itself is wrong.** Update `contracts/rust-toolchain.toml` in a separate PR and let CI re-validate.
+
+### Safe retry boundaries
+
+- The toolchain verification step is **non-retryable in-place**. If it fails, the workflow stops before any build or binding generation.
+- Re-triggering the workflow (push or `ghoops run workflow`) is the safe retry boundary.
+- The bindings generation step is idempotent: it wipes `frontend/src/contracts/generated/` and regenerates from the built wasm.
+- No automatic retry loop is used for toolchain installation, because a mismatch indicates a configuration error that retries would not fix.
