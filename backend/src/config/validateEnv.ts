@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { logger } from '../logger';
 import { redactSecrets } from './redactSecrets';
-
+import { validateRotationConfig } from "./validateRotation";
 /**
  * Validates Soroban-related environment variables at startup.
  * Fails fast with helpful messages if config is invalid.
@@ -83,6 +83,14 @@ function resolveStellarNetwork(): { name: StellarNetworkName; source: string } {
     process.exit(1);
     throw new Error('Environment validation failed');
   }
+
+  const rotation = validateRotationConfig(process.env);
+rotation.warnings.forEach((w) => logger.warn(w));
+if (rotation.errors.length > 0) {
+  rotation.errors.forEach((e) => logger.error(`Invalid secrets rotation config: ${e}`));
+  process.exit(1);
+}
+
   if (
     process.env.NETWORK_PASSPHRASE ===
     NETWORK_PROFILES.mainnet.networkPassphrase

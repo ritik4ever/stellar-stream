@@ -983,3 +983,13 @@ docker compose down            # never add -v: it deletes the backend-data SQLit
 ```
 
 After you fix the cause, re-run `npm run compose:up`. To check the script itself without Docker, run `npm run test:compose-up`.
+2. **Rotating `JWT_SECRET` (zero-downtime)**
+   - Generate a new secret: `openssl rand -hex 32`.
+   - Move the current value to `JWT_SECRET_PREVIOUS`, put the new value in `JWT_SECRET`, and set
+     `JWT_ROTATION_CUTOVER_AT` to a future ISO 8601 time (e.g. `2026-10-15T00:00:00Z`).
+   - Restart backend instances. New tokens are signed with the new secret; tokens signed with the
+     old secret still verify until the cutover time.
+   - After the cutover time, remove `JWT_SECRET_PREVIOUS` and `JWT_ROTATION_CUTOVER_AT`.
+   - The server refuses to start (no partial rollout) if only one of the two variables is set, the
+     previous secret is shorter than 32 characters or equals `JWT_SECRET`, or the cutover time is not a
+     valid date. Errors name the variable only and never print secret values.
