@@ -8,9 +8,10 @@ This guide provides step-by-step instructions for deploying StellarStream to var
 2. [Backend Deployment (Render)](#2-backend-deployment-render)
 3. [Frontend Deployment (Vercel)](#3-frontend-deployment-vercel)
 4. [Post-Deploy Verification](#4-post-deploy-verification)
-5. [Deployment Failure Recovery](#5-deployment-failure-recovery)
-6. [Docker Deployment](#6-docker-deployment)
-7. [Troubleshooting](#7-troubleshooting)
+5. [Deployment Configuration Smoke Test](#5-deployment-configuration-smoke-test)
+6. [Deployment Failure Recovery](#6-deployment-failure-recovery)
+7. [Docker Deployment](#7-docker-deployment)
+8. [Troubleshooting](#8-troubleshooting)
 
 ---
 
@@ -327,11 +328,103 @@ curl -s https://your-backend.onrender.com/api/stats | jq '.data.onChainStreamCou
 # Expected: a number (0 is fine on a fresh deployment), NOT null.
 ```
 
-If `/api/indexer/monitoring` reports `outcome: "blocked"` with a detail telling you to set the RPC URL and contract ID, jump to [Deployment Failure Recovery](#5-deployment-failure-recovery).
+If `/api/indexer/monitoring` reports `outcome: "blocked"` with a detail telling you to set the RPC URL and contract ID, jump to [Deployment Failure Recovery](#6-deployment-failure-recovery).
 
 ---
 
-## 5. Deployment Failure Recovery
+## 5. Deployment Configuration Smoke Test
+
+Section 4's checks are curl commands you run by hand. This section is the **repeatable** version: one script that runs the network-selection and credential checks with a clear per-check result and a single pass/fail exit code, so it can be run before and after every deploy.
+
+### What it verifies
+
+`scripts/verify-deployment.sh` checks, in order:
+
+| # | Check | Passes when |
+|---|-------|-------------|
+| 1 | Network selection | `STELLAR_NETWORK` is `testnet` (default) or `mainnet` (`public`/`main` aliases) |
+| 2 | RPC endpoint matches network | `RPC_URL` is unset (defaults to the selected network) or belongs to it — a well-known opposite-network endpoint fails |
+| 3 | Passphrase matches network | `NETWORK_PASSPHRASE` is unset or is the selected network's — the opposite well-known passphrase fails |
+| 4 | Contract ID | `CONTRACT_ID` is present and 56 characters starting with `C` (skipped when `SOROBAN_DISABLED=true`) |
+| 5 | Server signing key | `SERVER_PRIVATE_KEY` is present and 56 characters starting with `S` (skipped when `SOROBAN_DISABLED=true`) |
+| 6 | RPC connectivity *(default on)* | The endpoint answers a `getLatestLedger` probe |
+| 7 | Deployed backend *(with `--backend-url`)* | `/api/health` reports ok and `/api/stats` returns `onChainStreamCount` |
+
+Values are never printed: credential checks validate shape and presence only, and failure messages name variables, not values. The script is safe to paste into an incident channel.
+
+### Running it
+
+```bash
+# From a checkout with backend/.env populated (pre-deploy config check):
+npm run verify:deployment
+# or: bash scripts/verify-deployment.sh
+
+# Config-only, no network calls (e.g. inside CI or an air-gapped host):
+bash scripts/verify-deployment.sh --skip-connectivity
+
+# Against a specific env file:
+BACKEND_ENV_FILE=/path/to/backend/.env bash scripts/verify-deployment.sh
+
+# Full check including the deployed backend (post-deploy):
+bash scripts/verify-deployment.sh --backend-url https://your-backend.onrender.com
+```
+
+**Example output (all green):**
+
+```text
+PASS  network selection — STELLAR_NETWORK resolves to testnet
+PASS  RPC endpoint matches network — RPC_URL is the well-known testnet endpoint
+PASS  network passphrase matches network — NETWORK_PASSPHRASE unset — defaults to the testnet passphrase
+PASS  contract ID — present and well-formed (value not printed)
+PASS  server signing key — present and well-formed (value not printed)
+PASS  RPC connectivity — endpoint answered getLatestLedger (URL and credentials not printed)
+
+[verify-deployment] RESULT: PASS (6 passed, 0 failed)
+```
+
+Exit codes: `0` all checks passed, `1` at least one check failed — so it can gate a deploy pipeline:
+
+```bash
+bash scripts/verify-deployment.sh --skip-connectivity && ./scripts/deploy.sh
+```
+
+### Scenario guide
+
+| Scenario | Expected result |
+|----------|-----------------|
+| Healthy testnet config (`STELLAR_NETWORK=testnet`, testnet or unset `RPC_URL`, valid `CONTRACT_ID`/`SERVER_PRIVATE_KEY`) | all PASS, exit 0 |
+| `STELLAR_NETWORK=mainnet` with the well-known testnet `RPC_URL` (or vice versa) | "RPC endpoint matches network" FAIL, exit 1 |
+| `NETWORK_PASSPHRASE` from the opposite network | "network passphrase matches network" FAIL, exit 1 |
+| Missing `CONTRACT_ID` or `SERVER_PRIVATE_KEY` | credential check FAIL, exit 1 |
+| Malformed `CONTRACT_ID` (wrong length/prefix) | credential check FAIL naming the expected shape, value never printed, exit 1 |
+| Wrong-network endpoint actually reachable | connectivity probe PASS — the *network match* check (2) is what catches a wrong-network URL |
+| Unreachable or credentialed endpoint | "RPC connectivity" FAIL, exit 1 |
+| `SOROBAN_DISABLED=true` | credential checks SKIP, connectivity against the default endpoint still runs |
+
+The script's own behavior is covered by `scripts/verify-deployment.test.sh` (stubbed node/curl, no network needed), which runs in the **Deployment Config Smoke** CI job:
+
+```bash
+npm run test:verify:deployment
+# or: bash scripts/verify-deployment.test.sh
+```
+
+### When to run it
+
+- **Before deploying** — catch a misconfigured env file before it ships.
+- **After deploying** — confirm the deployed platform actually received the values you intended (`--backend-url`).
+- **After any config change** — the checklist in [Deployment Failure Recovery](#6-deployment-failure-recovery) step 4 "VERIFY" is this script.
+
+### Manual checklist (things the script cannot see)
+
+- [ ] Render/Vercel dashboard shows the env vars you expect (platform-side values can drift from your local `.env`).
+- [ ] A redeploy was triggered after the last env change (Render requires a manual deploy; see [Redeploying After Config Changes](#redeploying-after-config-changes)).
+- [ ] `ALLOWED_ORIGINS` includes the current frontend URL.
+- [ ] `DB_PATH` points at the persistent disk (`/data/streams.db` on Render), not ephemeral storage.
+- [ ] Background workers are healthy: `/api/indexer/monitoring` reports `outcome: "success"` (Section 4).
+
+---
+
+## 6. Deployment Failure Recovery
 
 This section defines how to detect and recover from the most common deployment-configuration failure: **missing or inconsistent `CONTRACT_ID` / RPC credentials**, including a wrong testnet/mainnet selection. The rule for every step: **retry only what a restart can fix; treat configuration errors as stop-and-fix.**
 
@@ -367,8 +460,10 @@ This section defines how to detect and recover from the most common deployment-c
 3. REDEPLOY ONCE — apply the env change and trigger a new deploy
    (Render: Manual Deploy → see "Redeploying After Config Changes" below).
 
-4. VERIFY — run the health checks in Section 4, including the network
-   connectivity check (`/api/indexer/monitoring` → outcome "success").
+4. VERIFY — run the repeatable smoke test (Section 5):
+   `bash scripts/verify-deployment.sh --backend-url $BACKEND_URL`, and the
+   health checks in Section 4, including the network connectivity check
+   (`/api/indexer/monitoring` → outcome "success").
 
 → VERIFIED HEALTHY: done. Record what was misconfigured.
 → STILL FAILING after one fix-and-redeploy cycle: ROLL BACK (step 5).
@@ -399,7 +494,7 @@ If you need the API up **without chain features** while sorting out credentials,
 
 ---
 
-## 6. Docker Deployment
+## 7. Docker Deployment
 
 For a quick production-like setup using Docker Compose.
 
@@ -432,11 +527,11 @@ services:
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 ### "Contract ID not set" in Backend Logs
 
-Ensure the `CONTRACT_ID` environment variable is correctly set in your deployment platform. The indexer will not start without it. Follow the detection and recovery steps in [Deployment Failure Recovery](#5-deployment-failure-recovery).
+Ensure the `CONTRACT_ID` environment variable is correctly set in your deployment platform. The indexer will not start without it. Follow the detection and recovery steps in [Deployment Failure Recovery](#6-deployment-failure-recovery).
 
 ### Webhook Delivery Failures
 
