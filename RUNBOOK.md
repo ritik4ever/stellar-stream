@@ -1,10 +1,7 @@
 # Operational Runbook
 
 This runbook provides step-by-step procedures for common operational tasks in StellarStream.  
-For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**.
-
-## Table of Contents
-
+For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**.## Table of Contents
 1. [Reset SQLite Database](#reset-sqlite-database)
 2. [SQLite Restore from Backup](#sqlite-restore-from-backup)
 3. [Rotate JWT Secret](#rotate-jwt-secret)
@@ -15,9 +12,10 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 8. [Indexer Monitoring Outcome Signal](#indexer-monitoring-outcome-signal)
 9. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
 10. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
-11. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
-12. [Contract Invocation Timeout](#contract-invocation-timeout)
-13. [Docker Compose Startup Failure](#docker-compose-startup-failure)
+11. [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal)
+12. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
+13. [Contract Invocation Timeout](#contract-invocation-timeout)
+14. [Docker Compose Startup Failure](#docker-compose-startup-failure)
 
 ---
 
@@ -107,10 +105,118 @@ npm run sqlite:backup -- /data-backup/streams-$(date +%Y%m%d-%H%M%S).db
 
 The helper fails before opening SQLite when `DB_PATH` is missing/unreadable,
 the destination directory is missing/unwritable, `DATABASE_URL` selects
-PostgreSQL, or `sqlite3` is unavailable. It never prints environment values.
-An interrupted backup or a failed integrity check removes only its temporary
-file and preserves any existing destination. A fresh Compose database is
-reported as `transient_delay` during startup until migrations complete.
+PostgreSQL, `sqlite3` is unavailable, or one of the tunables below is not a
+non-negative integer. It never prints environment values. A fresh Compose
+database is reported as `transient_delay` during startup until migrations
+complete.
+
+Every run ends in one of three states, so the outcome is machine-checkable in a
+backup job:
+
+| Exit | State | Destination |
+| ---- | -------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `0` | verified healthy — the published file passed integrity checks | replaced with the new snapshot |
+| `1` | interrupted before completion, or unverified after retries | untouched; the run prints the rollback step and cleans up its own temp file |
+| `2` | preflight or configuration failure | nothing was attempted; this class of failure is never retried |
+
+| Tunable                             | Default | Meaning                                                        |
+| ----------------------------------- | ------- | -------------------------------------------------------------- |
+| `SQLITE_BACKUP_TIMEOUT_MS`          | `5000`  | busy timeout per snapshot attempt while the database is writable |
+| `SQLITE_BACKUP_RETRIES`             | `2`     | extra attempts after the first; `0` makes the run single-shot   |
+| `SQLITE_BACKUP_RETRY_DELAY_SECONDS` | `3`     | wait between attempts                                           |
+| `SQLITE_BACKUP_STALE_MINUTES`       | `60`    | age at which a leftover `.sqlite-backup.*` file is reported     |
+
+#### When a backup is interrupted before completion
+
+A backup can be interrupted in two places: the snapshot never finished (killed
+process, lock contention, disk pressure), or it finished and passed its checks
+but the published file is not usable. Both stop with exit `1` and a `ROLLBACK:`
+line; neither can leave a half-written backup in place of a good one.
+
+**Detection**
+
+1. Read the exit code and the `ROLLBACK:` line of the backup run. Exit `1` means
+   interrupted; exit `2` means the job was misconfigured and retrying it is
+   pointless.
+2. Look for a leftover snapshot beside the destination. The helper reports them
+   itself on its next run:
+   ```bash
+   ls -a /data-backup | grep '^\.sqlite-backup\.'
+   ```
+   Any `.sqlite-backup.*` file older than the job's normal runtime is a backup
+   that died mid-copy. It is never a restorable snapshot.
+3. Confirm what you actually hold, before relying on it:
+   ```bash
+   bash scripts/sqlite-backup.sh --verify /data-backup/streams.db
+   # Same thing through npm: npm run sqlite:verify -- /data-backup/streams.db
+   ```
+   Exit `0` means the file is complete and intact; exit `1` means it must be
+   discarded, and the command prints the rollback step.
+4. If a restore already happened, the backend reports the same condition at
+   startup as `sqlite_restore_outcome 3` (`interrupted`).
+
+**Safe retry boundaries**
+
+- Retried: a snapshot that did not complete, an empty snapshot file, or a
+  snapshot that fails `PRAGMA integrity_check` — up to `SQLITE_BACKUP_RETRIES`
+  extra attempts, spaced by `SQLITE_BACKUP_RETRY_DELAY_SECONDS`.
+- Never retried: preflight and configuration failures (exit `2`), and the
+  publish/confirm phase. Only attempt `1 + SQLITE_BACKUP_RETRIES` snapshots, so
+  a stuck lock cannot turn one backup job into an unbounded loop.
+- Re-running the helper is always safe: it writes a new temporary file and never
+  edits the live database, so an interrupted run costs nothing but the partial
+  snapshot.
+- Do not raise the retry budget to work around `database locked`. Repeated lock
+  contention means the writer is saturating the busy timeout — take the backup
+  at a quieter moment or increase `SQLITE_BACKUP_TIMEOUT_MS`, and treat a third
+  consecutive failure as an incident rather than a retry candidate.
+
+**Recovery — reach a verified healthy state, or stop with a rollback**
+
+1. Resolve the cause named in the `FAIL:` line (free disk, stop competing
+   writers, install `sqlite3`, correct `DB_PATH`).
+2. Remove the partial snapshot the run left behind, if any. The helper only ever
+   deletes its own temp file; a leftover from a killed process is yours to
+   delete after confirming no backup is still running:
+   ```bash
+   rm -f -- '/data-backup/.sqlite-backup.abc123'
+   ```
+3. Re-run the backup once:
+   ```bash
+   DB_PATH=/data/streams.db bash scripts/sqlite-backup.sh /data-backup/streams.db
+   ```
+   A success prints `RESULT: PASS` and exits `0`; that published file is the
+   verified healthy state, and it is the only file that should be treated as a
+   backup.
+4. If it still exits `1`, stop. The previous backup at that destination was left
+   untouched by the failed attempts, so roll back to it rather than accumulating
+   unverified copies:
+   ```bash
+   # The destination still holds the last snapshot that was verified.
+   bash scripts/sqlite-backup.sh --verify /data-backup/streams.db
+   # To restore it (backend stopped):
+   pm2 stop stellar-stream-backend
+   cp -p -- /data-backup/streams.db /data/streams.db
+   rm -f /data/streams.db-wal /data/streams.db-shm
+   pm2 start stellar-stream-backend
+   curl -s http://localhost:3001/metrics | grep sqlite_restore_outcome
+   ```
+   `sqlite_restore_outcome` must read `0`. If no destination passes `--verify`,
+   there is no usable backup: take a fresh one from the live database as soon as
+   the cause in step 1 is fixed, and treat the interval as an availability risk.
+5. Record the outcome. A backup job that exits `1` three times in a row is an
+   incident, not a flaky job.
+
+**If a published backup later turns out unhealthy**
+
+The helper re-checks the file after the atomic rename. When that check fails it
+puts the previous backup back and exits `1` — you get the previous snapshot, not
+a broken one. Only when no previous backup existed does it remove the unverified
+file, leaving the destination absent rather than misleading. In both cases the
+live database is never modified; restore from the last file that passes
+`--verify`. Publishing keeps one brief copy of the previous snapshot beside the
+destination, so the backup directory needs room for roughly two backups during
+the swap; a full filesystem shows up as exit `1`, not as a damaged backup.
 
 #### Restoring a backup in a clean environment
 
@@ -228,9 +334,17 @@ pm2 logs stellar-stream-backend --lines 100 | grep -i "restore"
 
 This indicates that the database backup was interrupted before completion (e.g. copied during active writes without proper checkpointing or lock) or corrupted. The startup integrity check (`PRAGMA integrity_check;`) detects this state and sets `sqlite_restore_outcome` to `3` (`interrupted`).
 
+For the backup side of the same condition — detecting an interrupted run, the
+retry boundary, and rolling back to the last verified snapshot — see
+[When a backup is interrupted before completion](#when-a-backup-is-interrupted-before-completion).
+
 **Owner Action:**
 
-1. Discard the incomplete or corrupted backup file.
+1. Discard the incomplete or corrupted backup file. Confirm which remaining
+   backups are usable before deleting anything:
+   ```bash
+   bash scripts/sqlite-backup.sh --verify /data-backup/streams-20260101.db
+   ```
 2. Restore a valid, complete backup (or a fresh backup taken when the service was stopped or using `.backup`).
 3. Restart the backend service.
 4. Confirm the signal returns to `success` (`0`).
@@ -242,8 +356,6 @@ This indicates that the database backup was interrupted before completion (e.g. 
 pm2 logs stellar-stream-backend --lines 100 | grep -i "restore"
 ```
 
-````
-
 #### Validation from a clean environment
 
 To confirm the restore behavior is reproducible without undocumented local state:
@@ -253,7 +365,7 @@ To confirm the restore behavior is reproducible without undocumented local state
    ```bash
    cd backend
    npx vitest run src/services/dbRestoreOutcome.restore.test.ts
-````
+   ```
 
 All 12 tests must pass. They build temporary in-memory databases at
 specific schema versions and verify the exact outcome signal and Prometheus
@@ -262,6 +374,13 @@ gauge value for each scenario. 3. Optionally, run the full suite to confirm no r
 ```bash
 cd backend && npx vitest run
 ```
+
+4. Run the backup-script tests, which cover an interrupted snapshot, the retry
+   boundary, and rollback of a published-but-unusable backup without a live
+   database:
+   ```bash
+   npm run test:sqlite-backup
+   ```
 
 ---
 
@@ -283,15 +402,20 @@ cd backend && npx vitest run
 **Expected Output:**
 
 - All existing user sessions are invalidated.
-- Users will be prompted to re-connect their wallets and sign a new challenge.
-
-**Validation from Clean Environment:**
+- Users will be prompted to re-connect their wallets and sign a new challenge.**Validation from Clean Environment:**
 To verify the rotation works without undocumented local state:
-
 1. Provision a fresh backend instance (or container) with the new `JWT_SECRET` only
 2. No database migration or prior state required - the secret is read at startup
 3. Issue a new challenge via `GET /api/auth/challenge` and complete auth flow
 4. Verify `POST /api/auth/token` returns a valid JWT signed with the new secret.
+5. Read the outcome signal (see [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal)):
+   ```bash
+   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
+     "http://localhost:3001/api/secrets-rotation/monitoring?credential=jwt_secret" | jq .outcome
+   # Expected after rotation completes: "success"
+   # While pre-rotation tokens are still accepted: "transient_delay"
+   # If new-credential artifacts are rejected: "blocked" — restart once and re-check.
+   ```
 
 ---
 
@@ -319,19 +443,22 @@ To verify the rotation works without undocumented local state:
 
 - All existing SEP-10 challenges issued with the old key become invalid.
 - New challenges via `GET /api/auth/challenge` are signed with the new key.
-- Clients must request a new challenge and re-sign to authenticate.
-
-**Validation from Clean Environment:**
+- Clients must request a new challenge and re-sign to authenticate.**Validation from Clean Environment:**
 To verify the rotation works without undocumented local state:
-
 1. Provision a fresh backend instance (or container) with the new `SERVER_SIGNING_KEY` only
 2. No database migration or prior state required - the key is read at startup
 3. Issue a new challenge via `GET /api/auth/challenge?accountId=<client>`
 4. Client signs the challenge and submits via `POST /api/auth/token`
 5. Verify a valid JWT is returned (signed with current `JWT_SECRET`)
+6. Read the outcome signal (see [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal)):
+   ```bash
+   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
+     "http://localhost:3001/api/secrets-rotation/monitoring?credential=server_signing_key" | jq .outcome
+   # Expected after rotation completes: "success"
+   ```
 
 **Note on Combined Rotation:**
-Both `JWT_SECRET` and `SERVER_SIGNING_KEY` can be rotated simultaneously by updating both environment variables and restarting once. The order of operations does not matter as both are loaded at startup.
+Both `JWT_SECRET` and `SERVER_SIGNING_KEY` can be rotated simultaneously by updating both environment variables and restarting once. The order of operations does not matter as both are loaded at startup. Verify with `GET /api/secrets-rotation/monitoring?credential=both` (or omit the parameter) — see [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal).
 
 ---
 
@@ -613,6 +740,62 @@ an explicit owner action instead of raw counters.
 
 ---
 
+### Secrets Rotation Outcome Signal
+
+**Symptoms:**
+
+- Alert on the `secrets_rotation_outcome` Prometheus gauge changing from `0`.
+- `GET /api/secrets-rotation/monitoring` returns `outcome: "blocked"`.
+- Users report being logged out repeatedly during a `JWT_SECRET` / `SERVER_SIGNING_KEY` rotation.
+
+This is the observable state of the rotation procedure documented in
+[Rotate JWT Secret](#rotate-jwt-secret) and [Rotate Server Signing Key](#rotate-server-signing-key).
+The backend records that a credential was provisioned at startup (never its value) and
+classifies the rollout so an operator can tell a completed rotation from one that still
+needs attention.
+
+**Outcome meanings:**
+
+| Outcome           | Gauge value | Meaning                                                                                                                            | Owner action                                                                                                         |
+| ----------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `success`         | 0           | No rotation recorded (fresh process), or the rotation completed: artifacts signed with the previous credential are rejected.        | None.                                                                                                                |
+| `transient_delay` | 1           | Old-credential artifacts (tokens or challenges) are still being accepted. Expected while outstanding sessions and in-flight challenges clear. | None while the stale-acceptance count falls toward zero; it clears as clients re-authenticate.                     |
+| `blocked`         | 2           | Fresh-credential artifacts are being rejected: the configured credential failed validation, or the restart step was missed.          | Follow the runbook rotation steps: correct the credential value, restart the backend **once**, and re-read the signal. Do not restart in a loop. |
+
+**Diagnosis:**
+
+1. Read the signal. It reports enumerated state and counts only — never a secret value, a token, a signature, or a raw verification message, so it is safe to paste into an incident channel:
+   ```bash
+   # Whole-process signal (latest rotation of any credential)
+   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
+     http://localhost:3001/api/secrets-rotation/monitoring | jq
+
+   # Scoped to one credential (jwt_secret | server_signing_key | both)
+   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
+     "http://localhost:3001/api/secrets-rotation/monitoring?credential=jwt_secret" | jq
+   ```
+2. Cross-check the gauge on the Prometheus scrape:
+   ```bash
+   curl -s http://localhost:3001/metrics | grep secrets_rotation_outcome
+   ```
+3. `stale_accepted=true` / `fresh_rejected=true` query parameters let an operator or
+   automated check feed an observation in (e.g. from an auth attempt with a pre-rotation
+   token) without ever passing the credential itself. The endpoint never verifies
+   credentials and never echoes anything secret.
+
+**Remediation:**
+
+1. `blocked` — re-run the rotation procedure from the top: generate the new credential,
+   update `JWT_SECRET` / `SERVER_SIGNING_KEY` in the environment, and restart once. The
+   signal returns to `success` when the process runs on the new credential.
+2. `transient_delay` persisting beyond the session lifetime — confirm the restart
+   actually happened (`rotationCount` should have incremented at startup); if clients
+   still hold old artifacts, force re-authentication or wait for expiry.
+3. After any rotation, record what was rotated and when, and confirm the signal reads
+   `success` (gauge `0`) before closing the change window.
+
+---
+
 ### SQLite WAL Size Growth
 
 **Symptoms:**
@@ -800,3 +983,13 @@ docker compose down            # never add -v: it deletes the backend-data SQLit
 ```
 
 After you fix the cause, re-run `npm run compose:up`. To check the script itself without Docker, run `npm run test:compose-up`.
+2. **Rotating `JWT_SECRET` (zero-downtime)**
+   - Generate a new secret: `openssl rand -hex 32`.
+   - Move the current value to `JWT_SECRET_PREVIOUS`, put the new value in `JWT_SECRET`, and set
+     `JWT_ROTATION_CUTOVER_AT` to a future ISO 8601 time (e.g. `2026-10-15T00:00:00Z`).
+   - Restart backend instances. New tokens are signed with the new secret; tokens signed with the
+     old secret still verify until the cutover time.
+   - After the cutover time, remove `JWT_SECRET_PREVIOUS` and `JWT_ROTATION_CUTOVER_AT`.
+   - The server refuses to start (no partial rollout) if only one of the two variables is set, the
+     previous secret is shorter than 32 characters or equals `JWT_SECRET`, or the cutover time is not a
+     valid date. Errors name the variable only and never print secret values.

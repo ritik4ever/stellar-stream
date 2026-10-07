@@ -17,6 +17,7 @@ env:
 jobs:
   lint-typecheck-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: backend
@@ -24,9 +25,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Fail fast when the workflow's cache manager or Node version no longer
+      # matches the backend toolchain (Issue #1184).
+      - name: Validate workflow configuration
+        working-directory: .
+        run: node scripts/check-backend-ci.mjs
+
       - uses: actions/setup-node@v4
         with:
-          node-version: '18'
+node-version: '18'
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
 
@@ -43,6 +50,8 @@ jobs:
         id: unit-tests
         continue-on-error: true
         run: npx vitest run --coverage --coverage.thresholds.lines=80 --coverage.thresholds.branches=80
+        env:
+          CI: 'true'
 
       - name: Classify test outcome
         id: classify
@@ -63,6 +72,7 @@ jobs:
           echo "owner action: see docs/runbooks/backend-ci.md"
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: coverage-report
           path: backend/coverage/

@@ -39,6 +39,10 @@ const NEW_SERVER_KEYPAIR = Keypair.random();
 const OLD_SERVER_SIGNING_KEY = OLD_SERVER_KEYPAIR.secret();
 const NEW_SERVER_SIGNING_KEY = NEW_SERVER_KEYPAIR.secret();
 
+// Latest secret after the combined-rotation step; used by the outcome-signal
+// tests to mint tokens the running app accepts.
+const LATEST_JWT_SECRET = "newer_jwt_secret_rotation_test_32chars!!";
+
 // Test client keypair (constant across tests)
 const CLIENT_KEYPAIR = Keypair.random();
 
@@ -247,7 +251,7 @@ describe("Secrets Rotation Validation", () => {
   describe("Combined Rotation (Both Secrets)", () => {
     it("handles rotating both secrets simultaneously", async () => {
       // Create another new set of secrets
-      const NEWER_JWT_SECRET = "newer_jwt_secret_rotation_test_32chars!!";
+      const NEWER_JWT_SECRET = LATEST_JWT_SECRET;
       const NEWER_SERVER_KEYPAIR = Keypair.random();
       const NEWER_SERVER_SIGNING_KEY = NEWER_SERVER_KEYPAIR.secret();
 
@@ -308,6 +312,68 @@ describe("Secrets Rotation Validation", () => {
 
       // Cleanup
       try { freshModules.getDb().close(); } catch {}
+    });
+  });
+
+  describe("Secrets Rotation Outcome Signal (GET /api/secrets-rotation/monitoring)", () => {
+    it("reports success after a clean rotation when no stale artifacts are accepted", async () => {
+      const res = await request(modules.app)
+        .get("/api/secrets-rotation/monitoring")
+        .set("Authorization", `Bearer ${makeValidToken(CLIENT_KEYPAIR.publicKey(), LATEST_JWT_SECRET)}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        outcome: "success",
+        outcomeCode: 0,
+      });
+      expect(res.body.rotationCount).toBeGreaterThan(0);
+      // Secret-free guarantee: the signal must never echo credential values.
+      expect(JSON.stringify(res.body)).not.toContain(LATEST_JWT_SECRET);
+    });
+
+    it("reports transient_delay while old-credential artifacts are still accepted", async () => {
+      const res = await request(modules.app)
+        .get("/api/secrets-rotation/monitoring?stale_accepted=true")
+        .set("Authorization", `Bearer ${makeValidToken(CLIENT_KEYPAIR.publicKey(), LATEST_JWT_SECRET)}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.outcome).toBe("transient_delay");
+      expect(res.body.outcomeCode).toBe(1);
+      expect(res.body.detail).toMatch(/Owner action:/);
+      expect(JSON.stringify(res.body)).not.toContain(LATEST_JWT_SECRET);
+    });
+
+    it("reports blocked when fresh artifacts are rejected", async () => {
+      const res = await request(modules.app)
+        .get("/api/secrets-rotation/monitoring?fresh_rejected=true")
+        .set("Authorization", `Bearer ${makeValidToken(CLIENT_KEYPAIR.publicKey(), LATEST_JWT_SECRET)}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.outcome).toBe("blocked");
+      expect(res.body.outcomeCode).toBe(2);
+      expect(res.body.detail).toMatch(/RUNBOOK.md/);
+    });
+
+    it("scopes the signal to a credential when requested", async () => {
+      const res = await request(modules.app)
+        .get("/api/secrets-rotation/monitoring?credential=server_signing_key")
+        .set("Authorization", `Bearer ${makeValidToken(CLIENT_KEYPAIR.publicKey(), LATEST_JWT_SECRET)}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.credential).toBe("server_signing_key");
+    });
+
+    it("rejects an unknown credential with 400", async () => {
+      const res = await request(modules.app)
+        .get("/api/secrets-rotation/monitoring?credential=not_a_credential")
+        .set("Authorization", `Bearer ${makeValidToken(CLIENT_KEYPAIR.publicKey(), LATEST_JWT_SECRET)}`);
+
+      expect(res.status).toBe(400);
+    });
+
+    it("requires authentication", async () => {
+      const res = await request(modules.app).get("/api/secrets-rotation/monitoring");
+      expect(res.status).toBe(401);
     });
   });
 });

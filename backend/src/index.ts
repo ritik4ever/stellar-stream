@@ -45,6 +45,12 @@ import { startWebhookWorker } from "./services/webhookWorker";
 import { startDeadLetterPruningJob } from "./services/webhookDeadLetterPruningJob";
 import { getWebhookOutcomeSignal, refreshWebhookMetrics } from "./services/webhookMonitor";
 import {
+  getSecretsRotationOutcomeSignal,
+  refreshSecretsRotationMetrics,
+  SecretsRotationCredential,
+  SecretsRotationObservation,
+} from "./services/secretsRotationOutcome";
+import {
   getIndexerOutcomeSignal,
   refreshIndexerMetrics,
 } from "./services/indexerMonitor";
@@ -1991,6 +1997,82 @@ app.get(
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to compute webhook monitoring outcome.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        {
+          code: normalizedError.code ?? "INTERNAL_ERROR",
+        },
+      );
+    }
+  },
+);
+
+// GET /api/secrets-rotation/monitoring — coarse rollout outcome for the
+// secrets rotation procedure in RUNBOOK.md ("Rotate JWT Secret" /
+// "Rotate Server Signing Key"). Distinguishes success (rotation complete),
+// transient_delay (old-credential artifacts still accepted; expected while
+// outstanding sessions clear) and blocked (fresh artifacts rejected or the
+// restart step was missed). Enumerated state and counts only: it never returns
+// a secret value, a token, a signature, or a raw verification message.
+const SECRETS_ROTATION_CREDENTIALS = [
+  "jwt_secret",
+  "server_signing_key",
+  "both",
+] as const;
+
+app.get(
+  "/api/secrets-rotation/monitoring",
+  authMiddleware,
+  (req: Request, res: Response) => {
+    const credentialParam =
+      typeof req.query.credential === "string" ? req.query.credential : undefined;
+    if (
+      credentialParam !== undefined &&
+      !SECRETS_ROTATION_CREDENTIALS.includes(
+        credentialParam as (typeof SECRETS_ROTATION_CREDENTIALS)[number],
+      )
+    ) {
+      sendApiError(
+        req,
+        res,
+        400,
+        `credential must be one of: ${SECRETS_ROTATION_CREDENTIALS.join(", ")}`,
+        { code: "VALIDATION_ERROR" },
+      );
+      return;
+    }
+    const credential = credentialParam as SecretsRotationCredential | undefined;
+
+    // Live verification probes: the auth middleware accepted this request's
+    // bearer token (fresh not rejected), so stale acceptance is the only
+    // observable the endpoint itself can assert. Fresh-rejection is reported
+    // via ?stale_accepted=true / ?fresh_rejected=true by operators or tests
+    // that have already observed the underlying auth behavior; the endpoint
+    // never verifies credentials itself and never echoes any credential.
+    const staleAccepted = req.query.stale_accepted === "true";
+    const freshRejected = req.query.fresh_rejected === "true";
+    const observation: SecretsRotationObservation = { staleAccepted, freshRejected };
+
+    try {
+      const signal = getSecretsRotationOutcomeSignal(observation, credential);
+      refreshSecretsRotationMetrics(observation, credential);
+      res.set("Cache-Control", "no-store");
+      res.json({
+        outcome: signal.outcome,
+        outcomeCode: signal.outcomeCode,
+        detail: signal.detail,
+        credential: signal.credential,
+        rotationCount: signal.rotationCount,
+      });
+    } catch (error: any) {
+      logger.error({ err: error }, "failed to compute secrets rotation outcome");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to compute secrets rotation outcome.",
       );
       sendApiError(
         req,

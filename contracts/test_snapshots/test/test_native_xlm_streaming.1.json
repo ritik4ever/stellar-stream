@@ -329,9 +329,25 @@
                     },
                     {
                       "key": {
+                        "symbol": "last_claim_time"
+                      },
+                      "val": {
+                        "u64": 500
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "metadata"
                       },
                       "val": "void"
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_claim_interval_seconds"
+                      },
+                      "val": {
+                        "u64": 0
+                      }
                     },
                     {
                       "key": {
@@ -389,6 +405,14 @@
                           "lo": 500
                         }
                       }
+                    },
+                    {
+                      "key": {
+                        "symbol": "vesting_type"
+                      },
+                      "val": {
+                        "string": "linear"
+                      }
                     }
                   ]
                 }
@@ -444,6 +468,18 @@
                         },
                         "val": {
                           "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "ContractVersion"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 1
                         }
                       },
                       {
@@ -1450,6 +1486,14 @@
               "map": [
                 {
                   "key": {
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "cliff_seconds"
                   },
                   "val": {
@@ -1469,6 +1513,14 @@
                     "symbol": "metadata"
                   },
                   "val": "void"
+                },
+                {
+                  "key": {
+                    "symbol": "min_claim_interval_seconds"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
                 },
                 {
                   "key": {
@@ -1504,6 +1556,14 @@
                 },
                 {
                   "key": {
+                    "symbol": "timestamp"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "token"
                   },
                   "val": {
@@ -1527,6 +1587,14 @@
                       "hi": 0,
                       "lo": 500
                     }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "vesting_type"
+                  },
+                  "val": {
+                    "string": "linear"
                   }
                 }
               ]
@@ -1639,9 +1707,25 @@
                 },
                 {
                   "key": {
+                    "symbol": "last_claim_time"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "metadata"
                   },
                   "val": "void"
+                },
+                {
+                  "key": {
+                    "symbol": "min_claim_interval_seconds"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
                 },
                 {
                   "key": {
@@ -1698,6 +1782,14 @@
                       "hi": 0,
                       "lo": 500
                     }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "vesting_type"
+                  },
+                  "val": {
+                    "string": "linear"
                   }
                 }
               ]
@@ -1857,7 +1949,26 @@
               "map": [
                 {
                   "key": {
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "amount"
+                  },
+                  "val": {
+                    "i128": {
+                      "hi": 0,
+                      "lo": 250
+                    }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "claimed_amount"
                   },
                   "val": {
                     "i128": {
@@ -1880,6 +1991,14 @@
                   },
                   "val": {
                     "u64": 1
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "timestamp"
+                  },
+                  "val": {
+                    "u64": 500
                   }
                 }
               ]
@@ -1995,9 +2114,25 @@
                 },
                 {
                   "key": {
+                    "symbol": "last_claim_time"
+                  },
+                  "val": {
+                    "u64": 500
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "metadata"
                   },
                   "val": "void"
+                },
+                {
+                  "key": {
+                    "symbol": "min_claim_interval_seconds"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
                 },
                 {
                   "key": {
@@ -2054,6 +2189,14 @@
                       "hi": 0,
                       "lo": 500
                     }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "vesting_type"
+                  },
+                  "val": {
+                    "string": "linear"
                   }
                 }
               ]

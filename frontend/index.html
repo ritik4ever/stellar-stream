@@ -6,21 +6,39 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>StellarStream - Real-Time Payment Streaming</title>
     <!--
-      Anti-FOUC: apply dark class before first paint.
-      Reads localStorage preference, falls back to prefers-color-scheme.
+      Anti-FOUC: apply the resolved theme before first paint.
+      Reads localStorage preference (light/dark/system),
+      falls
+      back to prefers-color-scheme.
     -->
     <script>
       (function () {
+        var theme = "light";
         try {
           var stored = localStorage.getItem('stellar-stream-theme');
           if (stored === 'dark' || stored === 'light') {
-            if (stored === 'dark') document.documentElement.classList.add('dark');
-            return;
+            theme = stored;
+          } else if (
+            window.matchMedia &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches
+          ) {
+            theme = 'dark';
           }
-        } catch (_) {}
-        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-          document.documentElement.classList.add('dark');
+        } catch (_) {
+          if (
+            window.matchMedia &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches
+          ) {
+            theme = 'dark';
+          }
         }
+        var root = document.documentElement;
+        if (theme === 'dark') {
+          root.classList.add('dark');
+        } else {
+          root.classList.remove('dark');
+        }
+        root.style.colorScheme = theme;
       })();
     </script>
   </head>

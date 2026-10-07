@@ -390,6 +390,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "last_claim_time"
+                      },
+                      "val": {
+                        "u64": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "metadata"
                       },
                       "val": {
@@ -487,6 +495,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "min_claim_interval_seconds"
+                      },
+                      "val": {
+                        "u64": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "pause_started_at"
                       },
                       "val": "void"
@@ -540,6 +556,14 @@
                           "hi": 0,
                           "lo": 1000
                         }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "vesting_type"
+                      },
+                      "val": {
+                        "string": "linear"
                       }
                     }
                   ]
@@ -1493,6 +1517,14 @@
               "map": [
                 {
                   "key": {
+                    "symbol": "actor"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "cliff_seconds"
                   },
                   "val": {
@@ -1606,6 +1638,14 @@
                 },
                 {
                   "key": {
+                    "symbol": "min_claim_interval_seconds"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "recipient"
                   },
                   "val": {
@@ -1638,6 +1678,14 @@
                 },
                 {
                   "key": {
+                    "symbol": "timestamp"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "token"
                   },
                   "val": {
@@ -1661,6 +1709,14 @@
                       "hi": 0,
                       "lo": 1000
                     }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "vesting_type"
+                  },
+                  "val": {
+                    "string": "linear"
                   }
                 }
               ]
@@ -1773,6 +1829,14 @@
                 },
                 {
                   "key": {
+                    "symbol": "last_claim_time"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "metadata"
                   },
                   "val": {
@@ -1870,6 +1934,14 @@
                 },
                 {
                   "key": {
+                    "symbol": "min_claim_interval_seconds"
+                  },
+                  "val": {
+                    "u64": 0
+                  }
+                },
+                {
+                  "key": {
                     "symbol": "pause_started_at"
                   },
                   "val": "void"
@@ -1923,6 +1995,14 @@
                       "hi": 0,
                       "lo": 1000
                     }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "vesting_type"
+                  },
+                  "val": {
+                    "string": "linear"
                   }
                 }
               ]

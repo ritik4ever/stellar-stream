@@ -249,6 +249,8 @@ export function SenderDashboard({
     setCreateError(null);
     try {
       await createStream(payload);
+      const data = await listStreams({ sender: senderAddress! });
+      setStreams(data.data);
 
       setShowCreateForm(false);
     } catch (err) {
@@ -355,7 +357,7 @@ export function SenderDashboard({
     );
   }
 
-
+  if (streams.length === 0 && !showCreateForm) {
     return (
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Sender Dashboard</h2>

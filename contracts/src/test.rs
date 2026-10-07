@@ -26,6 +26,24 @@ impl MockToken {
     }
 }
 
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PreviousBuildStream {
+    sender: Address,
+    recipient: Address,
+    token: Address,
+    total_amount: i128,
+    claimed_amount: i128,
+    start_time: u64,
+    end_time: u64,
+    min_claim_interval_seconds: u64,
+    last_claim_time: u64,
+    canceled: bool,
+    paused: bool,
+    pause_started_at: Option<u64>,
+    metadata: Option<Map<String, String>>,
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -38,6 +56,105 @@ fn make_metadata(env: &Env) -> Map<String, String> {
         String::from_str(env, "engineering"),
     );
     m
+}
+
+#[test]
+fn test_reads_stream_from_previous_build() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let stream_id = 7;
+    let previous_stream = PreviousBuildStream {
+        sender: Address::generate(&env),
+        recipient: Address::generate(&env),
+        token: Address::generate(&env),
+        total_amount: 500,
+        claimed_amount: 100,
+        start_time: 1_000,
+        end_time: 2_000,
+        min_claim_interval_seconds: 30,
+        last_claim_time: 1_100,
+        canceled: false,
+        paused: false,
+        pause_started_at: None,
+        metadata: None,
+    };
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(stream_id), &previous_stream);
+    });
+
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.total_amount, previous_stream.total_amount);
+    assert_eq!(stream.claimed_amount, previous_stream.claimed_amount);
+    assert_eq!(stream.cliff_seconds, 0);
+    assert_eq!(stream.vesting_type, String::from_str(&env, "linear"));
+}
+
+#[test]
+fn test_failed_claims_from_previous_build_preserve_state_and_balances() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let stream_id = 7;
+    let recipient = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    let token_client = token::Client::new(&env, &token);
+    let previous_stream = PreviousBuildStream {
+        sender: Address::generate(&env),
+        recipient: recipient.clone(),
+        token: token.clone(),
+        total_amount: 500,
+        claimed_amount: 100,
+        start_time: 1_000,
+        end_time: 2_000,
+        min_claim_interval_seconds: 30,
+        last_claim_time: 1_100,
+        canceled: false,
+        paused: false,
+        pause_started_at: None,
+        metadata: None,
+    };
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(stream_id), &previous_stream);
+    });
+
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_100);
+    assert!(client.try_claim(&stream_id, &recipient, &1).is_err());
+
+    let stored_after_pre_transfer_failure: PreviousBuildStream =
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .get(&DataKey::Stream(stream_id))
+                .unwrap()
+        });
+    assert_eq!(stored_after_pre_transfer_failure, previous_stream);
+    assert_eq!(token_client.balance(&contract_id), 0);
+    assert_eq!(token_client.balance(&recipient), 0);
+
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_500);
+    assert!(client.try_claim(&stream_id, &recipient, &1).is_err());
+
+    let stored_after_transfer_failure: PreviousBuildStream = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Stream(stream_id))
+            .unwrap()
+    });
+    assert_eq!(stored_after_transfer_failure, previous_stream);
+    assert_eq!(token_client.balance(&contract_id), 0);
+    assert_eq!(token_client.balance(&recipient), 0);
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.claimed_amount, previous_stream.claimed_amount);
+    assert_eq!(stream.last_claim_time, previous_stream.last_claim_time);
 }
 
 // ---------------------------------------------------------------------------
@@ -3791,4 +3908,1147 @@ fn test_set_native_token_rejects_non_admin() {
 
     client.initialize(&admin, &native_token, &soroban_sdk::vec![&env]);
     client.set_native_token(&outsider, &replacement);
+}
+
+// =============================================================================
+// #1181 — Authority over stream state written by a previous build
+//
+// An upgraded WASM reads `Stream(id)` records that an older build serialized.
+// Authority must come from the `sender`/`recipient` recorded in that state,
+// and an unauthorized call must fail before any balance or stream change.
+// These tests seed the record directly (bypassing `create_stream`) and run
+// with auth enforcement on rather than `mock_all_auths`.
+// =============================================================================
+
+struct PriorBuild<'a> {
+    env: Env,
+    client: StellarStreamContractClient<'a>,
+    contract_id: Address,
+    token: token::Client<'a>,
+    sender: Address,
+    recipient: Address,
+    stream_id: u64,
+    stored: Stream,
+}
+
+/// Seeds a partially claimed stream as a previous build would have left it:
+/// 1000 total, 200 already claimed, linear over [0, 1000], ledger at t=500.
+fn prior_build_fixture(env: &Env) -> PriorBuild<'_> {
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(env, &contract_id);
+    let token_admin = Address::generate(env);
+    let token_id = create_token(env, &token_admin);
+    let sender = Address::generate(env);
+    let recipient = Address::generate(env);
+    let stream_id = 7_u64;
+
+    let stored = Stream {
+        sender: sender.clone(),
+        recipient: recipient.clone(),
+        token: token_id.clone(),
+        total_amount: 1000,
+        claimed_amount: 200,
+        start_time: 0,
+        end_time: 1000,
+        cliff_seconds: 0,
+        vesting_type: String::from_str(env, "linear"),
+        min_claim_interval_seconds: 0,
+        last_claim_time: 100,
+        canceled: false,
+        paused: false,
+        pause_started_at: None,
+        metadata: Some(make_metadata(env)),
+    };
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(stream_id), &stored);
+        env.storage()
+            .persistent()
+            .set(&DataKey::NextStreamId, &stream_id);
+    });
+    // Escrow holds the unclaimed balance.
+    token::StellarAssetClient::new(env, &token_id).mint(&contract_id, &800);
+    env.ledger().with_mut(|l| l.timestamp = 500);
+
+    // From here on only explicitly mocked signatures are accepted.
+    env.mock_auths(&[]);
+
+    PriorBuild {
+        env: env.clone(),
+        client,
+        contract_id,
+        token: token::Client::new(env, &token_id),
+        sender,
+        recipient,
+        stream_id,
+        stored,
+    }
+}
+
+impl PriorBuild<'_> {
+    /// Accept exactly one signature from `signer` for `fn_name(args)`.
+    fn sign(&self, signer: &Address, fn_name: &str, args: Vec<Val>) {
+        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+        self.env.mock_auths(&[MockAuth {
+            address: signer,
+            invoke: &MockAuthInvoke {
+                contract: &self.contract_id,
+                fn_name,
+                args,
+                sub_invokes: &[],
+            },
+        }]);
+    }
+
+    /// Stream record and every balance are exactly as the previous build left them.
+    fn assert_untouched(&self) {
+        assert_eq!(self.client.get_stream(&self.stream_id), self.stored);
+        assert_eq!(self.token.balance(&self.contract_id), 800);
+        assert_eq!(self.token.balance(&self.recipient), 0);
+        assert_eq!(self.token.balance(&self.sender), 0);
+    }
+}
+
+#[test]
+fn test_prior_build_stream_reads_back_unchanged() {
+    let env = Env::default();
+    let f = prior_build_fixture(&env);
+
+    assert_eq!(f.client.get_stream(&f.stream_id), f.stored);
+    assert_eq!(f.client.claimable(&f.stream_id, &500), 300);
+    f.assert_untouched();
+}
+
+#[test]
+fn test_prior_build_stream_claim_by_recorded_recipient_succeeds() {
+    let env = Env::default();
+    let f = prior_build_fixture(&env);
+
+    f.sign(
+        &f.recipient,
+        "claim",
+        (f.stream_id, f.recipient.clone(), 300_i128).into_val(&env),
+    );
+    assert_eq!(f.client.claim(&f.stream_id, &f.recipient, &300), 300);
+
+    let after = f.client.get_stream(&f.stream_id);
+    assert_eq!(after.claimed_amount, 500);
+    assert_eq!(after.last_claim_time, 500);
+    assert_eq!(f.token.balance(&f.recipient), 300);
+    assert_eq!(f.token.balance(&f.contract_id), 500);
+}
+
+#[test]
+fn test_prior_build_stream_claim_without_recipient_signature_fails_before_state_change() {
+    let env = Env::default();
+    let f = prior_build_fixture(&env);
+
+    assert!(f
+        .client
+        .try_claim(&f.stream_id, &f.recipient, &300)
+        .is_err());
+    f.assert_untouched();
+}
+
+#[test]
+fn test_prior_build_stream_claim_signed_by_other_address_fails_before_state_change() {
+    let env = Env::default();
+    let f = prior_build_fixture(&env);
+    let attacker = Address::generate(&env);
+
+    // Attacker signs, names the recorded recipient.
+    f.sign(
+        &attacker,
+        "claim",
+        (f.stream_id, f.recipient.clone(), 300_i128).into_val(&env),
+    );
+    assert!(f
+        .client
+        .try_claim(&f.stream_id, &f.recipient, &300)
+        .is_err());
+    f.assert_untouched();
+
+    // Attacker signs, names themself.
+    f.sign(
+        &attacker,
+        "claim",
+        (f.stream_id, attacker.clone(), 300_i128).into_val(&env),
+    );
+    assert!(f.client.try_claim(&f.stream_id, &attacker, &300).is_err());
+    f.assert_untouched();
+    assert_eq!(f.token.balance(&attacker), 0);
+}
+
+#[test]
+fn test_prior_build_stream_cancel_requires_recorded_sender() {
+    let env = Env::default();
+    let f = prior_build_fixture(&env);
+    let attacker = Address::generate(&env);
+
+    assert!(f.client.try_cancel(&f.stream_id, &f.sender).is_err());
+    f.assert_untouched();
+
+    f.sign(
+        &attacker,
+        "cancel",
+        (f.stream_id, f.sender.clone()).into_val(&env),
+    );
+    assert!(f.client.try_cancel(&f.stream_id, &f.sender).is_err());
+    f.assert_untouched();
+
+    f.sign(
+        &attacker,
+        "cancel",
+        (f.stream_id, attacker.clone()).into_val(&env),
+    );
+    assert!(f.client.try_cancel(&f.stream_id, &attacker).is_err());
+    f.assert_untouched();
+
+    // Recorded sender can cancel: unvested 500 refunded, vested 500 remains.
+    f.sign(
+        &f.sender,
+        "cancel",
+        (f.stream_id, f.sender.clone()).into_val(&env),
+    );
+    f.client.cancel(&f.stream_id, &f.sender);
+    let after = f.client.get_stream(&f.stream_id);
+    assert!(after.canceled);
+    assert_eq!(after.total_amount, 500);
+    assert_eq!(after.claimed_amount, 200);
+    assert_eq!(f.token.balance(&f.sender), 500);
+    assert_eq!(f.token.balance(&f.contract_id), 300);
+}
+
+#[test]
+fn test_prior_build_stream_pause_and_resume_require_recorded_sender() {
+    let env = Env::default();
+    let f = prior_build_fixture(&env);
+    let attacker = Address::generate(&env);
+
+    f.sign(
+        &attacker,
+        "pause_stream",
+        (f.stream_id, f.sender.clone()).into_val(&env),
+    );
+    assert!(f.client.try_pause_stream(&f.stream_id, &f.sender).is_err());
+    f.assert_untouched();
+
+    // The recorded recipient is not the owner and cannot pause either.
+    f.sign(
+        &f.recipient,
+        "pause_stream",
+        (f.stream_id, f.recipient.clone()).into_val(&env),
+    );
+    assert!(f
+        .client
+        .try_pause_stream(&f.stream_id, &f.recipient)
+        .is_err());
+    f.assert_untouched();
+
+    f.sign(
+        &f.sender,
+        "pause_stream",
+        (f.stream_id, f.sender.clone()).into_val(&env),
+    );
+    f.client.pause_stream(&f.stream_id, &f.sender);
+    let paused = f.client.get_stream(&f.stream_id);
+    assert!(paused.paused);
+
+    f.sign(
+        &attacker,
+        "resume_stream",
+        (f.stream_id, f.sender.clone()).into_val(&env),
+    );
+    assert!(f.client.try_resume_stream(&f.stream_id, &f.sender).is_err());
+    assert_eq!(f.client.get_stream(&f.stream_id), paused);
+}
+
+#[test]
+fn test_prior_build_stream_transfer_moves_claim_authority() {
+    let env = Env::default();
+    let f = prior_build_fixture(&env);
+    let new_recipient = Address::generate(&env);
+
+    // Only the recorded recipient may transfer; the sender cannot.
+    f.sign(
+        &f.sender,
+        "transfer_stream",
+        (f.stream_id, new_recipient.clone()).into_val(&env),
+    );
+    assert!(f
+        .client
+        .try_transfer_stream(&f.stream_id, &new_recipient)
+        .is_err());
+    f.assert_untouched();
+
+    f.sign(
+        &f.recipient,
+        "transfer_stream",
+        (f.stream_id, new_recipient.clone()).into_val(&env),
+    );
+    f.client.transfer_stream(&f.stream_id, &new_recipient);
+    assert_eq!(f.client.get_stream(&f.stream_id).recipient, new_recipient);
+
+    // The old recipient's signature no longer authorizes a claim.
+    f.sign(
+        &f.recipient,
+        "claim",
+        (f.stream_id, f.recipient.clone(), 300_i128).into_val(&env),
+    );
+    assert!(f
+        .client
+        .try_claim(&f.stream_id, &f.recipient, &300)
+        .is_err());
+    assert_eq!(f.client.get_stream(&f.stream_id).claimed_amount, 200);
+    assert_eq!(f.token.balance(&f.contract_id), 800);
+
+    f.sign(
+        &new_recipient,
+        "claim",
+        (f.stream_id, new_recipient.clone(), 300_i128).into_val(&env),
+    );
+    assert_eq!(f.client.claim(&f.stream_id, &new_recipient, &300), 300);
+    assert_eq!(f.token.balance(&new_recipient), 300);
+}
+
+// =============================================================================
+// #1182 — Upgrade compatibility: reading streams created by a previous build
+//
+// These tests seed `Stream` records directly into persistent storage
+// (bypassing `create_stream`) to simulate the on-chain state a previous
+// build would have left behind.  They verify the invariants documented in
+// `CONTRACT_ABI.md` under "Edge behavior: reading a stream created by a
+// previous build".
+// =============================================================================
+
+/// Helper: build a minimal Stream as a "previous build" would have stored it.
+/// Returns (stream_id, Stream) without going through create_stream.
+fn seed_legacy_stream(env: &Env, contract_id: &Address) -> (u64, Stream, Address) {
+    let token_admin = Address::generate(env);
+    let sender = Address::generate(env);
+    let recipient = Address::generate(env);
+    let token_id = create_token(env, &token_admin);
+
+    let stream_id = 42_u64;
+    let legacy = Stream {
+        sender: sender.clone(),
+        recipient: recipient.clone(),
+        token: token_id.clone(),
+        total_amount: 10_000_000,
+        claimed_amount: 2_000_000,
+        start_time: 0,
+        end_time: 10_000,
+        cliff_seconds: 0,
+        vesting_type: String::from_str(env, "linear"),
+        min_claim_interval_seconds: 0,
+        last_claim_time: 500,
+        canceled: false,
+        paused: false,
+        pause_started_at: None,
+        metadata: None,
+    };
+
+    env.as_contract(contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(stream_id), &legacy);
+        env.storage()
+            .persistent()
+            .set(&DataKey::NextStreamId, &stream_id);
+    });
+
+    // Mint unclaimed balance into the contract (10_000_000 - 2_000_000 = 8_000_000).
+    token::StellarAssetClient::new(env, &token_id).mint(contract_id, &8_000_000);
+
+    (stream_id, legacy, token_id)
+}
+
+/// `get_stream` and `claimable` read back a legacy record without altering
+/// any field or balance (CONTRACT_ABI.md rule 1 + 7: same layout, no mutation
+/// on read).
+#[test]
+fn test_read_legacy_stream_preserves_balances() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let (stream_id, legacy, token_id) = seed_legacy_stream(&env, &contract_id);
+    let token_client = token::Client::new(&env, &token_id);
+
+    // Rule 1: all fields decoded intact.
+    let read_back = client.get_stream(&stream_id);
+    assert_eq!(read_back, legacy);
+
+    // Rule 2: integer token units are not rescaled.
+    assert_eq!(read_back.total_amount, 10_000_000);
+    assert_eq!(read_back.claimed_amount, 2_000_000);
+
+    // Rule 4: invariant claimed_amount <= total_amount is respected.
+    assert!(read_back.claimed_amount <= read_back.total_amount);
+
+    // At t=5000 (half-way): 5_000_000 vested, 2_000_000 already claimed → 3_000_000 claimable.
+    env.ledger().with_mut(|l| l.timestamp = 5_000);
+    assert_eq!(client.claimable(&stream_id, &5_000), 3_000_000);
+
+    // Rule 7: reading did not mutate storage — balances unchanged.
+    assert_eq!(token_client.balance(&contract_id), 8_000_000);
+    assert_eq!(client.get_stream(&stream_id), legacy);
+}
+
+/// Arithmetic on a legacy record uses checked operations: the invariant
+/// `claimed_amount <= total_amount` cannot be violated by a claim
+/// (CONTRACT_ABI.md rule 3 + 4).
+#[test]
+fn test_read_legacy_stream_checked_arithmetic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let (stream_id, _legacy, token_id) = seed_legacy_stream(&env, &contract_id);
+    let token_client = token::Client::new(&env, &token_id);
+
+    // Advance to full vesting.
+    env.ledger().with_mut(|l| l.timestamp = 10_000);
+
+    // Only 8_000_000 is claimable (total 10M - already claimed 2M).
+    assert_eq!(client.claimable(&stream_id, &10_000), 8_000_000);
+
+    // Claim exactly the claimable amount: no overflow, invariant holds.
+    let claimed = client.claim(
+        &stream_id,
+        &legacy_recipient(&env, &contract_id, stream_id),
+        &8_000_000,
+    );
+    assert_eq!(claimed, 8_000_000);
+
+    let after = client.get_stream(&stream_id);
+    // claimed_amount == total_amount after full claim.
+    assert_eq!(after.claimed_amount, 10_000_000);
+    assert_eq!(after.total_amount, 10_000_000);
+    assert!(after.claimed_amount <= after.total_amount);
+
+    // Contract balance is now zero (all tokens transferred).
+    assert_eq!(token_client.balance(&contract_id), 0);
+
+    // Nothing left to claim.
+    assert_eq!(client.claimable(&stream_id, &10_001), 0);
+}
+
+/// Helper: extract the stored recipient address for a seeded legacy stream.
+fn legacy_recipient(env: &Env, contract_id: &Address, stream_id: u64) -> Address {
+    env.as_contract(contract_id, || {
+        let s: Stream = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Stream(stream_id))
+            .unwrap();
+        s.recipient
+    })
+}
+
+/// Calling `get_stream` on a legacy record does not write back to storage.
+/// All fields are returned byte-for-byte identical to what was seeded
+/// (CONTRACT_ABI.md rule 7: no mutation on read).
+#[test]
+fn test_upgrade_read_old_state_preserves_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let (stream_id, legacy, _token_id) = seed_legacy_stream(&env, &contract_id);
+
+    // Read multiple times — each read must return the exact same value.
+    let first = client.get_stream(&stream_id);
+    let second = client.get_stream(&stream_id);
+    let third = client.get_stream(&stream_id);
+
+    assert_eq!(first, legacy);
+    assert_eq!(second, legacy);
+    assert_eq!(third, legacy);
+
+    // Confirm the raw bytes in storage match the original seed (rule 7).
+    env.as_contract(&contract_id, || {
+        let raw: Stream = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Stream(stream_id))
+            .unwrap();
+        assert_eq!(raw, legacy);
+    });
+}
+
+// =============================================================================
+// #1182 — Event emission ordering: StreamClaimed always precedes StreamCompleted
+//
+// Verified against CONTRACT_ABI.md "Event emission ordering guarantee".
+// =============================================================================
+
+/// When a claim results in full stream completion, the event list must contain
+/// `StreamClaimed` at an earlier position than `StreamCompleted`, and both
+/// events must refer to the same stream_id and carry consistent amounts.
+#[test]
+fn test_claim_event_ordering_claimed_before_completed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    // Create a stream that runs from t=0 to t=1000.
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    // Advance past end time so the full amount is vested.
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    // Record event count before the completing claim so we can slice only the new events.
+    let events_before = env
+        .events()
+        .all()
+        .iter()
+        .filter(|(emitter, _, _)| emitter == &contract_id)
+        .count();
+
+    // Claim the full amount — this should emit StreamClaimed then StreamCompleted.
+    let claimed = client.claim(&stream_id, &recipient, &1000);
+    assert_eq!(claimed, 1000);
+
+    let all_events = env.events().all();
+    let new_events: std::vec::Vec<_> = all_events
+        .iter()
+        .filter(|(emitter, _, _)| emitter == &contract_id)
+        .skip(events_before)
+        .collect::<std::vec::Vec<_>>();
+
+    // Exactly two events must have been emitted for this claim.
+    assert_eq!(
+        new_events.len(),
+        2,
+        "expected exactly 2 events (StreamClaimed + StreamCompleted), got {}",
+        new_events.len()
+    );
+
+    // First new event: StreamClaimed.
+    let (_, claimed_topics, claimed_val) = &new_events[0];
+    let claimed_topics_native: soroban_sdk::Vec<soroban_sdk::Val> =
+        claimed_topics.clone().into_val(&env);
+    let claimed_topic0: Symbol = claimed_topics_native.get(0).unwrap().into_val(&env);
+    let claimed_topic1: Symbol = claimed_topics_native.get(1).unwrap().into_val(&env);
+    assert_eq!(claimed_topic0, symbol_short!("Stream"));
+    assert_eq!(claimed_topic1, symbol_short!("Claimed"));
+
+    let claimed_event: StreamClaimed = claimed_val.clone().into_val(&env);
+    assert_eq!(claimed_event.stream_id, stream_id);
+    assert_eq!(claimed_event.actor, recipient);
+    assert_eq!(claimed_event.amount, 1000);
+    assert_eq!(claimed_event.claimed_amount, 1000);
+
+    // Second new event: StreamCompleted.
+    let (_, completed_topics, completed_val) = &new_events[1];
+    let completed_topics_native: soroban_sdk::Vec<soroban_sdk::Val> =
+        completed_topics.clone().into_val(&env);
+    let completed_topic0: Symbol = completed_topics_native.get(0).unwrap().into_val(&env);
+    let completed_topic1: Symbol = completed_topics_native.get(1).unwrap().into_val(&env);
+    assert_eq!(completed_topic0, symbol_short!("Stream"));
+    assert_eq!(completed_topic1, symbol_short!("Completed"));
+
+    let completed_event: StreamCompleted = completed_val.clone().into_val(&env);
+    assert_eq!(completed_event.stream_id, stream_id);
+    assert_eq!(completed_event.actor, recipient);
+    assert_eq!(completed_event.total_amount, 1000);
+}
+
+/// A partial claim (not completing the stream) must emit exactly one
+/// `StreamClaimed` event and no `StreamCompleted`.
+#[test]
+fn test_claim_event_partial_no_completed_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    token::StellarAssetClient::new(&env, &token).mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+    env.ledger().with_mut(|l| l.timestamp = 500);
+
+    let events_before = env
+        .events()
+        .all()
+        .iter()
+        .filter(|(emitter, _, _)| emitter == &contract_id)
+        .count();
+    client.claim(&stream_id, &recipient, &400);
+
+    let all_events = env.events().all();
+    let new_events: std::vec::Vec<_> = all_events
+        .iter()
+        .filter(|(emitter, _, _)| emitter == &contract_id)
+        .skip(events_before)
+        .collect::<std::vec::Vec<_>>();
+
+    // Only StreamClaimed, no StreamCompleted.
+    assert_eq!(
+        new_events.len(),
+        1,
+        "expected exactly 1 event for partial claim"
+    );
+
+    let (_, topics, _) = &new_events[0];
+    let topics_native: soroban_sdk::Vec<soroban_sdk::Val> = topics.clone().into_val(&env);
+    let topic1: Symbol = topics_native.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, symbol_short!("Claimed"));
+}
+
+// =============================================================================
+// #1182 — Contract version key
+// =============================================================================
+
+/// After `initialize`, `get_contract_version` returns `STREAM_LAYOUT_VERSION`.
+#[test]
+fn test_get_contract_version_after_initialize() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let native_token = Address::generate(&env);
+    let allowed: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&env);
+
+    client.initialize(&admin, &native_token, &allowed);
+
+    let version = client.get_contract_version();
+    assert_eq!(
+        version,
+        Some(STREAM_LAYOUT_VERSION),
+        "expected version {} after initialize, got {:?}",
+        STREAM_LAYOUT_VERSION,
+        version
+    );
+}
+
+/// Before `initialize`, `get_contract_version` returns `None`; upgrade scripts
+/// must treat this as version 0 and run all pending migrations.
+#[test]
+fn test_get_contract_version_before_initialize_returns_none() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+
+    assert_eq!(
+        client.get_contract_version(),
+        None,
+        "expected None before initialize"
+    );
+}
+
+#[test]
+fn test_set_contract_version_for_legacy_deployment() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        env.storage().instance().set(&DataKey::Admin, &admin);
+    });
+
+    client.set_contract_version(&admin, &STREAM_LAYOUT_VERSION);
+    assert_eq!(client.get_contract_version(), Some(STREAM_LAYOUT_VERSION));
+}
+
+#[test]
+#[should_panic(expected = "invalid contract version")]
+fn test_set_contract_version_rejects_downgrade() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let native_token = Address::generate(&env);
+    let allowed: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&env);
+
+    client.initialize(&admin, &native_token, &allowed);
+    client.set_contract_version(&admin, &0);
+}
+
+#[test]
+fn test_persistent_stream_survives_inactive_interval_before_claim() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    token::StellarAssetClient::new(&env, &token).mint(&sender, &1000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &100, &0, &None);
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Stream(stream_id), 1, 100);
+    });
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 99);
+
+    let claimed = client.claim(&stream_id, &recipient, &1000);
+    assert_eq!(claimed, 1000);
+    assert_eq!(token::Client::new(&env, &token).balance(&recipient), 1000);
+    assert_eq!(client.get_stream(&stream_id).claimed_amount, 1000);
+    assert_eq!(env.events().all().len(), 3);
+}
+
+// =============================================================================
+// #1183 — Soroban regression: contract upgrade compatibility
+//
+// Two upgrade-compatibility cases, both exercised fully in-process (no network
+// dependency):
+//
+//   (a) reading a stream created by a previous build, and
+//   (b) upgraded code encountering old state.
+//
+// The legacy records are seeded directly into persistent storage using the
+// earliest serialized `Stream` shape (only the seven original fields).  The
+// current decoder in `read_stream` must treat the newer fields as their
+// documented defaults, mirroring an on-chain upgrade where the new WASM reads
+// records written by an older build.  Every case asserts:
+//   * state     — the legacy record decodes intact and is not rewritten,
+//   * authorization — only the recorded sender/recipient is accepted,
+//   * payout    — token balances move by exactly the claimed amount,
+//   * rollback  — a failed call leaves records, balances and events untouched.
+//
+// Documented behavior preserved:
+//   * CONTRACT_ABI.md "Upgrade and migration impact" / "Authority over existing
+//     state" (authority comes from stored sender/recipient).
+//   * CONTRACT_ABI.md "Event payload stability" topic keys `("Stream", name)`.
+//   * CONTRACT_ABI.md "Event emission ordering guarantee" for `claim()`.
+//   * `get_contract_version()` returning `None` for a pre-versioning
+//     deployment (treated as version 0) and the documented upgrade path that
+//     records the new version via `set_contract_version()`.
+// =============================================================================
+
+/// Earliest `Stream` shape: the seven fields present in the original layout.
+/// A current build must decode it treating the newer fields as defaults:
+/// `cliff_seconds = 0`, `vesting_type = "linear"`,
+/// `min_claim_interval_seconds = 0`, `last_claim_time = 0`, `canceled = false`,
+/// `paused = false`, `pause_started_at = None`, `metadata = None`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EarliestBuildStream {
+    sender: Address,
+    recipient: Address,
+    token: Address,
+    total_amount: i128,
+    claimed_amount: i128,
+    start_time: u64,
+    end_time: u64,
+}
+
+const UPGRADE_COMPAT_STREAM_ID: u64 = 99;
+const UPGRADE_COMPAT_TOTAL: i128 = 1_000_000;
+const UPGRADE_COMPAT_CLAIMED: i128 = 100_000;
+const UPGRADE_COMPAT_START: u64 = 0;
+const UPGRADE_COMPAT_END: u64 = 1_000;
+const UPGRADE_COMPAT_NOW: u64 = 500;
+const UPGRADE_COMPAT_ESCROW: i128 = UPGRADE_COMPAT_TOTAL - UPGRADE_COMPAT_CLAIMED;
+
+struct UpgradeCompatFixture<'a> {
+    env: Env,
+    contract_id: Address,
+    client: StellarStreamContractClient<'a>,
+    token: token::Client<'a>,
+    sender: Address,
+    recipient: Address,
+    admin: Address,
+}
+
+/// Seeds an earliest-layout stream directly into persistent storage and funds
+/// the escrow, exactly as a previous build would have left the contract.
+fn upgrade_compat_fixture(env: &Env) -> UpgradeCompatFixture<'_> {
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(env, &contract_id);
+    let admin = Address::generate(env);
+    let token_id = create_token(env, &admin);
+    let sender = Address::generate(env);
+    let recipient = Address::generate(env);
+
+    let legacy = EarliestBuildStream {
+        sender: sender.clone(),
+        recipient: recipient.clone(),
+        token: token_id.clone(),
+        total_amount: UPGRADE_COMPAT_TOTAL,
+        claimed_amount: UPGRADE_COMPAT_CLAIMED,
+        start_time: UPGRADE_COMPAT_START,
+        end_time: UPGRADE_COMPAT_END,
+    };
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(UPGRADE_COMPAT_STREAM_ID), &legacy);
+        env.storage()
+            .persistent()
+            .set(&DataKey::NextStreamId, &UPGRADE_COMPAT_STREAM_ID);
+        // An upgraded deployment keeps the admin key written by the prior build.
+        env.storage().instance().set(&DataKey::Admin, &admin);
+    });
+
+    // Fund the contract escrow with the unclaimed portion.
+    token::StellarAssetClient::new(env, &token_id).mint(&contract_id, &UPGRADE_COMPAT_ESCROW);
+
+    env.ledger().with_mut(|l| l.timestamp = UPGRADE_COMPAT_NOW);
+
+    UpgradeCompatFixture {
+        env: env.clone(),
+        contract_id,
+        client,
+        token: token::Client::new(env, &token_id),
+        sender,
+        recipient,
+        admin,
+    }
+}
+
+impl UpgradeCompatFixture<'_> {
+    /// Number of events emitted by the stream contract so far.
+    fn contract_event_count(&self) -> usize {
+        self.env
+            .events()
+            .all()
+            .iter()
+            .filter(|(emitter, _, _)| emitter == &self.contract_id)
+            .count()
+    }
+
+    /// Owned copies of the stream-contract events emitted after `before`.
+    fn events_since(&self, before: usize) -> std::vec::Vec<(Address, soroban_sdk::Vec<Val>, Val)> {
+        self.env
+            .events()
+            .all()
+            .iter()
+            .filter(|(emitter, _, _)| emitter == &self.contract_id)
+            .skip(before)
+            .map(|(emitter, topics, data)| (emitter.clone(), topics.clone(), data))
+            .collect()
+    }
+
+    /// Accepts exactly one signature from `signer` for `claim(stream_id, signer, amount)`.
+    fn sign_claim(&self, signer: &Address, amount: i128) {
+        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+        self.env.mock_auths(&[MockAuth {
+            address: signer,
+            invoke: &MockAuthInvoke {
+                contract: &self.contract_id,
+                fn_name: "claim",
+                args: (UPGRADE_COMPAT_STREAM_ID, signer.clone(), amount).into_val(&self.env),
+                sub_invokes: &[],
+            },
+        }]);
+    }
+
+    /// The legacy record, escrow balance and recipient balance are untouched.
+    fn assert_legacy_state_intact(&self, expected_events: usize) {
+        let stream = self.client.get_stream(&UPGRADE_COMPAT_STREAM_ID);
+        assert_eq!(stream.total_amount, UPGRADE_COMPAT_TOTAL);
+        assert_eq!(stream.claimed_amount, UPGRADE_COMPAT_CLAIMED);
+        assert_eq!(stream.last_claim_time, 0);
+        assert!(!stream.canceled);
+        assert!(!stream.paused);
+        assert_eq!(stream.pause_started_at, None);
+
+        assert_eq!(self.token.balance(&self.contract_id), UPGRADE_COMPAT_ESCROW);
+        assert_eq!(self.token.balance(&self.recipient), 0);
+        assert_eq!(self.token.balance(&self.sender), 0);
+        assert_eq!(self.contract_event_count(), expected_events);
+    }
+}
+
+fn decode_topic(env: &Env, topics: &soroban_sdk::Vec<Val>, index: u32) -> Symbol {
+    topics.get(index).unwrap().into_val(env)
+}
+
+// -----------------------------------------------------------------------------
+// Case (a): reading a stream created by a previous build
+// -----------------------------------------------------------------------------
+
+/// A legacy record decodes intact with the documented defaults and reading it
+/// has no side effect on the stored record or on token balances.
+#[test]
+fn test_upgrade_compat_a_reads_state_created_by_previous_build() {
+    let env = Env::default();
+    let f = upgrade_compat_fixture(&env);
+
+    let stream = f.client.get_stream(&UPGRADE_COMPAT_STREAM_ID);
+    assert_eq!(stream.sender, f.sender);
+    assert_eq!(stream.recipient, f.recipient);
+    assert_eq!(stream.total_amount, UPGRADE_COMPAT_TOTAL);
+    assert_eq!(stream.claimed_amount, UPGRADE_COMPAT_CLAIMED);
+    assert_eq!(stream.start_time, UPGRADE_COMPAT_START);
+    assert_eq!(stream.end_time, UPGRADE_COMPAT_END);
+
+    // Newer fields were absent from the old layout → documented defaults.
+    assert_eq!(stream.cliff_seconds, 0);
+    assert_eq!(stream.vesting_type, String::from_str(&env, "linear"));
+    assert_eq!(stream.min_claim_interval_seconds, 0);
+    assert_eq!(stream.last_claim_time, 0);
+    assert!(!stream.canceled);
+    assert!(!stream.paused);
+    assert_eq!(stream.pause_started_at, None);
+    assert_eq!(stream.metadata, None);
+
+    // Vesting is computed from the legacy fields: at t=500, 500k vested - 100k
+    // claimed = 400k claimable; the invariant claimed <= total holds.
+    assert_eq!(
+        f.client
+            .claimable(&UPGRADE_COMPAT_STREAM_ID, &UPGRADE_COMPAT_NOW),
+        400_000
+    );
+    assert!(stream.claimed_amount <= stream.total_amount);
+
+    // Rule: reading never mutates state or balances.
+    f.assert_legacy_state_intact(0);
+}
+
+/// Authorization, payout and rollback on a legacy record, driven by the
+/// recorded recipient rather than caller-supplied arguments.
+#[test]
+fn test_upgrade_compat_a_claim_auth_payout_and_rollback() {
+    let env = Env::default();
+    let f = upgrade_compat_fixture(&env);
+
+    // Switch off blanket auth: from here only explicit signatures are honored.
+    env.mock_auths(&[]);
+    let before = f.contract_event_count();
+
+    // 1. No signature: the recorded recipient's auth is required.
+    assert!(f
+        .client
+        .try_claim(&UPGRADE_COMPAT_STREAM_ID, &f.recipient, &50_000)
+        .is_err());
+    // 2. An attacker cannot authorize the recorded recipient's claim.
+    let attacker = Address::generate(&env);
+    f.sign_claim(&attacker, 50_000);
+    assert!(f
+        .client
+        .try_claim(&UPGRADE_COMPAT_STREAM_ID, &f.recipient, &50_000)
+        .is_err());
+    // 3. An attacker naming themself fails the recipient check.
+    assert!(f
+        .client
+        .try_claim(&UPGRADE_COMPAT_STREAM_ID, &attacker, &50_000)
+        .is_err());
+
+    // Rollback 1: every unauthorized attempt left state, balances and events
+    // exactly as the previous build left them.
+    f.assert_legacy_state_intact(before);
+
+    // 4. Authorized but over-claiming (more than vested) also reverts.
+    f.sign_claim(&f.recipient, 50_000_000);
+    assert!(f
+        .client
+        .try_claim(&UPGRADE_COMPAT_STREAM_ID, &f.recipient, &50_000_000)
+        .is_err());
+
+    // Rollback 2: no partial effect from the rejected over-claim.
+    f.assert_legacy_state_intact(before);
+
+    // 5. The recorded recipient with a valid signature claims and is paid
+    // exactly the requested amount.
+    f.sign_claim(&f.recipient, 400_000);
+    assert_eq!(
+        f.client
+            .claim(&UPGRADE_COMPAT_STREAM_ID, &f.recipient, &400_000),
+        400_000
+    );
+    assert_eq!(f.token.balance(&f.recipient), 400_000);
+    assert_eq!(
+        f.token.balance(&f.contract_id),
+        UPGRADE_COMPAT_ESCROW - 400_000
+    );
+
+    let stream = f.client.get_stream(&UPGRADE_COMPAT_STREAM_ID);
+    assert_eq!(stream.claimed_amount, UPGRADE_COMPAT_CLAIMED + 400_000);
+    assert_eq!(stream.last_claim_time, UPGRADE_COMPAT_NOW);
+
+    // Exactly one documented event: StreamClaimed, carrying the stable fields.
+    let events = f.events_since(before);
+    assert_eq!(events.len(), 1);
+    let (_, topics, data) = &events[0];
+    assert_eq!(decode_topic(&env, topics, 0), symbol_short!("Stream"));
+    assert_eq!(decode_topic(&env, topics, 1), symbol_short!("Claimed"));
+    let claimed_event: StreamClaimed = data.clone().into_val(&env);
+    assert_eq!(claimed_event.stream_id, UPGRADE_COMPAT_STREAM_ID);
+    assert_eq!(claimed_event.actor, f.recipient);
+    assert_eq!(claimed_event.amount, 400_000);
+    assert_eq!(
+        claimed_event.claimed_amount,
+        UPGRADE_COMPAT_CLAIMED + 400_000
+    );
+}
+
+/// A full claim on a legacy stream emits `StreamClaimed` immediately followed by
+/// `StreamCompleted` (documented ordering) and drains the escrow.
+#[test]
+fn test_upgrade_compat_a_full_claim_emits_claimed_then_completed() {
+    let env = Env::default();
+    let f = upgrade_compat_fixture(&env);
+    env.ledger().with_mut(|l| l.timestamp = UPGRADE_COMPAT_END);
+
+    let before = f.contract_event_count();
+    let remaining = f
+        .client
+        .claimable(&UPGRADE_COMPAT_STREAM_ID, &UPGRADE_COMPAT_END);
+    assert_eq!(remaining, UPGRADE_COMPAT_ESCROW);
+
+    let paid = f
+        .client
+        .claim(&UPGRADE_COMPAT_STREAM_ID, &f.recipient, &remaining);
+    assert_eq!(paid, remaining);
+    assert_eq!(f.token.balance(&f.recipient), UPGRADE_COMPAT_ESCROW);
+    assert_eq!(f.token.balance(&f.contract_id), 0);
+
+    let events = f.events_since(before);
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        decode_topic(&env, &events[0].1, 1),
+        symbol_short!("Claimed")
+    );
+    assert_eq!(
+        decode_topic(&env, &events[1].1, 1),
+        symbol_short!("Completed")
+    );
+
+    let claimed: StreamClaimed = events[0].2.clone().into_val(&env);
+    assert_eq!(claimed.stream_id, UPGRADE_COMPAT_STREAM_ID);
+    assert_eq!(claimed.amount, UPGRADE_COMPAT_ESCROW);
+    assert_eq!(claimed.claimed_amount, UPGRADE_COMPAT_TOTAL);
+
+    let completed: StreamCompleted = events[1].2.clone().into_val(&env);
+    assert_eq!(completed.stream_id, UPGRADE_COMPAT_STREAM_ID);
+    assert_eq!(completed.total_amount, UPGRADE_COMPAT_TOTAL);
+
+    let stream = f.client.get_stream(&UPGRADE_COMPAT_STREAM_ID);
+    assert_eq!(stream.claimed_amount, UPGRADE_COMPAT_TOTAL);
+    assert_eq!(
+        f.client
+            .claimable(&UPGRADE_COMPAT_STREAM_ID, &UPGRADE_COMPAT_END),
+        0
+    );
+}
+
+// -----------------------------------------------------------------------------
+// Case (b): upgraded code encountering old state
+// -----------------------------------------------------------------------------
+
+/// Simulates the documented upgrade path for a pre-versioning deployment:
+/// `get_contract_version()` is `None`, the admin records the layout version,
+/// and the upgraded code still reads and pays against the old state.
+#[test]
+fn test_upgrade_compat_b_migration_preserves_old_state_and_pays() {
+    let env = Env::default();
+    let f = upgrade_compat_fixture(&env);
+
+    // A deployment predating the `ContractVersion` key reports None (version 0).
+    assert_eq!(f.client.get_contract_version(), None);
+
+    // Documented upgrade step: the admin records the version the new WASM
+    // expects once the (here no-op) migration has run.
+    f.client
+        .set_contract_version(&f.admin, &STREAM_LAYOUT_VERSION);
+    assert_eq!(f.client.get_contract_version(), Some(STREAM_LAYOUT_VERSION));
+
+    // The upgraded build still reads the pre-upgrade record intact.
+    let stream = f.client.get_stream(&UPGRADE_COMPAT_STREAM_ID);
+    assert_eq!(stream.total_amount, UPGRADE_COMPAT_TOTAL);
+    assert_eq!(stream.claimed_amount, UPGRADE_COMPAT_CLAIMED);
+    assert_eq!(stream.vesting_type, String::from_str(&env, "linear"));
+
+    // And can still pay out against it, emitting the documented event.
+    let before = f.contract_event_count();
+    let paid = f
+        .client
+        .claim(&UPGRADE_COMPAT_STREAM_ID, &f.recipient, &100_000);
+    assert_eq!(paid, 100_000);
+    assert_eq!(f.token.balance(&f.recipient), 100_000);
+    assert_eq!(
+        f.token.balance(&f.contract_id),
+        UPGRADE_COMPAT_ESCROW - 100_000
+    );
+    assert_eq!(
+        f.client
+            .get_stream(&UPGRADE_COMPAT_STREAM_ID)
+            .claimed_amount,
+        UPGRADE_COMPAT_CLAIMED + 100_000
+    );
+
+    let events = f.events_since(before);
+    assert_eq!(events.len(), 1);
+    assert_eq!(decode_topic(&env, &events[0].1, 0), symbol_short!("Stream"));
+    assert_eq!(
+        decode_topic(&env, &events[0].1, 1),
+        symbol_short!("Claimed")
+    );
+}
+
+/// After an upgrade, authorization is still derived from the stored record and
+/// any rejected call rolls back completely.
+#[test]
+fn test_upgrade_compat_b_upgraded_code_auth_and_rollback() {
+    let env = Env::default();
+    let f = upgrade_compat_fixture(&env);
+
+    // Complete the documented upgrade, then enforce real signatures.
+    f.client
+        .set_contract_version(&f.admin, &STREAM_LAYOUT_VERSION);
+    env.mock_auths(&[]);
+    let before = f.contract_event_count();
+
+    // Unauthorized claim against old state reverts...
+    assert!(f
+        .client
+        .try_claim(&UPGRADE_COMPAT_STREAM_ID, &f.recipient, &100_000)
+        .is_err());
+    f.assert_legacy_state_intact(before);
+
+    // ...and an authorized over-claim reverts without transferring tokens.
+    f.sign_claim(&f.recipient, 100_000_000);
+    assert!(f
+        .client
+        .try_claim(&UPGRADE_COMPAT_STREAM_ID, &f.recipient, &100_000_000)
+        .is_err());
+    f.assert_legacy_state_intact(before);
+
+    // The version change survived the reverts (instance storage, not the failed
+    // call's persistent writes).
+    assert_eq!(f.client.get_contract_version(), Some(STREAM_LAYOUT_VERSION));
+
+    // A valid signed claim on the old state succeeds.
+    f.sign_claim(&f.recipient, 100_000);
+    assert_eq!(
+        f.client
+            .claim(&UPGRADE_COMPAT_STREAM_ID, &f.recipient, &100_000),
+        100_000
+    );
+    assert_eq!(f.token.balance(&f.recipient), 100_000);
+    assert_eq!(f.contract_event_count(), before + 1);
 }

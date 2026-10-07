@@ -11,6 +11,7 @@ import crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
 import { sendApiError } from "../apiErrors";
 import { logger } from "../logger";
+import { recordSecretsRotation } from "./secretsRotationOutcome";
 
 const HORIZON_URL = (process.env.HORIZON_URL || "https://horizon-testnet.stellar.org").trim();
 
@@ -52,6 +53,18 @@ if (!jwtSecret) {
   logger.warn(
     "JWT_SECRET is configured. Rotating this secret will invalidate all existing tokens and force all users to re-authenticate.",
   );
+}
+
+// Record the credential set this process booted with so the
+// /api/secrets-rotation/monitoring outcome signal and the
+// secrets_rotation_outcome gauge can distinguish "no rotation recorded"
+// from "rotation rollout in progress". The credential VALUE is never
+// recorded — only that a credential was provisioned at startup.
+if (process.env.JWT_SECRET) {
+  recordSecretsRotation("jwt_secret");
+}
+if (process.env.SERVER_SIGNING_KEY) {
+  recordSecretsRotation("server_signing_key");
 }
 
 export function getJwtSecret() {

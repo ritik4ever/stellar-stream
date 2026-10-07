@@ -152,6 +152,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "ContractVersion"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "NativeToken"
                             }
                           ]
@@ -554,7 +566,7 @@
             "data": {
               "vec": [
                 {
-                  "string": "caught panic 'ContractError::TokenNotAllowed' from contract function 'Symbol(obj#121)'"
+                  "string": "caught panic 'ContractError::TokenNotAllowed' from contract function 'Symbol(obj#125)'"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"

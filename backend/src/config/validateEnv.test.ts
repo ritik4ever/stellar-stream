@@ -14,6 +14,7 @@ vi.mock('../logger', () => ({
     debug: vi.fn(),
   },
   redactObject: (v: unknown) => v,
+  redactObject: (v: unknown) => v,
   STELLAR_SECRET_REGEX: /^S[0-9A-Z]{55}$/,
 }));
 

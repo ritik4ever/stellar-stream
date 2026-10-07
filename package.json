@@ -8,10 +8,12 @@
     "dev:frontend": "cd frontend && npm run dev",
     "install:all": "cd backend && npm install && cd ../frontend && npm install",
     "verify:dependencies": "node scripts/verify-dependencies.mjs",
+    "verify:backend-ci": "node scripts/check-backend-ci.mjs",
     "compose:up": "bash scripts/compose-up.sh",
     "test:compose-up": "bash scripts/compose-up.test.sh",
-    "test:deploy": "bash scripts/deploy.test.sh",
+
     "sqlite:backup": "bash scripts/sqlite-backup.sh",
+    "sqlite:verify": "bash scripts/sqlite-backup.sh --verify",
     "test:sqlite-backup": "bash scripts/sqlite-backup.test.sh",
     "build": "cd backend && npm run build && cd ../frontend && npm run build",
     "deploy:contract": "./scripts/deploy.sh",
