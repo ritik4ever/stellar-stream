@@ -5,10 +5,12 @@ on:
     branches: [ main ]
     paths:
       - 'frontend/**'
+      - '.github/workflows/frontend-ci.yml'
   pull_request:
     branches: [ main ]
     paths:
       - 'frontend/**'
+      - '.github/workflows/frontend-ci.yml'
 
 jobs:
   test-and-build:
@@ -42,6 +44,19 @@ jobs:
         working-directory: frontend
         run: npm test -- --run --coverage
 
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: frontend/coverage/lcov.info
+          flags: frontend
+          fail_ci_if_error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Run Playwright E2E tests
+        working-directory: frontend
+        run: npx playwright test
+
       - name: Build frontend
         working-directory: frontend
         run: npm run build
@@ -51,3 +66,10 @@ jobs:
         with:
           name: coverage-report
           path: frontend/coverage/
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/

@@ -3,7 +3,8 @@
 [![English](https://img.shields.io/badge/lang-en-red.svg)](README.md)
 [![Español](https://img.shields.io/badge/lang-es-green.svg)](docs/README.es.md)
 [![Português](https://img.shields.io/badge/lang-pt--br-blue.svg)](docs/README.pt.md)
-![Coverage](https://img.shields.io/badge/coverage-80%25-brightgreen.svg)
+[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/OWNER/REPO/branch/main/graph/badge.svg)](https://codecov.io/gh/OWNER/REPO)
 
 > **Translation lag notice:** Translations are community-contributed and may lag behind the English version by up to one release cycle. The English [`README.md`](README.md) is the authoritative source.
 
@@ -392,6 +393,8 @@ npm run build
 
 Backend unit tests cover stream lifecycle, indexer, webhook delivery, and auth middleware. Branch coverage is enforced at >= 80%; CI fails if coverage drops below this threshold.
 
+Continuous integration runs on every pull request and on merges to `main` via [`.github/workflows/ci.yml`](.github/workflows/ci.yml). On PRs, the pipeline runs backend Jest tests, frontend Vitest tests, a TypeScript type check, ESLint, and Playwright end-to-end tests. On merges to `main`, it additionally runs `cargo test` for the Soroban contracts. Coverage from the backend and frontend suites is uploaded to [Codecov](https://codecov.io/), and the badge above reflects the latest `main` coverage. Any failing job blocks the pull request from merging.
+
 7) Deploy Contract
 Deploy the Soroban contract to Stellar testnet.
 
@@ -585,6 +588,7 @@ def verify_webhook(secret: str, raw_body: bytes, signature_header: str) -> bool:
 9) Project File Map
 
 ├── .github/                      # GitHub templates & configurations
+│   └── workflows/ci.yml          # PR + main CI pipeline (tests, lint, E2E, coverage)
 ├── backend/
 │   ├── src/
 │   │   ├── config/validateEnv.ts # App bootstrap & environment schema check

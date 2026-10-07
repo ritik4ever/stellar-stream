@@ -2,6 +2,8 @@ name: Soroban Contract CI
 
 on:
   push:
+    branches:
+      - main
     paths:
       - "contracts/**"
       - ".github/workflows/contract-ci.yml"
@@ -67,6 +69,18 @@ jobs:
         env:
           RUSTFLAGS: "-D warnings"
         run: cargo test --locked
+
+      - name: Generate coverage (cargo-llvm-cov)
+        run: |
+          cargo install cargo-llvm-cov --locked
+          cargo llvm-cov --locked --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: contracts/lcov.info
+          flags: contracts
+          fail_ci_if_error: true
 
       - name: Build WASM binary and report size
         run: |
