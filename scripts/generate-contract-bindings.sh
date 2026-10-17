@@ -16,7 +16,7 @@
 #   CONTRACT_ID="C..." npm run gen:bindings
 #   CONTRACT_ID="C..." ./scripts/generate-contract-bindings.sh
 
-set -e
+set -euo pipefail
 
 # ── Colors ────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -25,24 +25,29 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 # ── Config ────────────────────────────────────────────────────────────────
-OUTPUT_DIR="frontend/src/contracts/generated"
+OUTPUT_DIR="${BINDINGS_OUTPUT_DIR:-frontend/src/contracts/generated}"
+CONTRACT_ID_VALUE="${CONTRACT_ID:-}"
 NETWORK_PASSPHRASE="${NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}"
 RPC_URL="${RPC_URL:-https://soroban-testnet.stellar.org:443}"
 
 # ── Checks ────────────────────────────────────────────────────────────────
-if [ -z "$CONTRACT_ID" ]; then
-    echo -e "${RED}Error: CONTRACT_ID environment variable is required${NC}"
-    echo ""
-    echo "Deploy the contract first, then re-run:"
-    echo "  SECRET_KEY=\"S...\" npm run deploy:contract"
-    echo "  CONTRACT_ID=\"C...\" npm run gen:bindings"
-    echo ""
-    echo "Or read the saved ID directly:"
-    echo "  CONTRACT_ID=\$(cat contracts/contract_id.txt) npm run gen:bindings"
+if [[ ! "$CONTRACT_ID_VALUE" =~ ^C[A-Z2-7]{55}$ ]]; then
+    echo -e "${RED}Error: CONTRACT_ID is missing or invalid${NC}"
+    echo "Set it to a Stellar contract ID (C followed by 55 base32 characters)."
     exit 1
 fi
 
-if ! command -v soroban &> /dev/null; then
+if [[ -z "$NETWORK_PASSPHRASE" ]]; then
+    echo -e "${RED}Error: NETWORK_PASSPHRASE must not be empty${NC}"
+    exit 1
+fi
+
+if [[ ! "$RPC_URL" =~ ^https?://[^[:space:]]+$ ]]; then
+    echo -e "${RED}Error: RPC_URL must be a valid HTTP(S) URL${NC}"
+    exit 1
+fi
+
+if ! command -v soroban >/dev/null 2>&1; then
     echo -e "${RED}Error: soroban-cli is not installed${NC}"
     echo "Install it from: https://soroban.stellar.org/docs/getting-started/setup#install-the-soroban-cli"
     exit 1
@@ -50,25 +55,54 @@ fi
 
 # ── Run ───────────────────────────────────────────────────────────────────
 echo -e "${GREEN}Generating TypeScript bindings...${NC}"
-echo "Contract ID : $CONTRACT_ID"
-echo "RPC URL     : $RPC_URL"
 echo "Output      : $OUTPUT_DIR"
 echo ""
 
-# Wipe previous output so stale files don't linger
-rm -rf "$OUTPUT_DIR"
-mkdir -p "$OUTPUT_DIR"
+OUTPUT_PARENT="$(dirname "$OUTPUT_DIR")"
+OUTPUT_NAME="$(basename "$OUTPUT_DIR")"
+mkdir -p "$OUTPUT_PARENT"
+TEMP_DIR="$(mktemp -d "$OUTPUT_PARENT/.${OUTPUT_NAME}.tmp.XXXXXX")"
+BACKUP_DIR="$OUTPUT_PARENT/.${OUTPUT_NAME}.backup.$$"
 
-soroban contract bindings typescript \
-    --contract-id "$CONTRACT_ID" \
+cleanup() {
+    rm -rf "$TEMP_DIR"
+    if [[ -d "$BACKUP_DIR" && ! -e "$OUTPUT_DIR" ]]; then
+        mv "$BACKUP_DIR" "$OUTPUT_DIR" || echo "Error: previous bindings remain at $BACKUP_DIR" >&2
+    fi
+}
+trap cleanup EXIT
+
+if ! soroban contract bindings typescript \
+    --contract-id "$CONTRACT_ID_VALUE" \
     --rpc-url "$RPC_URL" \
     --network-passphrase "$NETWORK_PASSPHRASE" \
-    --output-dir "$OUTPUT_DIR"
-
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Error: Binding generation failed${NC}"
+    --output-dir "$TEMP_DIR" >"$TEMP_DIR/.generator.log" 2>&1; then
+    echo -e "${RED}Error: Binding generation failed. Check the contract, RPC URL, and network passphrase; existing bindings were preserved.${NC}" >&2
     exit 1
 fi
+
+if ! find "$TEMP_DIR" -type f ! -name .generator.log -print -quit | grep -q .; then
+    echo -e "${RED}Error: Binding generation returned no files; existing bindings were preserved.${NC}" >&2
+    exit 1
+fi
+
+rm -f "$TEMP_DIR/.generator.log"
+if [[ -e "$OUTPUT_DIR" ]] && ! mv "$OUTPUT_DIR" "$BACKUP_DIR"; then
+    echo -e "${RED}Error: Could not stage existing bindings; output was not changed.${NC}" >&2
+    exit 1
+fi
+
+if ! mv "$TEMP_DIR" "$OUTPUT_DIR"; then
+    if [[ -d "$BACKUP_DIR" ]] && ! mv "$BACKUP_DIR" "$OUTPUT_DIR"; then
+        echo -e "${RED}Error: Could not install new bindings or restore the previous output; previous bindings remain at $BACKUP_DIR.${NC}" >&2
+        exit 1
+    fi
+    echo -e "${RED}Error: Could not install new bindings; previous bindings were restored.${NC}" >&2
+    exit 1
+fi
+
+rm -rf "$BACKUP_DIR"
+trap - EXIT
 
 echo ""
 echo -e "${GREEN}========================================${NC}"

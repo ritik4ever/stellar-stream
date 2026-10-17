@@ -4,7 +4,10 @@ on:
   push:
     paths:
       - "contracts/**"
+      - "scripts/generate-contract-bindings.sh"
+      - "scripts/test-generate-contract-bindings.sh"
       - ".github/workflows/contract-ci.yml"
+      - ".github/workflows/bindings-drift.yml"
   pull_request:
     paths:
       - "contracts/**"
@@ -24,9 +27,38 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Validate contract build configuration
+        env:
+          EXPECTED_TOOLCHAIN: nightly-2024-12-01
+        run: |
+          configured_toolchain=$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' rust-toolchain.toml)
+          if [[ "$configured_toolchain" != "$EXPECTED_TOOLCHAIN" ]]; then
+            echo "::error::contracts/rust-toolchain.toml must pin $EXPECTED_TOOLCHAIN to match Contract CI."
+            exit 1
+          fi
+
+          if ! grep -Eq '^[[:space:]]*targets[[:space:]]*=.*"wasm32-unknown-unknown"' rust-toolchain.toml; then
+            echo "::error::contracts/rust-toolchain.toml must include the wasm32-unknown-unknown target."
+            exit 1
+          fi
+
+          if [[ ! -s Cargo.lock ]]; then
+            echo "::error::contracts/Cargo.lock is missing or empty; locked tests require a committed lockfile."
+            exit 1
+          fi
+
+          if ! grep -Eq 'crate-type[[:space:]]*=.*"cdylib"' Cargo.toml; then
+            echo "::error::contracts/Cargo.toml must declare a cdylib crate type to produce the WASM contract."
+            exit 1
+          fi
+
+      - name: Test binding generation validation and rollback
+        run: bash ../scripts/test-generate-contract-bindings.sh
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: nightly-2024-12-01
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry and build artifacts
@@ -71,7 +103,12 @@ jobs:
       - name: Build WASM binary and report size
         run: |
           cargo build --target wasm32-unknown-unknown --release
-          SIZE=$(wc -c < target/wasm32-unknown-unknown/release/stellar_stream.wasm)
+          WASM_FILE="target/wasm32-unknown-unknown/release/stellar_stream.wasm"
+          if [[ ! -s "$WASM_FILE" ]]; then
+            echo "::error::WASM build completed without producing a non-empty $WASM_FILE artifact."
+            exit 1
+          fi
+          SIZE=$(wc -c < "$WASM_FILE")
           echo "WASM Binary Size: ${SIZE} bytes ($(numfmt --to=iec ${SIZE}))"
           echo "## WASM Binary Size" >> $GITHUB_STEP_SUMMARY
           echo "**$(numfmt --to=iec ${SIZE})** (${SIZE} bytes)" >> $GITHUB_STEP_SUMMARY
