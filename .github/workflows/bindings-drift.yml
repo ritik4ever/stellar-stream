@@ -31,8 +31,22 @@ jobs:
 
       - name: Generate contract bindings
         env:
-          CONTRACT_ID: ${{ secrets.CONTRACT_ID || format('cat contracts/contract_id.txt') }}
-        run: npm run gen:bindings
+          CONTRACT_ID_SECRET: ${{ secrets.CONTRACT_ID }}
+        run: |
+          set -euo pipefail
+
+          contract_id="${CONTRACT_ID_SECRET:-}"
+          if [[ -z "$contract_id" && -s contracts/contract_id.txt ]]; then
+            contract_id="$(tr -d '[:space:]' < contracts/contract_id.txt)"
+          fi
+
+          if [[ ! "$contract_id" =~ ^C[A-Z2-7]{55}$ ]]; then
+            echo "::error::Set a valid CONTRACT_ID repository secret or provide contracts/contract_id.txt."
+            exit 1
+          fi
+
+          echo "::add-mask::$contract_id"
+          CONTRACT_ID="$contract_id" npm run gen:bindings
 
       - name: Check for uncommitted changes in generated bindings
         run: |

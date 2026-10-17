@@ -3,6 +3,7 @@
 Thank you for your interest in contributing to StellarStream! This guide will help you get started with our development process.
 
 Check out the [FAQ.md](FAQ.md) for common contributor questions and troubleshooting tips.
+For frontend component and style changes, run the [Frontend Pull Request Smoke Test](frontend/SMOKE_TEST.md).
 
 ---
 
@@ -14,7 +15,7 @@ Follow these steps to go from zero to a running local environment with passing t
 
 - [ ] **Node.js 18+** and **npm 9+**
 - [ ] **Git**
-- [ ] **Rust toolchain** (only needed for contract work) — install via [rustup.rs](https://rustup.rs)
+- [ ] **Rust toolchain** (only needed for contract work) — install via [rustup.rs](https://rustup.rs); contract work uses `nightly-2024-12-01` as pinned in `contracts/rust-toolchain.toml`
 
 ### Step-by-Step
 
@@ -80,7 +81,7 @@ If you need to work with on-chain stream operations, set up a local Soroban test
 
 - **Rust toolchain** with `wasm32-unknown-unknown` target:
   ```bash
-  rustup target add wasm32-unknown-unknown
+   rustup toolchain install nightly-2024-12-01 --component rustfmt --component clippy --target wasm32-unknown-unknown
   ```
 - **soroban-cli** (Stellar CLI):
   ```bash
