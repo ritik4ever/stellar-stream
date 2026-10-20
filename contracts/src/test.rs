@@ -5674,3 +5674,60 @@ fn test_contract_event_order_create_claim_cancel_lifecycle() {
     assert!(invalid_claim.is_err());
     assert_eq!(env.events().all().len(), events_after_cancel);
 }
+
+
+// =============================================================================
+// #1162 - Align events with Contract event order state
+// =============================================================================
+
+#[test]
+fn test_contract_event_order_events_aligned_with_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+
+    token_admin.mint(&sender, &2_000);
+
+    // 1. Create stream at t=100
+    env.ledger().set_timestamp(100);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &2_000, &100, &200, &0, &None);
+    assert_eq!(stream_id, 1);
+
+    // Reconstruct and verify stream state matches event expectations
+    let stream_after_create = client.get_stream(&stream_id);
+    assert_eq!(stream_after_create.sender, sender);
+    assert_eq!(stream_after_create.recipient, recipient);
+    assert_eq!(stream_after_create.total_amount, 2_000);
+    assert_eq!(stream_after_create.claimed_amount, 0);
+    assert_eq!(stream_after_create.canceled, false);
+
+    // 2. Claim partial at t=150 (50% vested = 1000)
+    env.ledger().set_timestamp(150);
+    let events_count_before_claim = env.events().all().len();
+    let claimed = client.claim(&stream_id, &recipient, &1_000);
+    assert_eq!(claimed, 1_000);
+    assert!(env.events().all().len() > events_count_before_claim);
+
+    let stream_after_claim = client.get_stream(&stream_id);
+    assert_eq!(stream_after_claim.claimed_amount, 1_000);
+
+    // 3. Cancel stream at t=150 (remaining 1000 refunded to sender)
+    let events_count_before_cancel = env.events().all().len();
+    client.cancel(&stream_id, &sender);
+    assert!(env.events().all().len() > events_count_before_cancel);
+
+    let stream_after_cancel = client.get_stream(&stream_id);
+    assert_eq!(stream_after_cancel.canceled, true);
+
+    // 4. Failed call post-cancellation produces zero events
+    let events_count_after_cancel = env.events().all().len();
+    let fail_claim = client.try_claim(&stream_id, &recipient, &100);
+    assert!(fail_claim.is_err());
+    assert_eq!(env.events().all().len(), events_count_after_cancel);
+}
