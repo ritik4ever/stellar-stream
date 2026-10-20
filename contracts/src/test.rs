@@ -6530,3 +6530,65 @@ fn test_cancellation_refund_checks_authority_and_protects_funds() {
     assert_eq!(stream.canceled, true);
     assert_eq!(stream.total_amount, 400);
 }
+
+// =============================================================================
+// #1145 - Make failure atomic in Cancellation refund
+// =============================================================================
+
+#[test]
+fn test_cancellation_refund_failure_is_atomic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+
+    // 1. Create stream: 1000 tokens from t=100 to t=200
+    env.ledger().set_timestamp(100);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &100, &200, &0, &None);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 2. Advance to t=150
+    env.ledger().set_timestamp(150);
+
+    // 3. Unauthorized cancel fails atomically
+    let events_before_fail = env.events().all().len();
+    let err_res = client.try_cancel(&stream_id, &stranger);
+    assert!(err_res.is_err());
+    assert_eq!(env.events().all().len(), events_before_fail);
+    assert_eq!(token_client.balance(&sender), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.canceled, false);
+    assert_eq!(stream.total_amount, 1_000);
+
+    // 4. Non-existent stream cancel fails atomically
+    let invalid_id_res = client.try_cancel(&999_999, &sender);
+    assert!(invalid_id_res.is_err());
+    assert_eq!(token_client.balance(&sender), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 5. Authorized cancel succeeds atomically
+    client.cancel(&stream_id, &sender);
+    assert_eq!(token_client.balance(&sender), 500);
+    assert_eq!(token_client.balance(&contract_id), 500);
+
+    let stream_canceled = client.get_stream(&stream_id);
+    assert_eq!(stream_canceled.canceled, true);
+    assert_eq!(stream_canceled.total_amount, 500);
+
+    // 6. Recipient can claim all remaining vested funds
+    let claimed = client.claim(&stream_id, &recipient, &500);
+    assert_eq!(claimed, 500);
+    assert_eq!(token_client.balance(&recipient), 500);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
