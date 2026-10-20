@@ -6479,3 +6479,54 @@ fn test_cancellation_refund_events_aligned_with_state() {
     client.cancel(&stream_id, &sender);
     assert_eq!(env.events().all().len(), events_after_cancel.len());
 }
+
+// =============================================================================
+// #1146 - Check authority in Cancellation refund
+// =============================================================================
+
+#[test]
+fn test_cancellation_refund_checks_authority_and_protects_funds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+
+    // 1. Create stream from t=0 to t=100
+    env.ledger().set_timestamp(0);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &0, &100, &0, &None);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 2. Advance to t=40 (vested = 400, unvested refund = 600)
+    env.ledger().set_timestamp(40);
+
+    // 3. Unauthorized stranger cannot trigger cancellation refund
+    let stranger_res = client.try_cancel(&stream_id, &stranger);
+    assert!(stranger_res.is_err());
+    assert_eq!(token_client.balance(&stranger), 0);
+    assert_eq!(token_client.balance(&sender), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 4. Recipient cannot cancel on behalf of sender
+    let recipient_res = client.try_cancel(&stream_id, &recipient);
+    assert!(recipient_res.is_err());
+    assert_eq!(token_client.balance(&sender), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 5. Authorized sender successfully cancels and receives exact refund
+    client.cancel(&stream_id, &sender);
+    assert_eq!(token_client.balance(&sender), 600);
+    assert_eq!(token_client.balance(&contract_id), 400);
+
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.canceled, true);
+    assert_eq!(stream.total_amount, 400);
+}
