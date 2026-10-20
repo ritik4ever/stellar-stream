@@ -5620,3 +5620,57 @@ fn test_asset_contract_handling_edge_precision_and_amounts() {
     assert_eq!(client_macro.balance(&sender), 500_000_000);
     assert_eq!(client_macro.balance(&contract_id), 500_000_000);
 }
+
+
+// =============================================================================
+// #1163 - Add Soroban regression for Contract event order
+// =============================================================================
+
+#[test]
+fn test_contract_event_order_create_claim_cancel_lifecycle() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+
+    // 1. Create stream for 1000 tokens from t=0 to t=100
+    env.ledger().set_timestamp(0);
+    let events_before_create = env.events().all().len();
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &0, &100, &0, &None);
+    assert_eq!(stream_id, 1);
+    assert_eq!(token_client.balance(&sender), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+    let events_after_create = env.events().all().len();
+    assert!(events_after_create > events_before_create);
+
+    // 2. Advance time to 50s and claim 500 tokens
+    env.ledger().set_timestamp(50);
+    let events_before_claim = env.events().all().len();
+    let claimed = client.claim(&stream_id, &recipient, &500);
+    assert_eq!(claimed, 500);
+    assert_eq!(token_client.balance(&recipient), 500);
+    assert_eq!(token_client.balance(&contract_id), 500);
+    let events_after_claim = env.events().all().len();
+    assert!(events_after_claim > events_before_claim);
+
+    // 3. Cancel stream, returning remaining 500 to sender
+    let events_before_cancel = env.events().all().len();
+    client.cancel(&stream_id, &sender);
+    assert_eq!(token_client.balance(&sender), 500);
+    assert_eq!(token_client.balance(&contract_id), 0);
+    let events_after_cancel = env.events().all().len();
+    assert!(events_after_cancel > events_before_cancel);
+
+    // 4. Repeated claim or cancel after cancellation fails atomically
+    let invalid_claim = client.try_claim(&stream_id, &recipient, &100);
+    assert!(invalid_claim.is_err());
+    assert_eq!(env.events().all().len(), events_after_cancel);
+}
