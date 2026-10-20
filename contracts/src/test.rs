@@ -5992,3 +5992,49 @@ fn test_sender_authorization_events_aligned_with_cancellation_state() {
     client.cancel(&stream_id, &sender);
     assert_eq!(env.events().all().len(), events_count_after_create + 2);
 }
+
+
+// =============================================================================
+// #1156 - Check authority in Sender authorization
+// =============================================================================
+
+#[test]
+fn test_sender_authorization_check_authority() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &0, &100, &0, &None);
+    assert_eq!(stream_id, 1);
+
+    // 1. Without sender signature/auth, cancellation fails before balance/state change
+    env.mock_auths(&[]);
+    let unauth_cancel = client.try_cancel(&stream_id, &sender);
+    assert!(unauth_cancel.is_err());
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+    assert_eq!(token_client.balance(&sender), 0);
+    assert_eq!(client.get_stream(&stream_id).canceled, false);
+
+    // 2. Stranger with their own auth attempting to pass sender address fails
+    env.mock_all_auths();
+    let stranger_res = client.try_cancel(&stream_id, &stranger);
+    assert!(stranger_res.is_err());
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+    assert_eq!(client.get_stream(&stream_id).canceled, false);
+
+    // 3. Authorized sender succeeds
+    client.cancel(&stream_id, &sender);
+    assert_eq!(client.get_stream(&stream_id).canceled, true);
+    assert_eq!(token_client.balance(&sender), 1_000);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
