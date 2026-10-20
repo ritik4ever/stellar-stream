@@ -1,3 +1,4 @@
+#![allow(clippy::bool_assert_comparison)]
 extern crate std;
 use super::*;
 use crate::errors::ContractError;
@@ -4637,7 +4638,8 @@ fn test_persistent_stream_unauthorized_claim_fails_before_state_change() {
             .persistent()
             .extend_ttl(&DataKey::Stream(stream_id), 1, 100);
     });
-    env.ledger().set_sequence_number(env.ledger().sequence() + 99);
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 99);
     env.ledger().set_timestamp(100);
 
     let res = client.try_claim(&stream_id, &impostor, &1000);
@@ -4664,7 +4666,8 @@ fn test_persistent_stream_atomic_failure_on_over_claim() {
             .persistent()
             .extend_ttl(&DataKey::Stream(stream_id), 1, 100);
     });
-    env.ledger().set_sequence_number(env.ledger().sequence() + 99);
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 99);
     env.ledger().set_timestamp(50);
 
     let res = client.try_claim(&stream_id, &recipient, &800);
@@ -4672,7 +4675,6 @@ fn test_persistent_stream_atomic_failure_on_over_claim() {
     assert_eq!(token::Client::new(&env, &token).balance(&recipient), 0);
     assert_eq!(client.get_stream(&stream_id).claimed_amount, 0);
 }
-
 
 // =============================================================================
 // #1183 — Soroban regression: contract upgrade compatibility
@@ -5110,7 +5112,6 @@ fn test_upgrade_compat_b_upgraded_code_auth_and_rollback() {
     assert_eq!(f.contract_event_count(), before + 1);
 }
 
-
 // =============================================================================
 // #1173 — Soroban regression: Stream ID allocation
 // =============================================================================
@@ -5156,7 +5157,8 @@ fn test_stream_id_allocation_aborted_creation_does_not_consume_id() {
     token_admin.mint(&sender, &1000);
 
     // Aborted creation: end_time <= start_time
-    let fail_res = client.try_create_stream(&sender, &recipient, &token, &500, &100, &50, &0, &None);
+    let fail_res =
+        client.try_create_stream(&sender, &recipient, &token, &500, &100, &50, &0, &None);
     assert!(fail_res.is_err());
 
     // Subsequent valid creation receives the unconsumed ID 1
@@ -5164,7 +5166,6 @@ fn test_stream_id_allocation_aborted_creation_does_not_consume_id() {
     assert_eq!(id, 1);
     assert_eq!(client.get_stream(&id).total_amount, 500);
 }
-
 
 // =============================================================================
 // #1172 — Align events with Stream ID allocation state
@@ -5196,10 +5197,10 @@ fn test_stream_id_allocation_event_alignment_and_ordering() {
     assert_eq!(stream.total_amount, 1000);
 
     // Failed creation attempt emits no ghost stream
-    let fail_res = client.try_create_stream(&sender, &recipient, &token, &500, &100, &50, &0, &None);
+    let fail_res =
+        client.try_create_stream(&sender, &recipient, &token, &500, &100, &50, &0, &None);
     assert!(fail_res.is_err());
 }
-
 
 // =============================================================================
 // #1171 — Check authority in Stream ID allocation
@@ -5225,7 +5226,8 @@ fn test_stream_id_allocation_unauthorized_sender_fails_before_id_allocation() {
 
     // Disable mocked auth to enforce authority
     env.mock_auths(&[]);
-    let unauth_res = client.try_create_stream(&sender, &recipient, &token, &500, &0, &100, &0, &None);
+    let unauth_res =
+        client.try_create_stream(&sender, &recipient, &token, &500, &0, &100, &0, &None);
     assert!(unauth_res.is_err());
 
     // Balance remains 500 (not drained by unauthorized call)
@@ -5236,7 +5238,6 @@ fn test_stream_id_allocation_unauthorized_sender_fails_before_id_allocation() {
     let id2 = client.create_stream(&sender, &recipient, &token, &500, &0, &100, &0, &None);
     assert_eq!(id2, 2);
 }
-
 
 // =============================================================================
 // #1170 — Make failure atomic in Stream ID allocation
@@ -5267,7 +5268,6 @@ fn test_stream_id_allocation_atomic_failure_rollback() {
     assert_eq!(client.get_stream(&id).total_amount, 1000);
     assert_eq!(token::Client::new(&env, &token).balance(&sender), 0);
 }
-
 
 // =============================================================================
 // #1169 — Specify edge behavior for Stream ID allocation
@@ -5301,7 +5301,6 @@ fn test_stream_id_allocation_edge_amounts_and_checked_arithmetic() {
     assert_eq!(id2, 2);
     assert_eq!(client.get_stream(&id2).total_amount, 999);
 }
-
 
 // =============================================================================
 // #1168 - Add Soroban regression for Asset contract handling
@@ -5344,7 +5343,16 @@ fn test_asset_contract_handling_two_assets_and_unsupported_asset() {
 
     // 1. Two assets: create concurrent streams with different amounts & parameters
     let id_a = client.create_stream(&sender, &recipient_a, &asset_a, &1_000, &0, &100, &0, &None);
-    let id_b = client.create_stream(&sender, &recipient_b, &asset_b, &20_000, &0, &200, &0, &None);
+    let id_b = client.create_stream(
+        &sender,
+        &recipient_b,
+        &asset_b,
+        &20_000,
+        &0,
+        &200,
+        &0,
+        &None,
+    );
 
     assert_eq!(id_a, 1);
     assert_eq!(id_b, 2);
@@ -5378,7 +5386,6 @@ fn test_asset_contract_handling_two_assets_and_unsupported_asset() {
     assert_eq!(client_unsupported.balance(&sender), 5_000);
     assert_eq!(client_unsupported.balance(&contract_id), 0);
 }
-
 
 // =============================================================================
 // #1167 - Align events with Asset contract handling state
@@ -5423,13 +5430,31 @@ fn test_asset_contract_handling_events_aligned_with_state() {
     assert_eq!(events_after_a.len(), events_count_init + 2);
 
     // 2. Create stream with Asset B (emits token transfer event + StreamCreated event)
-    let id_b = client.create_stream(&sender, &recipient_b, &asset_b, &12_000, &0, &200, &0, &None);
+    let id_b = client.create_stream(
+        &sender,
+        &recipient_b,
+        &asset_b,
+        &12_000,
+        &0,
+        &200,
+        &0,
+        &None,
+    );
     assert_eq!(id_b, 2);
     let events_after_b = env.events().all();
     assert_eq!(events_after_b.len(), events_count_init + 4);
 
     // 3. Failed attempt with unsupported asset produces NO new events (atomic rollback)
-    let failed_res = client.try_create_stream(&sender, &recipient_a, &unsupported_asset, &1_000, &0, &100, &0, &None);
+    let failed_res = client.try_create_stream(
+        &sender,
+        &recipient_a,
+        &unsupported_asset,
+        &1_000,
+        &0,
+        &100,
+        &0,
+        &None,
+    );
     assert!(failed_res.is_err());
     assert_eq!(env.events().all().len(), events_count_init + 4);
 
@@ -5442,7 +5467,6 @@ fn test_asset_contract_handling_events_aligned_with_state() {
     assert_eq!(stream_b.token, asset_b);
     assert_eq!(stream_b.total_amount, 12_000);
 }
-
 
 // =============================================================================
 // #1166 - Check authority in Asset contract handling
@@ -5484,7 +5508,8 @@ fn test_asset_contract_handling_authority_check_across_assets() {
 
     // 2. Unauthorized call for asset B without sender auth fails
     env.mock_auths(&[]);
-    let unauth_res = client.try_create_stream(&sender, &recipient_b, &asset_b, &8_000, &0, &100, &0, &None);
+    let unauth_res =
+        client.try_create_stream(&sender, &recipient_b, &asset_b, &8_000, &0, &100, &0, &None);
     assert!(unauth_res.is_err());
 
     // 3. Asset B balance and contract state remain completely unchanged
@@ -5498,7 +5523,6 @@ fn test_asset_contract_handling_authority_check_across_assets() {
     assert_eq!(client_b.balance(&sender), 12_000);
     assert_eq!(client_b.balance(&contract_id), 8_000);
 }
-
 
 // =============================================================================
 // #1165 - Make failure atomic in Asset contract handling
@@ -5568,7 +5592,6 @@ fn test_asset_contract_handling_atomic_failure_rollback() {
     assert_eq!(client_allowed.balance(&contract_id), 2_000);
 }
 
-
 // =============================================================================
 // #1164 - Specify edge behavior for Asset contract handling
 // =============================================================================
@@ -5603,24 +5626,63 @@ fn test_asset_contract_handling_edge_precision_and_amounts() {
     );
 
     // 1. Boundary 1: Smallest integer unit (1) on asset_micro
-    let id_micro = client.create_stream(&sender, &recipient_micro, &asset_micro, &1, &0, &100, &0, &None);
+    let id_micro = client.create_stream(
+        &sender,
+        &recipient_micro,
+        &asset_micro,
+        &1,
+        &0,
+        &100,
+        &0,
+        &None,
+    );
     assert_eq!(id_micro, 1);
     assert_eq!(client.get_stream(&id_micro).total_amount, 1);
     assert_eq!(client_micro.balance(&sender), 9);
     assert_eq!(client_micro.balance(&contract_id), 1);
 
     // 2. Boundary 2: Zero or negative amount rejected for both assets
-    assert!(client.try_create_stream(&sender, &recipient_micro, &asset_micro, &0, &0, &100, &0, &None).is_err());
-    assert!(client.try_create_stream(&sender, &recipient_macro, &asset_macro, &-100, &0, &100, &0, &None).is_err());
+    assert!(client
+        .try_create_stream(
+            &sender,
+            &recipient_micro,
+            &asset_micro,
+            &0,
+            &0,
+            &100,
+            &0,
+            &None
+        )
+        .is_err());
+    assert!(client
+        .try_create_stream(
+            &sender,
+            &recipient_macro,
+            &asset_macro,
+            &-100,
+            &0,
+            &100,
+            &0,
+            &None
+        )
+        .is_err());
 
     // 3. Boundary 3: Large integer scale on asset_macro with checked arithmetic
-    let id_macro = client.create_stream(&sender, &recipient_macro, &asset_macro, &500_000_000, &0, &500, &0, &None);
+    let id_macro = client.create_stream(
+        &sender,
+        &recipient_macro,
+        &asset_macro,
+        &500_000_000,
+        &0,
+        &500,
+        &0,
+        &None,
+    );
     assert_eq!(id_macro, 2);
     assert_eq!(client.get_stream(&id_macro).total_amount, 500_000_000);
     assert_eq!(client_macro.balance(&sender), 500_000_000);
     assert_eq!(client_macro.balance(&contract_id), 500_000_000);
 }
-
 
 // =============================================================================
 // #1163 - Add Soroban regression for Contract event order
@@ -5675,7 +5737,6 @@ fn test_contract_event_order_create_claim_cancel_lifecycle() {
     assert_eq!(env.events().all().len(), events_after_cancel);
 }
 
-
 // =============================================================================
 // #1162 - Align events with Contract event order state
 // =============================================================================
@@ -5696,7 +5757,8 @@ fn test_contract_event_order_events_aligned_with_state() {
 
     // 1. Create stream at t=100
     env.ledger().set_timestamp(100);
-    let stream_id = client.create_stream(&sender, &recipient, &token, &2_000, &100, &200, &0, &None);
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &2_000, &100, &200, &0, &None);
     assert_eq!(stream_id, 1);
 
     // Reconstruct and verify stream state matches event expectations
@@ -5731,7 +5793,6 @@ fn test_contract_event_order_events_aligned_with_state() {
     assert!(fail_claim.is_err());
     assert_eq!(env.events().all().len(), events_count_after_cancel);
 }
-
 
 // =============================================================================
 // #1161 - Check authority in Contract event order
@@ -5790,7 +5851,6 @@ fn test_contract_event_order_authority_checks() {
     assert_eq!(token_client.balance(&contract_id), 0);
 }
 
-
 // =============================================================================
 // #1160 - Make failure atomic in Contract event order
 // =============================================================================
@@ -5813,7 +5873,8 @@ fn test_contract_event_order_atomic_failure_rollback() {
 
     // Create stream for 1000 tokens from t=100 to t=200
     env.ledger().set_timestamp(100);
-    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &100, &200, &0, &None);
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1_000, &100, &200, &0, &None);
     assert_eq!(stream_id, 1);
 
     // Advance to t=150 (500 claimable)
@@ -5850,7 +5911,6 @@ fn test_contract_event_order_atomic_failure_rollback() {
     assert_eq!(token_client.balance(&contract_id), 100);
     assert_eq!(client.get_stream(&stream_id).canceled, true);
 }
-
 
 // =============================================================================
 // #1159 - Specify edge behavior for Contract event order
@@ -5894,7 +5954,6 @@ fn test_contract_event_order_edge_amounts_and_zero_boundary() {
     assert_eq!(token_client.balance(&contract_id), 0);
     assert_eq!(client.get_stream(&stream_id).canceled, true);
 }
-
 
 // =============================================================================
 // #1158 - Add Soroban regression for Sender authorization
@@ -5947,7 +6006,6 @@ fn test_sender_authorization_cancel_by_unrelated_address_and_replayed_cancellati
     assert_eq!(env.events().all().len(), events_after_cancel);
 }
 
-
 // =============================================================================
 // #1157 - Align events with Sender authorization state
 // =============================================================================
@@ -5993,7 +6051,6 @@ fn test_sender_authorization_events_aligned_with_cancellation_state() {
     assert_eq!(env.events().all().len(), events_count_after_create + 2);
 }
 
-
 // =============================================================================
 // #1156 - Check authority in Sender authorization
 // =============================================================================
@@ -6038,7 +6095,6 @@ fn test_sender_authorization_check_authority() {
     assert_eq!(token_client.balance(&sender), 1_000);
     assert_eq!(token_client.balance(&contract_id), 0);
 }
-
 
 // =============================================================================
 // #1155 - Make failure atomic in Sender authorization
@@ -6093,7 +6149,6 @@ fn test_sender_authorization_atomic_failure_rollback() {
     assert_eq!(token_client.balance(&contract_id), 0);
 }
 
-
 // =============================================================================
 // #1154 - Specify edge behavior for Sender authorization
 // =============================================================================
@@ -6137,7 +6192,6 @@ fn test_sender_authorization_edge_amounts_and_boundary_cancellation() {
     assert_eq!(token_client.balance(&contract_id), 0);
 }
 
-
 // =============================================================================
 // #1153 - Add Soroban regression for Recipient authorization
 // =============================================================================
@@ -6160,7 +6214,8 @@ fn test_recipient_authorization_different_recipient_and_auth_changes() {
 
     // 1. Create stream from t=0 to t=100 designated for recipient_a
     env.ledger().set_timestamp(0);
-    let stream_id = client.create_stream(&sender, &recipient_a, &token, &1_000, &0, &100, &0, &None);
+    let stream_id =
+        client.create_stream(&sender, &recipient_a, &token, &1_000, &0, &100, &0, &None);
     assert_eq!(stream_id, 1);
     assert_eq!(token_client.balance(&contract_id), 1_000);
 
@@ -6190,7 +6245,6 @@ fn test_recipient_authorization_different_recipient_and_auth_changes() {
     assert_eq!(token_client.balance(&contract_id), 800);
     assert_eq!(client.get_stream(&stream_id).claimed_amount, 200);
 }
-
 
 // =============================================================================
 // #1152 - Align events with Recipient authorization state
@@ -6245,7 +6299,6 @@ fn test_recipient_authorization_events_aligned_with_claim_state() {
     assert_eq!(env.events().all().len(), events_after_done);
 }
 
-
 // =============================================================================
 // #1151 - Check authority in Recipient authorization
 // =============================================================================
@@ -6297,7 +6350,6 @@ fn test_recipient_authorization_check_signer_authority() {
     assert_eq!(client.get_stream(&stream_id).claimed_amount, 250);
 }
 
-
 // =============================================================================
 // #1150 - Make failure atomic in Recipient authorization
 // =============================================================================
@@ -6340,7 +6392,6 @@ fn test_recipient_authorization_atomic_failure_rollback() {
     assert_eq!(token_client.balance(&contract_id), 500);
     assert_eq!(client.get_stream(&stream_id).claimed_amount, 500);
 }
-
 
 // =============================================================================
 // #1149 - Specify edge behavior for Recipient authorization
@@ -6385,7 +6436,6 @@ fn test_recipient_authorization_edge_amounts_and_different_recipient_boundary() 
     assert_eq!(token_client.balance(&contract_id), 0);
     assert_eq!(client.get_stream(&stream_id).claimed_amount, 1);
 }
-
 
 // =============================================================================
 // #1148 - Add Soroban regression for Cancellation refund
@@ -6437,7 +6487,6 @@ fn test_cancellation_refund_before_start_and_near_end_boundaries() {
     assert_eq!(token_client.balance(&recipient_2), 900);
     assert_eq!(token_client.balance(&contract_id), 0);
 }
-
 
 // =============================================================================
 // #1147 - Align events with Cancellation refund state
@@ -6553,7 +6602,8 @@ fn test_cancellation_refund_failure_is_atomic() {
 
     // 1. Create stream: 1000 tokens from t=100 to t=200
     env.ledger().set_timestamp(100);
-    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &100, &200, &0, &None);
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1_000, &100, &200, &0, &None);
     assert_eq!(token_client.balance(&contract_id), 1_000);
 
     // 2. Advance to t=150
@@ -6969,4 +7019,138 @@ fn test_clawback_integration_edge_behavior_boundaries() {
     let clawed_fully_claimed = client.clawback(&s2, &100, &compliance_admin);
     assert_eq!(clawed_fully_claimed, 0);
     assert_eq!(token_client.balance(&compliance_admin), 500);
+}
+
+// =============================================================================
+// #1127 - Align events with Stream creation escrow state
+// =============================================================================
+
+#[test]
+fn test_stream_creation_escrow_events_aligned_with_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_asset = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    // Mint funds to sender
+    let initial_mint: i128 = 2_000_000_000_000;
+    token_asset.mint(&sender, &initial_mint);
+
+    // -------------------------------------------------------------------------
+    // 1. Standard stream creation: verify event ordering, payload & escrow
+    // -------------------------------------------------------------------------
+    env.ledger().set_timestamp(100);
+    let events_before_create = env.events().all().len();
+
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1_000, &100, &200, &0, &None);
+    assert_eq!(stream_id, 1);
+
+    // Event ordering rule:
+    // 1. Token transfer event (sender -> contract_id for total_amount)
+    // 2. StreamCreated event with matching stream state
+    let events_after_create = env.events().all();
+    assert_eq!(events_after_create.len(), events_before_create + 2);
+
+    // Verify contract escrow balance increases by total_amount
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+    assert_eq!(token_client.balance(&sender), initial_mint - 1_000);
+
+    // Verify stored stream state exactly mirrors emitted event payload
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.sender, sender);
+    assert_eq!(stream.recipient, recipient);
+    assert_eq!(stream.token, token);
+    assert_eq!(stream.total_amount, 1_000);
+    assert_eq!(stream.claimed_amount, 0);
+    assert_eq!(stream.start_time, 100);
+    assert_eq!(stream.end_time, 200);
+    assert!(!stream.canceled);
+    assert!(!stream.paused);
+
+    // Verify event payload for exact indexer reconstruction
+    let last_event = events_after_create.last().unwrap();
+    let event_data: StreamCreated = last_event.2.into_val(&env);
+    assert_eq!(event_data.stream_id, stream_id);
+    assert_eq!(event_data.actor, sender);
+    assert_eq!(event_data.sender, sender);
+    assert_eq!(event_data.recipient, recipient);
+    assert_eq!(event_data.token, token);
+    assert_eq!(event_data.total_amount, 1_000);
+    assert_eq!(event_data.start_time, 100);
+    assert_eq!(event_data.end_time, 200);
+
+    // -------------------------------------------------------------------------
+    // 2. Token transfer failing before storage: insufficient balance
+    // -------------------------------------------------------------------------
+    let broke_sender = Address::generate(&env);
+    let events_before_fail = env.events().all().len();
+    let fail_balance_res = client.try_create_stream(
+        &broke_sender,
+        &recipient,
+        &token,
+        &500,
+        &100,
+        &200,
+        &0,
+        &None,
+    );
+    assert!(fail_balance_res.is_err());
+    // Zero events emitted, contract escrow unchanged, stream ID not burned
+    assert_eq!(env.events().all().len(), events_before_fail);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // -------------------------------------------------------------------------
+    // 3. Edge amount: minimum supported positive integer (1 stroop)
+    // -------------------------------------------------------------------------
+    let s_min = client.create_stream(&sender, &recipient, &token, &1, &100, &200, &0, &None);
+    assert_eq!(s_min, 2);
+    assert_eq!(token_client.balance(&contract_id), 1_001);
+    let stream_min = client.get_stream(&s_min);
+    assert_eq!(stream_min.total_amount, 1);
+    assert_eq!(stream_min.claimed_amount, 0);
+
+    // -------------------------------------------------------------------------
+    // 4. Edge amount: non-positive integers (0 and negative) fail atomically
+    // -------------------------------------------------------------------------
+    let events_before_zero = env.events().all().len();
+    assert!(client
+        .try_create_stream(&sender, &recipient, &token, &0, &100, &200, &0, &None)
+        .is_err());
+    assert!(client
+        .try_create_stream(&sender, &recipient, &token, &-100, &100, &200, &0, &None)
+        .is_err());
+    assert_eq!(env.events().all().len(), events_before_zero);
+    assert_eq!(token_client.balance(&contract_id), 1_001);
+
+    // -------------------------------------------------------------------------
+    // 5. Edge amount: large supported integer near maximum
+    // -------------------------------------------------------------------------
+    let large_amount: i128 = 1_000_000_000_000;
+    let s_large = client.create_stream(
+        &sender,
+        &recipient,
+        &token,
+        &large_amount,
+        &100,
+        &300,
+        &0,
+        &None,
+    );
+    assert_eq!(s_large, 3);
+    assert_eq!(token_client.balance(&contract_id), 1_001 + large_amount);
+    let stream_large = client.get_stream(&s_large);
+    assert_eq!(stream_large.total_amount, large_amount);
+    assert_eq!(stream_large.claimed_amount, 0);
+
+    let last_large_event = env.events().all().last().unwrap();
+    let large_event_data: StreamCreated = last_large_event.2.into_val(&env);
+    assert_eq!(large_event_data.stream_id, s_large);
+    assert_eq!(large_event_data.total_amount, large_amount);
 }
