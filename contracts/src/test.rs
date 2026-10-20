@@ -6781,3 +6781,66 @@ fn test_clawback_integration_events_aligned_with_state() {
     assert_eq!(clawed_empty, 0); // zero clawed
     assert_eq!(env.events().all().len(), events_before_empty); // exactly zero events emitted
 }
+
+// =============================================================================
+// #1141 - Check authority in Clawback integration
+// =============================================================================
+
+#[test]
+fn test_clawback_integration_checks_authority_and_guards_funds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let token_admin = Address::generate(&env);
+    let compliance_admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    let token_asset = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    // 1. Initialize contract
+    client.initialize(
+        &compliance_admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env],
+    );
+
+    token_asset.mint(&sender, &1_000);
+
+    // 2. Create stream from t=0 to t=100
+    env.ledger().set_timestamp(0);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &0, &100, &0, &None);
+
+    // 3. Advance to t=50 (vested = 500)
+    env.ledger().set_timestamp(50);
+
+    // 4. Unauthorized attacker cannot execute clawback
+    let attacker_res = client.try_clawback(&stream_id, &200, &attacker);
+    assert!(attacker_res.is_err());
+    assert_eq!(token_client.balance(&attacker), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 5. Sender cannot execute clawback
+    let sender_res = client.try_clawback(&stream_id, &200, &sender);
+    assert!(sender_res.is_err());
+    assert_eq!(token_client.balance(&sender), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 6. Recipient cannot execute clawback
+    let recipient_res = client.try_clawback(&stream_id, &200, &recipient);
+    assert!(recipient_res.is_err());
+    assert_eq!(token_client.balance(&recipient), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 7. Legitimate compliance admin successfully claws back
+    let clawed = client.clawback(&stream_id, &300, &compliance_admin);
+    assert_eq!(clawed, 300);
+    assert_eq!(token_client.balance(&compliance_admin), 300);
+    assert_eq!(token_client.balance(&contract_id), 700);
+
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.claimed_amount, 300);
+}
