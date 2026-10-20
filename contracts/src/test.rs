@@ -6038,3 +6038,57 @@ fn test_sender_authorization_check_authority() {
     assert_eq!(token_client.balance(&sender), 1_000);
     assert_eq!(token_client.balance(&contract_id), 0);
 }
+
+
+// =============================================================================
+// #1155 - Make failure atomic in Sender authorization
+// =============================================================================
+
+#[test]
+fn test_sender_authorization_atomic_failure_rollback() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let unrelated = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+
+    // Create stream from t=0 to t=100
+    env.ledger().set_timestamp(0);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &0, &100, &0, &None);
+    assert_eq!(stream_id, 1);
+
+    // Advance to t=50
+    env.ledger().set_timestamp(50);
+
+    // 1. Unrelated address fails cancellation atomically
+    let failed_cancel = client.try_cancel(&stream_id, &unrelated);
+    assert!(failed_cancel.is_err());
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+    assert_eq!(token_client.balance(&sender), 0);
+    assert_eq!(client.get_stream(&stream_id).canceled, false);
+
+    // 2. Sender cancels cleanly: 500 refunded to sender, 500 kept in contract for recipient
+    client.cancel(&stream_id, &sender);
+    assert_eq!(client.get_stream(&stream_id).canceled, true);
+    assert_eq!(token_client.balance(&sender), 500);
+    assert_eq!(token_client.balance(&contract_id), 500);
+
+    // 3. Replayed cancellation leaves balances strictly unchanged
+    client.cancel(&stream_id, &sender);
+    assert_eq!(token_client.balance(&sender), 500);
+    assert_eq!(token_client.balance(&contract_id), 500);
+
+    // 4. Recipient claims their remaining 500 vested tokens
+    let claimed = client.claim(&stream_id, &recipient, &500);
+    assert_eq!(claimed, 500);
+    assert_eq!(token_client.balance(&recipient), 500);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
