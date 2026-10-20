@@ -6340,3 +6340,48 @@ fn test_recipient_authorization_atomic_failure_rollback() {
     assert_eq!(token_client.balance(&contract_id), 500);
     assert_eq!(client.get_stream(&stream_id).claimed_amount, 500);
 }
+
+
+// =============================================================================
+// #1149 - Specify edge behavior for Recipient authorization
+// =============================================================================
+
+#[test]
+fn test_recipient_authorization_edge_amounts_and_different_recipient_boundary() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &50);
+
+    // 1. Boundary: Minimal 1-unit stream from t=0 to t=10
+    env.ledger().set_timestamp(0);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1, &0, &10, &0, &None);
+    assert_eq!(stream_id, 1);
+    assert_eq!(token_client.balance(&contract_id), 1);
+
+    // 2. Boundary: Stranger call on 1-unit stream rejected
+    assert!(client.try_claim(&stream_id, &stranger, &1).is_err());
+    assert_eq!(token_client.balance(&stranger), 0);
+    assert_eq!(token_client.balance(&contract_id), 1);
+
+    // 3. Boundary: Zero/negative claims rejected
+    assert!(client.try_claim(&stream_id, &recipient, &0).is_err());
+    assert!(client.try_claim(&stream_id, &recipient, &-10).is_err());
+
+    // 4. Boundary: Exact 1 token claim at 100% vesting (t=10)
+    env.ledger().set_timestamp(10);
+    let claimed = client.claim(&stream_id, &recipient, &1);
+    assert_eq!(claimed, 1);
+    assert_eq!(token_client.balance(&recipient), 1);
+    assert_eq!(token_client.balance(&contract_id), 0);
+    assert_eq!(client.get_stream(&stream_id).claimed_amount, 1);
+}
