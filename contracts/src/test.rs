@@ -5109,3 +5109,58 @@ fn test_upgrade_compat_b_upgraded_code_auth_and_rollback() {
     assert_eq!(f.token.balance(&f.recipient), 100_000);
     assert_eq!(f.contract_event_count(), before + 1);
 }
+
+
+// =============================================================================
+// #1173 — Soroban regression: Stream ID allocation
+// =============================================================================
+
+#[test]
+fn test_stream_id_allocation_consecutive_creations_different_senders() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender1 = Address::generate(&env);
+    let sender2 = Address::generate(&env);
+    let recipient1 = Address::generate(&env);
+    let recipient2 = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender1, &1000);
+    token_admin.mint(&sender2, &2000);
+
+    let id1 = client.create_stream(&sender1, &recipient1, &token, &1000, &0, &100, &0, &None);
+    assert_eq!(id1, 1);
+    assert_eq!(client.get_stream(&id1).sender, sender1);
+    assert_eq!(client.get_stream(&id1).total_amount, 1000);
+
+    let id2 = client.create_stream(&sender2, &recipient2, &token, &2000, &0, &100, &0, &None);
+    assert_eq!(id2, 2);
+    assert_eq!(client.get_stream(&id2).sender, sender2);
+    assert_eq!(client.get_stream(&id2).total_amount, 2000);
+}
+
+#[test]
+fn test_stream_id_allocation_aborted_creation_does_not_consume_id() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    // Aborted creation: end_time <= start_time
+    let fail_res = client.try_create_stream(&sender, &recipient, &token, &500, &100, &50, &0, &None);
+    assert!(fail_res.is_err());
+
+    // Subsequent valid creation receives the unconsumed ID 1
+    let id = client.create_stream(&sender, &recipient, &token, &500, &0, &100, &0, &None);
+    assert_eq!(id, 1);
+    assert_eq!(client.get_stream(&id).total_amount, 500);
+}
