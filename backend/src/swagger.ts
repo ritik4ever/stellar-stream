@@ -448,6 +448,112 @@ export const swaggerDocument = {
           },
         },
       },
+      ConflictError: {
+        type: "object",
+        required: ["error", "statusCode", "code"],
+        properties: {
+          error: {
+            type: "string",
+            example: "Stream is already cancelled or completed.",
+          },
+          statusCode: {
+            type: "integer",
+            example: 409,
+          },
+          requestId: {
+            type: "string",
+            example: "req_123456789",
+          },
+          correlationId: {
+            type: "string",
+            example: "corr_987654321",
+          },
+          code: {
+            type: "string",
+            example: "STREAM_STATE_CONFLICT",
+          },
+        },
+      },
+    },
+    responses: {
+      BadRequest: {
+        description: "Bad Request - Invalid parameters or validation error",
+        content: {
+          "application/json": {
+            schema: {
+              $ref: "#/components/schemas/Error",
+            },
+            examples: {
+              validationError: {
+                summary: "Validation failure",
+                value: {
+                  error: "Validation error: durationSeconds must be at least 60",
+                  statusCode: 400,
+                  code: "VALIDATION_ERROR",
+                  requestId: "req_01HPX7...",
+                  details: [
+                    {
+                      field: "durationSeconds",
+                      message: "Number must be greater than or equal to 60",
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      },
+      NotFound: {
+        description: "Resource Not Found",
+        content: {
+          "application/json": {
+            schema: {
+              $ref: "#/components/schemas/Error",
+            },
+            examples: {
+              streamNotFound: {
+                summary: "Stream not found",
+                value: {
+                  error: "Stream not found.",
+                  statusCode: 404,
+                  code: "NOT_FOUND",
+                  requestId: "req_01HPX7...",
+                },
+              },
+            },
+          },
+        },
+      },
+      Conflict: {
+        description: "Conflict - State conflict or concurrent mutation",
+        content: {
+          "application/json": {
+            schema: {
+              $ref: "#/components/schemas/Error",
+            },
+            examples: {
+              terminalStateConflict: {
+                summary: "Stream state conflict",
+                value: {
+                  error: "Stream is already cancelled or completed.",
+                  statusCode: 409,
+                  code: "STREAM_STATE_CONFLICT",
+                  requestId: "req_01HPX7...",
+                },
+              },
+              idempotencyConflict: {
+                summary: "Idempotency key conflict",
+                value: {
+                  error: "An in-flight mutation with this idempotency key already exists.",
+                  statusCode: 409,
+                  code: "IDEMPOTENCY_CONFLICT",
+                  requestId: "req_01HPX7...",
+                },
+              },
+            },
+          },
+        },
+      },
     },
   },
   paths: {
@@ -984,15 +1090,14 @@ export const swaggerDocument = {
               },
             },
           },
+          "400": {
+            $ref: "#/components/responses/BadRequest",
+          },
           "404": {
-            description: "Stream not found.",
-            content: {
-              "application/json": {
-                schema: {
-                  $ref: "#/components/schemas/Error",
-                },
-              },
-            },
+            $ref: "#/components/responses/NotFound",
+          },
+          "409": {
+            $ref: "#/components/responses/Conflict",
           },
         },
       },
