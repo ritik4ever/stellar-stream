@@ -5789,3 +5789,64 @@ fn test_contract_event_order_authority_checks() {
     assert_eq!(token_client.balance(&sender), 500);
     assert_eq!(token_client.balance(&contract_id), 0);
 }
+
+
+// =============================================================================
+// #1160 - Make failure atomic in Contract event order
+// =============================================================================
+
+#[test]
+fn test_contract_event_order_atomic_failure_rollback() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+
+    // Create stream for 1000 tokens from t=100 to t=200
+    env.ledger().set_timestamp(100);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &100, &200, &0, &None);
+    assert_eq!(stream_id, 1);
+
+    // Advance to t=150 (500 claimable)
+    env.ledger().set_timestamp(150);
+
+    // 1. Attempt to over-claim 800 tokens (exceeds 500 claimable) fails atomically
+    let events_before_fail = env.events().all().len();
+    let overclaim_res = client.try_claim(&stream_id, &recipient, &800);
+    assert!(overclaim_res.is_err());
+    assert_eq!(token_client.balance(&recipient), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+    assert_eq!(client.get_stream(&stream_id).claimed_amount, 0);
+    assert_eq!(env.events().all().len(), events_before_fail);
+
+    // 2. Valid claim of 400 tokens succeeds
+    let claimed = client.claim(&stream_id, &recipient, &400);
+    assert_eq!(claimed, 400);
+    assert_eq!(token_client.balance(&recipient), 400);
+    assert_eq!(token_client.balance(&contract_id), 600);
+    assert_eq!(client.get_stream(&stream_id).claimed_amount, 400);
+
+    // 3. Unauthorized cancel by stranger fails atomically
+    let events_before_stranger = env.events().all().len();
+    let unauth_cancel = client.try_cancel(&stream_id, &stranger);
+    assert!(unauth_cancel.is_err());
+    assert_eq!(token_client.balance(&contract_id), 600);
+    assert_eq!(client.get_stream(&stream_id).canceled, false);
+    assert_eq!(env.events().all().len(), events_before_stranger);
+
+    // 4. Valid cancel succeeds: unvested 500 refunded to sender, contract retains 100 vested for recipient
+    client.cancel(&stream_id, &sender);
+    assert_eq!(token_client.balance(&sender), 500);
+    assert_eq!(token_client.balance(&recipient), 400);
+    assert_eq!(token_client.balance(&contract_id), 100);
+    assert_eq!(client.get_stream(&stream_id).canceled, true);
+}
