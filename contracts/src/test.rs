@@ -5731,3 +5731,61 @@ fn test_contract_event_order_events_aligned_with_state() {
     assert!(fail_claim.is_err());
     assert_eq!(env.events().all().len(), events_count_after_cancel);
 }
+
+
+// =============================================================================
+// #1161 - Check authority in Contract event order
+// =============================================================================
+
+#[test]
+fn test_contract_event_order_authority_checks() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &0, &100, &0, &None);
+    assert_eq!(stream_id, 1);
+
+    // Advance time to 50s
+    env.ledger().set_timestamp(50);
+
+    // 1. Unauthorized recipient check: without recipient auth, claim fails
+    env.mock_auths(&[]);
+    let unauth_claim = client.try_claim(&stream_id, &recipient, &500);
+    assert!(unauth_claim.is_err());
+    assert_eq!(token_client.balance(&recipient), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 2. Stranger claiming with their own auth (not stream recipient) fails
+    env.mock_all_auths();
+    let stranger_claim = client.try_claim(&stream_id, &stranger, &500);
+    assert!(stranger_claim.is_err());
+    assert_eq!(token_client.balance(&stranger), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 3. Stranger attempting to cancel fails
+    let stranger_cancel = client.try_cancel(&stream_id, &stranger);
+    assert!(stranger_cancel.is_err());
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 4. Authorized claim succeeds
+    let claimed = client.claim(&stream_id, &recipient, &500);
+    assert_eq!(claimed, 500);
+    assert_eq!(token_client.balance(&recipient), 500);
+    assert_eq!(token_client.balance(&contract_id), 500);
+
+    // 5. Authorized cancel succeeds
+    client.cancel(&stream_id, &sender);
+    assert_eq!(token_client.balance(&sender), 500);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
