@@ -9,6 +9,7 @@ export default defineConfig({
   reporter: [
     ['list'],
     ['html', { outputFolder: 'playwright-report', open: 'never' }],
+    ['json', { outputFile: 'test-results/e2e-results.json' }],
   ],
   use: {
     baseURL: 'http://localhost:3000',

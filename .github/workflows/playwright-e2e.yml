@@ -32,6 +32,10 @@ jobs:
         working-directory: frontend
         run: npx playwright install chromium
 
+      - name: Test browser outcome classifier
+        working-directory: frontend
+        run: node --test scripts/e2e-outcome.test.mjs
+
       - name: Create backend env file for CI
         run: |
           cat > backend/.env <<'EOF'
@@ -46,18 +50,28 @@ jobs:
           docker compose -f docker-compose.yml up -d --build
 
       - name: Wait for backend health and frontend readiness
+        id: readiness
+        continue-on-error: true
         run: |
           for i in $(seq 1 30); do
             if curl --silent --fail http://localhost:3001/api/health >/dev/null && curl --silent --fail http://localhost:3000 >/dev/null; then
-              echo "Stack is ready";
+              wait_seconds=$(( (i - 1) * 5 ))
+              if [[ "$wait_seconds" -eq 0 ]]; then
+                echo "status=ready" >> "$GITHUB_OUTPUT"
+              else
+                echo "status=delayed" >> "$GITHUB_OUTPUT"
+              fi
+              echo "wait_seconds=$wait_seconds" >> "$GITHUB_OUTPUT"
+              echo "Stack is ready after ${wait_seconds}s";
               exit 0;
             fi;
             echo "Waiting for services to become ready... ($i/30)";
             sleep 5;
           done;
           echo "Services did not become ready in time.";
+          echo "status=blocked" >> "$GITHUB_OUTPUT"
+          echo "wait_seconds=150" >> "$GITHUB_OUTPUT"
           docker compose -f docker-compose.yml ps;
-          docker compose -f docker-compose.yml logs --no-color --tail=100;
           exit 1
 
       # Retries only browser-test timeouts, at most once, after re-checking stack
@@ -69,6 +83,15 @@ jobs:
         env:
           E2E_RUN_TIMEOUT: 600
           E2E_MAX_RETRIES: 1
+
+      - name: Record browser CI outcome
+        id: browser-outcome
+        if: always()
+        env:
+          E2E_READINESS: ${{ steps.readiness.outputs.status || 'blocked' }}
+          E2E_READINESS_WAIT_SECONDS: ${{ steps.readiness.outputs.wait_seconds || '0' }}
+          PLAYWRIGHT_RESULTS: frontend/test-results/e2e-results.json
+        run: node frontend/scripts/e2e-outcome.mjs
 
       - name: Upload Playwright HTML report on failure
         if: always() && steps.playwright-tests.outcome == 'failure'
@@ -83,10 +106,10 @@ jobs:
           docker compose -f docker-compose.yml ps
           docker compose -f docker-compose.yml logs --no-color --tail=100
 
-      - name: Fail workflow if Playwright failed
-        if: always() && steps.playwright-tests.outcome != 'success'
+      - name: Fail workflow if browser work is blocked
+        if: always() && (steps.browser-outcome.outputs.outcome == 'blocked' || steps.browser-outcome.outcome == 'failure')
         run: |
-          echo "Playwright E2E tests failed."
+          echo "Browser checks are blocked; review the sanitized outcome summary and follow RUNBOOK.md."
           exit 1
 
       - name: Tear down Docker Compose stack

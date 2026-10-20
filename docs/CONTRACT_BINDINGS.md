@@ -34,7 +34,7 @@ frontend/src/services/contractClient.ts  ← thin wrapper used by the app
 | Tool | Version | Notes |
 |---|---|---|
 | `soroban-cli` | latest | `cargo install --locked soroban-cli` |
-| Rust + `wasm32-unknown-unknown` | stable | needed to build the contract |
+| Rust + `wasm32-unknown-unknown` | `nightly-2024-12-01` | pinned by `contracts/rust-toolchain.toml`; needed to build and test the contract |
 | Node.js | 18+ | for the frontend |
 | A deployed contract | — | run `npm run deploy:contract` first |
 
@@ -62,10 +62,17 @@ CONTRACT_ID="C..." npm run gen:bindings
 
 **What the script does:**
 
-1. Wipes `frontend/src/contracts/generated/` (prevents stale files)
-2. Calls `soroban contract bindings typescript` against the deployed contract
-3. Writes the generated package into the output directory
-4. Prints the next-step instructions
+1. Validates the contract ID, RPC URL, and network passphrase without printing their values
+2. Generates the package in a temporary directory by calling `soroban contract bindings typescript`
+3. Replaces `frontend/src/contracts/generated/` only after generation succeeds and produces files
+4. Preserves the previous bindings if validation or generation fails
+5. Prints the next-step instructions
+
+Run the offline input-validation and rollback regression test from the repository root:
+
+```bash
+bash scripts/test-generate-contract-bindings.sh
+```
 
 **Optional env overrides:**
 
@@ -376,16 +383,13 @@ If this is your very first time running it, you should end up with fully typed f
 Bindings are a point-in-time snapshot of the contract's interface. Whenever the contract is redeployed — even for a minor change — the bindings can silently go stale and reference methods/types that no longer match on-chain reality.
 
 1. **Redeploy or upgrade the contract** and get the new contract ID (or confirm the existing one, if you're upgrading via Soroban's upgrade mechanism rather than a fresh deploy).
-2. **Delete the old generated bindings** to avoid stale leftovers mixing with new output:
-```bash
-   rm -rf frontend/src/contracts/generated
-```
-3. **Re-run the generation script**, pointing at the current contract ID:
+2. **Re-run the generation script**, pointing at the current contract ID:
 ```bash
    npm run gen:bindings
 ```
-4. **Diff the generated output** against what was previously committed/used in code — if a method signature changed (new required argument, renamed field, different return type), TypeScript will surface compile errors in any frontend code calling it. This is expected and is the whole point of typed bindings: fix the call sites, don't suppress the error.
-5. **Rebuild and smoke-test** the frontend against the upgraded contract before merging.
+  The script replaces the existing bindings only after generation succeeds, so manual deletion is not needed.
+3. **Diff the generated output** against the previous output used in your project — if a method signature changed (new required argument, renamed field, different return type), TypeScript will surface compile errors in any frontend code calling it. This is expected and is the whole point of typed bindings: fix the call sites, don't suppress the error.
+4. **Rebuild and smoke-test** the frontend against the upgraded contract before merging.
 
 > **Tip:** treat "regenerate bindings" as a required step in your contract-deploy checklist, not an optional one — this project doesn't yet automate it in CI (see the README's roadmap), so it's a manual step every contributor must remember.
 
