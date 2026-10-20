@@ -5378,3 +5378,67 @@ fn test_asset_contract_handling_two_assets_and_unsupported_asset() {
     assert_eq!(client_unsupported.balance(&sender), 5_000);
     assert_eq!(client_unsupported.balance(&contract_id), 0);
 }
+
+
+// =============================================================================
+// #1167 - Align events with Asset contract handling state
+// =============================================================================
+
+#[test]
+fn test_asset_contract_handling_events_aligned_with_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient_a = Address::generate(&env);
+    let recipient_b = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let asset_a = create_token(&env, &token_admin);
+    let asset_b = create_token(&env, &token_admin);
+    let unsupported_asset = create_token(&env, &token_admin);
+
+    let token_mint_a = token::StellarAssetClient::new(&env, &asset_a);
+    let token_mint_b = token::StellarAssetClient::new(&env, &asset_b);
+    let token_mint_unsupported = token::StellarAssetClient::new(&env, &unsupported_asset);
+
+    token_mint_a.mint(&sender, &5_000);
+    token_mint_b.mint(&sender, &15_000);
+    token_mint_unsupported.mint(&sender, &2_000);
+
+    client.initialize(
+        &admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env, asset_a.clone(), asset_b.clone()],
+    );
+
+    let events_count_init = env.events().all().len();
+
+    // 1. Create stream with Asset A (emits token transfer event + StreamCreated event)
+    let id_a = client.create_stream(&sender, &recipient_a, &asset_a, &3_000, &0, &100, &0, &None);
+    assert_eq!(id_a, 1);
+    let events_after_a = env.events().all();
+    assert_eq!(events_after_a.len(), events_count_init + 2);
+
+    // 2. Create stream with Asset B (emits token transfer event + StreamCreated event)
+    let id_b = client.create_stream(&sender, &recipient_b, &asset_b, &12_000, &0, &200, &0, &None);
+    assert_eq!(id_b, 2);
+    let events_after_b = env.events().all();
+    assert_eq!(events_after_b.len(), events_count_init + 4);
+
+    // 3. Failed attempt with unsupported asset produces NO new events (atomic rollback)
+    let failed_res = client.try_create_stream(&sender, &recipient_a, &unsupported_asset, &1_000, &0, &100, &0, &None);
+    assert!(failed_res.is_err());
+    assert_eq!(env.events().all().len(), events_count_init + 4);
+
+    // Verify stream state aligns exactly with emitted event parameters
+    let stream_a = client.get_stream(&id_a);
+    assert_eq!(stream_a.token, asset_a);
+    assert_eq!(stream_a.total_amount, 3_000);
+
+    let stream_b = client.get_stream(&id_b);
+    assert_eq!(stream_b.token, asset_b);
+    assert_eq!(stream_b.total_amount, 12_000);
+}
