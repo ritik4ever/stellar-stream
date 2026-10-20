@@ -6437,3 +6437,45 @@ fn test_cancellation_refund_before_start_and_near_end_boundaries() {
     assert_eq!(token_client.balance(&recipient_2), 900);
     assert_eq!(token_client.balance(&contract_id), 0);
 }
+
+
+// =============================================================================
+// #1147 - Align events with Cancellation refund state
+// =============================================================================
+
+#[test]
+fn test_cancellation_refund_events_aligned_with_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+
+    // 1. Create stream from t=0 to t=100
+    env.ledger().set_timestamp(0);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &0, &100, &0, &None);
+    assert_eq!(stream_id, 1);
+
+    // 2. Advance to t=60 and cancel stream
+    env.ledger().set_timestamp(60);
+    let events_before_cancel = env.events().all().len();
+    client.cancel(&stream_id, &sender);
+    let events_after_cancel = env.events().all();
+    assert_eq!(events_after_cancel.len(), events_before_cancel + 2); // token transfer + StreamCanceled
+
+    // 3. Verify state aligns with emitted refund and recipient entitlement
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.canceled, true);
+    assert_eq!(stream.total_amount, 600); // 600 remaining entitlement for recipient
+    assert_eq!(stream.claimed_amount, 0);
+
+    // 4. Repeated cancel emits 0 additional events (indexer exactly-once invariant)
+    client.cancel(&stream_id, &sender);
+    assert_eq!(env.events().all().len(), events_after_cancel.len());
+}
