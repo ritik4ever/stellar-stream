@@ -5894,3 +5894,55 @@ fn test_contract_event_order_edge_amounts_and_zero_boundary() {
     assert_eq!(token_client.balance(&contract_id), 0);
     assert_eq!(client.get_stream(&stream_id).canceled, true);
 }
+
+
+// =============================================================================
+// #1158 - Add Soroban regression for Sender authorization
+// =============================================================================
+
+#[test]
+fn test_sender_authorization_cancel_by_unrelated_address_and_replayed_cancellation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let unrelated = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+
+    // 1. Create stream from t=0 to t=100
+    env.ledger().set_timestamp(0);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &0, &100, &0, &None);
+    assert_eq!(stream_id, 1);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 2. Unrelated address attempts to cancel stream -> rejected
+    let unauth_cancel = client.try_cancel(&stream_id, &unrelated);
+    assert!(unauth_cancel.is_err());
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+    assert_eq!(token_client.balance(&sender), 0);
+    assert_eq!(client.get_stream(&stream_id).canceled, false);
+
+    // 3. Authorized sender cancels stream at t=40
+    env.ledger().set_timestamp(40);
+    let events_before_cancel = env.events().all().len();
+    client.cancel(&stream_id, &sender);
+    assert_eq!(client.get_stream(&stream_id).canceled, true);
+    // Unvested 600 refunded to sender, contract retains 400 for recipient
+    assert_eq!(token_client.balance(&sender), 600);
+    assert_eq!(token_client.balance(&contract_id), 400);
+    let events_after_cancel = env.events().all().len();
+    assert!(events_after_cancel > events_before_cancel);
+
+    // 4. Replayed cancellation attempt on already cancelled stream -> idempotent / zero double refund
+    client.cancel(&stream_id, &sender);
+    assert_eq!(token_client.balance(&sender), 600);
+    assert_eq!(token_client.balance(&contract_id), 400);
+    assert_eq!(env.events().all().len(), events_after_cancel);
+}
