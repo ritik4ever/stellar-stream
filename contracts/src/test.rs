@@ -6912,3 +6912,61 @@ fn test_clawback_integration_failure_is_atomic() {
     assert_eq!(token_client.balance(&contract_id), 700);
     assert_eq!(client.get_stream(&stream_id).claimed_amount, 300);
 }
+
+// =============================================================================
+// #1139 - Specify edge behavior for Clawback integration
+// =============================================================================
+
+#[test]
+fn test_clawback_integration_edge_behavior_boundaries() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let token_admin = Address::generate(&env);
+    let compliance_admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    let token_asset = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    client.initialize(
+        &compliance_admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env],
+    );
+
+    token_asset.mint(&sender, &2_000);
+
+    // Edge 1: Clawback at start timestamp (0 vested) yields 0
+    env.ledger().set_timestamp(100);
+    let s1 = client.create_stream(&sender, &recipient, &token, &1_000, &100, &200, &0, &None);
+    let clawed_at_start = client.clawback(&s1, &500, &compliance_admin);
+    assert_eq!(clawed_at_start, 0);
+    assert_eq!(token_client.balance(&compliance_admin), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // Edge 2: Clawback on canceled stream
+    env.ledger().set_timestamp(150); // 500 vested
+    client.cancel(&s1, &sender); // Sender gets 500 unvested refund, stream total becomes 500
+    assert_eq!(token_client.balance(&sender), 1_500); // 1000 remaining + 500 refund
+    assert_eq!(token_client.balance(&contract_id), 500);
+
+    // Admin claws back from canceled stream
+    let clawed_from_canceled = client.clawback(&s1, &1_000, &compliance_admin);
+    assert_eq!(clawed_from_canceled, 500); // caps at remaining 500
+    assert_eq!(token_client.balance(&compliance_admin), 500);
+    assert_eq!(token_client.balance(&contract_id), 0);
+
+    // Edge 3: Clawback when stream is already 100% claimed yields 0
+    env.ledger().set_timestamp(100);
+    let s2 = client.create_stream(&sender, &recipient, &token, &1_000, &100, &200, &0, &None);
+    env.ledger().set_timestamp(200);
+    client.claim(&s2, &recipient, &1_000);
+    assert_eq!(token_client.balance(&recipient), 1_000);
+
+    let clawed_fully_claimed = client.clawback(&s2, &100, &compliance_admin);
+    assert_eq!(clawed_fully_claimed, 0);
+    assert_eq!(token_client.balance(&compliance_admin), 500);
+}
