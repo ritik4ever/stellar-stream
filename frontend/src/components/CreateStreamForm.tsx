@@ -139,7 +139,27 @@ const DEFAULT_ALLOWED_ASSETS = ["USDC", "XLM"];
 
 /**
  * Form component for creating a new payment stream.
- * Includes validation, draft autosave, and estimated end date calculation.
+ * 
+ * Features:
+ * - Validation of form fields (amounts, addresses, duration, cliff).
+ * - Draft autosave: Form state is automatically persisted to localStorage
+ *   and recovered on page reload (via useDraftAutosave hook).
+ * - Fee estimation: Clicking "Create Stream" estimates the network fee and
+ *   displays a confirmation modal with the fee preview.
+ * - Recovery paths:
+ *   * Fee estimation failure: Shows inline error with "Retry Estimation" button.
+ *     Clicking retry re-runs fee estimation with the current form input (preserved).
+ *   * Stream creation failure (e.g., stale balance, rejected submission):
+ *     Shows error in the modal with "Retry Confirmation" button to re-attempt,
+ *     and "Edit" button to go back and modify the form input.
+ * - Duplicate submission prevention: isConfirming flag prevents multiple
+ *   confirmations from being sent if the user clicks "Confirm" repeatedly.
+ * 
+ * Note on stale balance detection:
+ * - Currently, stale balance is detected reactively when the backend rejects
+ *   the submission (e.g., "Insufficient balance" error).
+ * - A proactive check (before submit) would require a wallet balance API endpoint,
+ *   which is deferred to a future iteration.
  * 
  * @param props - The component props.
  * @returns The rendered CreateStreamForm component.
@@ -218,6 +238,7 @@ export function CreateStreamForm({
     Partial<Record<keyof FormValues, boolean>>
   >({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isConfirming, setIsConfirming] = useState(false);
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [feePreview, setFeePreview] = useState<FeePreview | null>(null);
   const [simulationError, setSimulationError] = useState<string | null>(null);
@@ -348,7 +369,10 @@ export function CreateStreamForm({
   async function confirmCreateStream() {
     if (!feePreview) return;
 
-    setIsSubmitting(true);
+    // Prevent duplicate submissions during confirmation
+    if (isConfirming) return;
+
+    setIsConfirming(true);
     setSimulationError(null);
     try {
       await onCreate(feePreview.payload);
@@ -356,6 +380,32 @@ export function CreateStreamForm({
       setTouched({});
       setSubmitAttempted(false);
       setFeePreview(null);
+    } catch (err) {
+      // On error, keep the modal open with the error message and retry buttons visible
+      setSimulationError(
+        err instanceof Error ? err.message : "Failed to create stream.",
+      );
+    } finally {
+      setIsConfirming(false);
+    }
+  }
+
+  /**
+   * Retry fee estimation from the current form state.
+   * Preserves form input via useDraftAutosave.
+   */
+  async function retryFeeEstimation() {
+    setSimulationError(null);
+    setIsSubmitting(true);
+    try {
+      if (!formValid) return;
+      const payload = buildCreateStreamPayload(values);
+      const estimate = await estimateCreateStreamFee(payload);
+      setFeePreview({ payload, estimate });
+    } catch (err) {
+      setSimulationError(
+        err instanceof Error ? err.message : "Failed to estimate network fee.",
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -791,21 +841,34 @@ export function CreateStreamForm({
       )}
 
       <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginTop: "1rem" }}>
-        {simulationError && (
+        {simulationError && !feePreview && (
           <span className="field-error" role="alert">
             {simulationError}
           </span>
         )}
-        <button
-          className="btn-primary"
-          type="submit"
-          disabled={isSubmitting || (streamMode === "single" ? !formValid : !isSplitValid)}
-          aria-busy={isSubmitting}
-        >
-          {isSubmitting
-            ? (streamMode === "split" ? "Creating..." : "Estimating fee...")
-            : (streamMode === "split" ? "Create Split Stream" : "Create Stream")}
-        </button>
+        {simulationError && !feePreview && (
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => void retryFeeEstimation()}
+            disabled={isSubmitting || (streamMode === "single" ? !formValid : !isSplitValid)}
+            aria-busy={isSubmitting}
+          >
+            {isSubmitting ? "Estimating..." : "Retry Estimation"}
+          </button>
+        )}
+        {!simulationError && (
+          <button
+            className="btn-primary"
+            type="submit"
+            disabled={isSubmitting || (streamMode === "single" ? !formValid : !isSplitValid)}
+            aria-busy={isSubmitting}
+          >
+            {isSubmitting
+              ? (streamMode === "split" ? "Creating..." : "Estimating fee...")
+              : (streamMode === "split" ? "Create Split Stream" : "Create Stream")}
+          </button>
+        )}
       </div>
     </form>
     {feePreview && (
@@ -825,11 +888,18 @@ export function CreateStreamForm({
               className="modal-close"
               aria-label="Cancel fee preview"
               onClick={() => setFeePreview(null)}
-              disabled={isSubmitting}
+              disabled={isConfirming}
             >
               x
             </button>
           </div>
+
+          {simulationError && (
+            <div className="api-error-box" role="alert">
+              <div className="api-error-box__title">Submission failed</div>
+              <div className="api-error-box__hint">{simulationError}</div>
+            </div>
+          )}
 
           <dl className="fee-preview-list">
             <div>
@@ -853,19 +923,31 @@ export function CreateStreamForm({
               type="button"
               className="btn-ghost"
               onClick={() => setFeePreview(null)}
-              disabled={isSubmitting}
+              disabled={isConfirming}
             >
-              Cancel
+              {simulationError ? "Edit" : "Cancel"}
             </button>
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={() => void confirmCreateStream()}
-              disabled={isSubmitting}
-              aria-busy={isSubmitting}
-            >
-              {isSubmitting ? "Creating..." : "Confirm"}
-            </button>
+            {simulationError ? (
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => void confirmCreateStream()}
+                disabled={isConfirming}
+                aria-busy={isConfirming}
+              >
+                {isConfirming ? "Retrying..." : "Retry Confirmation"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => void confirmCreateStream()}
+                disabled={isConfirming}
+                aria-busy={isConfirming}
+              >
+                {isConfirming ? "Creating..." : "Confirm"}
+              </button>
+            )}
           </div>
         </div>
       </div>

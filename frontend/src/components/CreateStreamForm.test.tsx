@@ -202,4 +202,173 @@ describe('CreateStreamForm Component', () => {
     expect(screen.getByText(/Network error/i)).toBeInTheDocument();
     expect(screen.getByText(/Could not reach the StellarStream API/i)).toBeInTheDocument();
   });
+
+  it('allows retry of fee estimation when estimation fails', async () => {
+    // First call fails, second succeeds
+    vi.mocked(estimateCreateStreamFee)
+      .mockRejectedValueOnce(new Error('RPC timeout'))
+      .mockResolvedValueOnce({
+        feeStroops: 12345,
+        feeXlm: '0.0012345',
+      });
+
+    render(<CreateStreamForm onCreate={vi.fn()} walletAddress={VALID_ADDRESS_1} />);
+
+    fillValidStreamForm();
+
+    // Click "Create Stream" — should fail
+    fireEvent.click(screen.getByRole('button', { name: /Create Stream/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('RPC timeout');
+    expect(estimateCreateStreamFee).toHaveBeenCalledTimes(1);
+
+    // Click "Retry Estimation"
+    const retryButton = await screen.findByRole('button', { name: /Retry Estimation/i });
+    fireEvent.click(retryButton);
+
+    // Should call estimateCreateStreamFee again and show fee preview
+    await waitFor(() => {
+      expect(estimateCreateStreamFee).toHaveBeenCalledTimes(2);
+    });
+    
+    expect(await screen.findByText(/Network fee estimate/i)).toBeInTheDocument();
+    expect(screen.getByText('100 USDC')).toBeInTheDocument();
+  });
+
+  it('allows retry of stream creation when confirmation fails', async () => {
+    // onCreate fails first time, succeeds on retry
+    const onCreate = vi.fn()
+      .mockRejectedValueOnce(new Error('Insufficient balance'))
+      .mockResolvedValueOnce(undefined);
+
+    render(<CreateStreamForm onCreate={onCreate} walletAddress={VALID_ADDRESS_1} />);
+
+    fillValidStreamForm();
+
+    // Submit form to get fee preview
+    fireEvent.click(screen.getByRole('button', { name: /Create Stream/i }));
+    
+    // Wait for modal to open
+    const confirmButton = await screen.findByRole('button', { name: /^Confirm$/i });
+    
+    // First confirmation — should fail
+    fireEvent.click(confirmButton);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Insufficient balance');
+    expect(onCreate).toHaveBeenCalledTimes(1);
+
+    // Click "Retry Confirmation"
+    const retryButton = await screen.findByRole('button', { name: /Retry Confirmation/i });
+    fireEvent.click(retryButton);
+
+    // Should call onCreate again and close modal on success
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledTimes(2);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+  });
+
+  it('allows editing form after confirmation failure', async () => {
+    const onCreate = vi.fn().mockRejectedValueOnce(new Error('Transaction failed'));
+
+    render(<CreateStreamForm onCreate={onCreate} walletAddress={VALID_ADDRESS_1} />);
+
+    fillValidStreamForm('100', '60');
+
+    // Submit form to get fee preview
+    fireEvent.click(screen.getByRole('button', { name: /Create Stream/i }));
+    
+    // Wait for modal to open
+    await screen.findByRole('button', { name: /^Confirm$/i });
+
+    // Confirm — should fail
+    fireEvent.click(screen.getByRole('button', { name: /^Confirm$/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Transaction failed');
+
+    // Click "Edit" button (which appears when there's an error)
+    const editButton = await screen.findByRole('button', { name: /Edit/i });
+    fireEvent.click(editButton);
+
+    // Modal should close
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    // Form values should still be present
+    expect(screen.getByDisplayValue('100')).toBeInTheDocument();
+  });
+
+  it('prevents duplicate confirmations by disabling button during submission', async () => {
+    let resolveSubmit: (value: void | PromiseLike<void>) => void;
+    const onCreate = vi.fn().mockImplementation(() => new Promise((resolve) => {
+      resolveSubmit = resolve;
+    }));
+
+    render(<CreateStreamForm onCreate={onCreate} walletAddress={VALID_ADDRESS_1} />);
+
+    fillValidStreamForm();
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Stream/i }));
+    const confirmButton = await screen.findByRole('button', { name: /^Confirm$/i });
+
+    // First click
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      expect(confirmButton).toBeDisabled();
+    });
+
+    // Try to click again while disabled
+    fireEvent.click(confirmButton);
+
+    // onCreate should still only have been called once
+    expect(onCreate).toHaveBeenCalledTimes(1);
+
+    // Resolve the submission
+    await waitFor(() => {
+      if (resolveSubmit) resolveSubmit();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+  });
+
+  it('preserves form input through fee estimation error and retry', async () => {
+    vi.mocked(estimateCreateStreamFee)
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockResolvedValueOnce({
+        feeStroops: 12345,
+        feeXlm: '0.0012345',
+      });
+
+    render(<CreateStreamForm onCreate={vi.fn()} walletAddress={VALID_ADDRESS_1} />);
+
+    const senderInput = screen.getByLabelText(/Sender Account/i) as HTMLInputElement;
+    const recipientInput = screen.getByLabelText(/Recipient Account/i) as HTMLInputElement;
+    const amountInput = screen.getByLabelText(/Total Amount/i) as HTMLInputElement;
+
+    fillValidStreamForm('250', '120');
+
+    // Try to submit — fails
+    fireEvent.click(screen.getByRole('button', { name: /Create Stream/i }));
+    await screen.findByRole('alert');
+
+    // Verify input is still there
+    expect(senderInput.value).toBe(VALID_ADDRESS_1);
+    expect(recipientInput.value).toBe(VALID_ADDRESS_2);
+    expect(amountInput.value).toBe('250');
+
+    // Retry
+    fireEvent.click(await screen.findByRole('button', { name: /Retry Estimation/i }));
+
+    // Modal should open with the same data
+    await waitFor(() => {
+      expect(screen.getByText('250 USDC')).toBeInTheDocument();
+    });
+  });
 });
