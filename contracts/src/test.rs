@@ -5199,3 +5199,40 @@ fn test_stream_id_allocation_event_alignment_and_ordering() {
     let fail_res = client.try_create_stream(&sender, &recipient, &token, &500, &100, &50, &0, &None);
     assert!(fail_res.is_err());
 }
+
+
+// =============================================================================
+// #1171 — Check authority in Stream ID allocation
+// =============================================================================
+
+#[test]
+fn test_stream_id_allocation_unauthorized_sender_fails_before_id_allocation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+
+    // Initial stream creation succeeds and allocates ID 1
+    let id1 = client.create_stream(&sender, &recipient, &token, &500, &0, &100, &0, &None);
+    assert_eq!(id1, 1);
+    assert_eq!(client.get_stream(&id1).sender, sender);
+
+    // Disable mocked auth to enforce authority
+    env.mock_auths(&[]);
+    let unauth_res = client.try_create_stream(&sender, &recipient, &token, &500, &0, &100, &0, &None);
+    assert!(unauth_res.is_err());
+
+    // Balance remains 500 (not drained by unauthorized call)
+    assert_eq!(token::Client::new(&env, &token).balance(&sender), 500);
+
+    // Subsequent valid call gets next ID 2
+    env.mock_all_auths();
+    let id2 = client.create_stream(&sender, &recipient, &token, &500, &0, &100, &0, &None);
+    assert_eq!(id2, 2);
+}
