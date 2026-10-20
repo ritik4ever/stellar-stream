@@ -6723,3 +6723,61 @@ fn test_clawback_integration_regression() {
     let stream_final = client.get_stream(&stream_id);
     assert_eq!(stream_final.claimed_amount, 1_000);
 }
+
+// =============================================================================
+// #1142 - Align events with Clawback integration state
+// =============================================================================
+
+#[test]
+fn test_clawback_integration_events_aligned_with_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let token_admin = Address::generate(&env);
+    let compliance_admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    let token_asset = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    client.initialize(
+        &compliance_admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env],
+    );
+
+    token_asset.mint(&sender, &1_000);
+
+    // 1. Create stream from t=0 to t=100
+    env.ledger().set_timestamp(0);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &0, &100, &0, &None);
+
+    // 2. Advance to t=40 (vested = 400)
+    env.ledger().set_timestamp(40);
+    let events_before = env.events().all().len();
+
+    // 3. Admin claws back 250
+    let clawed = client.clawback(&stream_id, &250, &compliance_admin);
+    assert_eq!(clawed, 250);
+
+    let events_after = env.events().all();
+    assert_eq!(events_after.len(), events_before + 2); // transfer + ClawbackExecuted
+
+    // 4. Verify state matches emitted event data
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.claimed_amount, 250);
+    assert_eq!(token_client.balance(&compliance_admin), 250);
+    assert_eq!(token_client.balance(&contract_id), 750);
+
+    // 5. Claw back remaining 150 unclaimed vested (requesting 200 caps at 150)
+    let clawed_remaining = client.clawback(&stream_id, &200, &compliance_admin);
+    assert_eq!(clawed_remaining, 150); // capped at remaining 150
+
+    // Redundant clawback when 0 remaining vested emits 0 events
+    let events_before_empty = env.events().all().len();
+    let clawed_empty = client.clawback(&stream_id, &100, &compliance_admin);
+    assert_eq!(clawed_empty, 0); // zero clawed
+    assert_eq!(env.events().all().len(), events_before_empty); // exactly zero events emitted
+}
