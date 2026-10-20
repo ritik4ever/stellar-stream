@@ -6244,3 +6244,55 @@ fn test_recipient_authorization_events_aligned_with_claim_state() {
     assert!(client.try_claim(&stream_id, &recipient, &10).is_err());
     assert_eq!(env.events().all().len(), events_after_done);
 }
+
+
+// =============================================================================
+// #1151 - Check authority in Recipient authorization
+// =============================================================================
+
+#[test]
+fn test_recipient_authorization_check_signer_authority() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+
+    // Create stream from t=0 to t=100
+    env.ledger().set_timestamp(0);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &0, &100, &0, &None);
+    assert_eq!(stream_id, 1);
+
+    // Advance to t=50 (500 claimable)
+    env.ledger().set_timestamp(50);
+
+    // 1. Without recipient signature/auth, claim fails before any balance or state changes
+    env.mock_auths(&[]);
+    let unauth_res = client.try_claim(&stream_id, &recipient, &250);
+    assert!(unauth_res.is_err());
+    assert_eq!(token_client.balance(&recipient), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+    assert_eq!(client.get_stream(&stream_id).claimed_amount, 0);
+
+    // 2. Stranger claiming with their own auth (not recipient) fails
+    env.mock_all_auths();
+    let stranger_res = client.try_claim(&stream_id, &stranger, &250);
+    assert!(stranger_res.is_err());
+    assert_eq!(token_client.balance(&stranger), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 3. Authorized recipient claim succeeds
+    let claimed = client.claim(&stream_id, &recipient, &250);
+    assert_eq!(claimed, 250);
+    assert_eq!(token_client.balance(&recipient), 250);
+    assert_eq!(token_client.balance(&contract_id), 750);
+    assert_eq!(client.get_stream(&stream_id).claimed_amount, 250);
+}
