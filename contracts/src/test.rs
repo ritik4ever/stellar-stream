@@ -6190,3 +6190,57 @@ fn test_recipient_authorization_different_recipient_and_auth_changes() {
     assert_eq!(token_client.balance(&contract_id), 800);
     assert_eq!(client.get_stream(&stream_id).claimed_amount, 200);
 }
+
+
+// =============================================================================
+// #1152 - Align events with Recipient authorization state
+// =============================================================================
+
+#[test]
+fn test_recipient_authorization_events_aligned_with_claim_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+
+    // 1. Create stream from t=0 to t=100
+    env.ledger().set_timestamp(0);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &0, &100, &0, &None);
+    assert_eq!(stream_id, 1);
+
+    // 2. Failed claim by wrong recipient emits zero events
+    let events_count_after_create = env.events().all().len();
+    assert!(client.try_claim(&stream_id, &stranger, &200).is_err());
+    assert_eq!(env.events().all().len(), events_count_after_create);
+
+    // 3. Authorized partial claim at t=50 (500 claimable) emits StreamClaimed event
+    env.ledger().set_timestamp(50);
+    let claimed = client.claim(&stream_id, &recipient, &400);
+    assert_eq!(claimed, 400);
+    let events_after_claim = env.events().all();
+    assert_eq!(events_after_claim.len(), events_count_after_create + 2); // transfer + StreamClaimed
+
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.recipient, recipient);
+    assert_eq!(stream.claimed_amount, 400);
+
+    // 4. Final claim at t=100 completes the stream and emits StreamClaimed + StreamCompleted
+    env.ledger().set_timestamp(100);
+    let final_claim = client.claim(&stream_id, &recipient, &600);
+    assert_eq!(final_claim, 600);
+    let stream_done = client.get_stream(&stream_id);
+    assert_eq!(stream_done.claimed_amount, 1_000);
+
+    // 5. Subsequent claim after completion emits zero events
+    let events_after_done = env.events().all().len();
+    assert!(client.try_claim(&stream_id, &recipient, &10).is_err());
+    assert_eq!(env.events().all().len(), events_after_done);
+}
