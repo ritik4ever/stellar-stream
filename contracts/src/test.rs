@@ -6385,3 +6385,55 @@ fn test_recipient_authorization_edge_amounts_and_different_recipient_boundary() 
     assert_eq!(token_client.balance(&contract_id), 0);
     assert_eq!(client.get_stream(&stream_id).claimed_amount, 1);
 }
+
+
+// =============================================================================
+// #1148 - Add Soroban regression for Cancellation refund
+// =============================================================================
+
+#[test]
+fn test_cancellation_refund_before_start_and_near_end_boundaries() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient_1 = Address::generate(&env);
+    let recipient_2 = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &2_000);
+
+    // 1. Boundary 1: Cancel before start time (t=50, start=100, end=200)
+    env.ledger().set_timestamp(50);
+    let id1 = client.create_stream(&sender, &recipient_1, &token, &1_000, &100, &200, &0, &None);
+    assert_eq!(id1, 1);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    client.cancel(&id1, &sender);
+    assert_eq!(client.get_stream(&id1).canceled, true);
+    // 0 vested, full 1000 refunded to sender
+    assert_eq!(token_client.balance(&sender), 2_000);
+    assert_eq!(token_client.balance(&contract_id), 0);
+
+    // 2. Boundary 2: Cancel near end time (t=190, start=100, end=200)
+    let id2 = client.create_stream(&sender, &recipient_2, &token, &1_000, &100, &200, &0, &None);
+    assert_eq!(id2, 2);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    env.ledger().set_timestamp(190);
+    client.cancel(&id2, &sender);
+    assert_eq!(client.get_stream(&id2).canceled, true);
+    // 90% vested (900), 10% unvested (100) refunded to sender
+    assert_eq!(token_client.balance(&sender), 1_100);
+    assert_eq!(token_client.balance(&contract_id), 900);
+
+    // Recipient claims vested 900
+    let claimed = client.claim(&id2, &recipient_2, &900);
+    assert_eq!(claimed, 900);
+    assert_eq!(token_client.balance(&recipient_2), 900);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
