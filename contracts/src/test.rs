@@ -5267,3 +5267,37 @@ fn test_stream_id_allocation_atomic_failure_rollback() {
     assert_eq!(client.get_stream(&id).total_amount, 1000);
     assert_eq!(token::Client::new(&env, &token).balance(&sender), 0);
 }
+
+
+// =============================================================================
+// #1169 — Specify edge behavior for Stream ID allocation
+// =============================================================================
+
+#[test]
+fn test_stream_id_allocation_edge_amounts_and_checked_arithmetic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+
+    token_admin.mint(&sender, &1000);
+
+    let id1 = client.create_stream(&sender, &recipient, &token, &1, &0, &100, &0, &None);
+    assert_eq!(id1, 1);
+    assert_eq!(client.get_stream(&id1).total_amount, 1);
+
+    let zero_res = client.try_create_stream(&sender, &recipient, &token, &0, &0, &100, &0, &None);
+    assert!(zero_res.is_err());
+
+    let neg_res = client.try_create_stream(&sender, &recipient, &token, &-500, &0, &100, &0, &None);
+    assert!(neg_res.is_err());
+
+    let id2 = client.create_stream(&sender, &recipient, &token, &999, &0, &100, &0, &None);
+    assert_eq!(id2, 2);
+    assert_eq!(client.get_stream(&id2).total_amount, 999);
+}
