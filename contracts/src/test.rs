@@ -6592,3 +6592,65 @@ fn test_cancellation_refund_failure_is_atomic() {
     assert_eq!(token_client.balance(&recipient), 500);
     assert_eq!(token_client.balance(&contract_id), 0);
 }
+
+// =============================================================================
+// #1144 - Specify edge behavior for Cancellation refund
+// =============================================================================
+
+#[test]
+fn test_cancellation_refund_edge_behavior_boundaries() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &3_000);
+
+    // Edge 1: Cancellation at exact start_time (t = 100, vested = 0) -> 100% refund
+    env.ledger().set_timestamp(100);
+    let stream_1 = client.create_stream(&sender, &recipient, &token, &1_000, &100, &200, &0, &None);
+    client.cancel(&stream_1, &sender);
+    assert_eq!(token_client.balance(&sender), 3_000); // full 1000 refunded
+    assert_eq!(token_client.balance(&contract_id), 0);
+    let s1 = client.get_stream(&stream_1);
+    assert_eq!(s1.canceled, true);
+    assert_eq!(s1.total_amount, 0);
+
+    // Edge 2: Cancellation after full vesting (t = 250 >= 200) -> 0 refund
+    env.ledger().set_timestamp(100);
+    let stream_2 = client.create_stream(&sender, &recipient, &token, &1_000, &100, &200, &0, &None);
+    env.ledger().set_timestamp(250);
+    client.cancel(&stream_2, &sender);
+    assert_eq!(token_client.balance(&sender), 2_000); // 0 refund transferred
+    assert_eq!(token_client.balance(&contract_id), 1_000); // all funds remain for recipient
+    let s2 = client.get_stream(&stream_2);
+    assert_eq!(s2.canceled, true);
+    assert_eq!(s2.total_amount, 1_000);
+    // Recipient claims full 1000
+    let claimed_2 = client.claim(&stream_2, &recipient, &1_000);
+    assert_eq!(claimed_2, 1_000);
+    assert_eq!(token_client.balance(&recipient), 1_000);
+
+    // Edge 3: Cancellation after partial claims by recipient
+    env.ledger().set_timestamp(100);
+    let stream_3 = client.create_stream(&sender, &recipient, &token, &1_000, &100, &200, &0, &None);
+    // Recipient claims 300 at t = 130
+    env.ledger().set_timestamp(130);
+    client.claim(&stream_3, &recipient, &300);
+    // Cancel at t = 160 (vested = 600, refund = 400)
+    env.ledger().set_timestamp(160);
+    client.cancel(&stream_3, &sender);
+    assert_eq!(token_client.balance(&sender), 1_400); // 1000 + 400 refund
+    assert_eq!(token_client.balance(&contract_id), 300); // 600 vested - 300 claimed = 300 remaining
+
+    // Recipient claims remaining 300
+    client.claim(&stream_3, &recipient, &300);
+    assert_eq!(token_client.balance(&recipient), 1_600);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
