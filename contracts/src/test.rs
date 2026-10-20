@@ -6136,3 +6136,57 @@ fn test_sender_authorization_edge_amounts_and_boundary_cancellation() {
     assert_eq!(token_client.balance(&recipient), 0);
     assert_eq!(token_client.balance(&contract_id), 0);
 }
+
+
+// =============================================================================
+// #1153 - Add Soroban regression for Recipient authorization
+// =============================================================================
+
+#[test]
+fn test_recipient_authorization_different_recipient_and_auth_changes() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient_a = Address::generate(&env);
+    let recipient_b = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+
+    // 1. Create stream from t=0 to t=100 designated for recipient_a
+    env.ledger().set_timestamp(0);
+    let stream_id = client.create_stream(&sender, &recipient_a, &token, &1_000, &0, &100, &0, &None);
+    assert_eq!(stream_id, 1);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // Advance to t=50 (500 claimable)
+    env.ledger().set_timestamp(50);
+
+    // 2. Different recipient (recipient_b) attempts to claim -> rejected
+    let events_before_fail = env.events().all().len();
+    let wrong_recipient_res = client.try_claim(&stream_id, &recipient_b, &200);
+    assert!(wrong_recipient_res.is_err());
+    assert_eq!(token_client.balance(&recipient_b), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+    assert_eq!(env.events().all().len(), events_before_fail);
+
+    // 3. Designated recipient calls without authorization -> rejected
+    env.mock_auths(&[]);
+    let unauth_res = client.try_claim(&stream_id, &recipient_a, &200);
+    assert!(unauth_res.is_err());
+    assert_eq!(token_client.balance(&recipient_a), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 4. Authorized designated recipient succeeds
+    env.mock_all_auths();
+    let claimed = client.claim(&stream_id, &recipient_a, &200);
+    assert_eq!(claimed, 200);
+    assert_eq!(token_client.balance(&recipient_a), 200);
+    assert_eq!(token_client.balance(&contract_id), 800);
+    assert_eq!(client.get_stream(&stream_id).claimed_amount, 200);
+}
