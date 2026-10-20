@@ -5301,3 +5301,80 @@ fn test_stream_id_allocation_edge_amounts_and_checked_arithmetic() {
     assert_eq!(id2, 2);
     assert_eq!(client.get_stream(&id2).total_amount, 999);
 }
+
+
+// =============================================================================
+// #1168 - Add Soroban regression for Asset contract handling
+// =============================================================================
+
+#[test]
+fn test_asset_contract_handling_two_assets_and_unsupported_asset() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient_a = Address::generate(&env);
+    let recipient_b = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let asset_a = create_token(&env, &token_admin);
+    let asset_b = create_token(&env, &token_admin);
+    let unsupported_asset = create_token(&env, &token_admin);
+
+    let client_a = token::Client::new(&env, &asset_a);
+    let client_b = token::Client::new(&env, &asset_b);
+    let client_unsupported = token::Client::new(&env, &unsupported_asset);
+    let token_mint_a = token::StellarAssetClient::new(&env, &asset_a);
+    let token_mint_b = token::StellarAssetClient::new(&env, &asset_b);
+    let token_mint_unsupported = token::StellarAssetClient::new(&env, &unsupported_asset);
+
+    // Mint balances
+    token_mint_a.mint(&sender, &10_000);
+    token_mint_b.mint(&sender, &50_000);
+    token_mint_unsupported.mint(&sender, &5_000);
+
+    // Initialize with asset_a and asset_b in allowlist
+    client.initialize(
+        &admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env, asset_a.clone(), asset_b.clone()],
+    );
+
+    // 1. Two assets: create concurrent streams with different amounts & parameters
+    let id_a = client.create_stream(&sender, &recipient_a, &asset_a, &1_000, &0, &100, &0, &None);
+    let id_b = client.create_stream(&sender, &recipient_b, &asset_b, &20_000, &0, &200, &0, &None);
+
+    assert_eq!(id_a, 1);
+    assert_eq!(id_b, 2);
+
+    let stream_a = client.get_stream(&id_a);
+    let stream_b = client.get_stream(&id_b);
+    assert_eq!(stream_a.token, asset_a);
+    assert_eq!(stream_a.total_amount, 1_000);
+    assert_eq!(stream_b.token, asset_b);
+    assert_eq!(stream_b.total_amount, 20_000);
+
+    // Verify balances escrowed accurately per asset contract
+    assert_eq!(client_a.balance(&sender), 9_000);
+    assert_eq!(client_a.balance(&contract_id), 1_000);
+    assert_eq!(client_b.balance(&sender), 30_000);
+    assert_eq!(client_b.balance(&contract_id), 20_000);
+
+    // 2. Unsupported asset rollback verification
+    let res = client.try_create_stream(
+        &sender,
+        &recipient_a,
+        &unsupported_asset,
+        &1_000,
+        &0,
+        &100,
+        &0,
+        &None,
+    );
+    assert!(res.is_err());
+    // Ensure unsupported token balance remained completely untouched (atomic rollback)
+    assert_eq!(client_unsupported.balance(&sender), 5_000);
+    assert_eq!(client_unsupported.balance(&contract_id), 0);
+}
