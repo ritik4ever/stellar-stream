@@ -5567,3 +5567,56 @@ fn test_asset_contract_handling_atomic_failure_rollback() {
     assert_eq!(client_allowed.balance(&sender), 3_000);
     assert_eq!(client_allowed.balance(&contract_id), 2_000);
 }
+
+
+// =============================================================================
+// #1164 - Specify edge behavior for Asset contract handling
+// =============================================================================
+
+#[test]
+fn test_asset_contract_handling_edge_precision_and_amounts() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient_micro = Address::generate(&env);
+    let recipient_macro = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let asset_micro = create_token(&env, &token_admin);
+    let asset_macro = create_token(&env, &token_admin);
+
+    let client_micro = token::Client::new(&env, &asset_micro);
+    let client_macro = token::Client::new(&env, &asset_macro);
+    let mint_micro = token::StellarAssetClient::new(&env, &asset_micro);
+    let mint_macro = token::StellarAssetClient::new(&env, &asset_macro);
+
+    mint_micro.mint(&sender, &10);
+    mint_macro.mint(&sender, &1_000_000_000);
+
+    client.initialize(
+        &admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env, asset_micro.clone(), asset_macro.clone()],
+    );
+
+    // 1. Boundary 1: Smallest integer unit (1) on asset_micro
+    let id_micro = client.create_stream(&sender, &recipient_micro, &asset_micro, &1, &0, &100, &0, &None);
+    assert_eq!(id_micro, 1);
+    assert_eq!(client.get_stream(&id_micro).total_amount, 1);
+    assert_eq!(client_micro.balance(&sender), 9);
+    assert_eq!(client_micro.balance(&contract_id), 1);
+
+    // 2. Boundary 2: Zero or negative amount rejected for both assets
+    assert!(client.try_create_stream(&sender, &recipient_micro, &asset_micro, &0, &0, &100, &0, &None).is_err());
+    assert!(client.try_create_stream(&sender, &recipient_macro, &asset_macro, &-100, &0, &100, &0, &None).is_err());
+
+    // 3. Boundary 3: Large integer scale on asset_macro with checked arithmetic
+    let id_macro = client.create_stream(&sender, &recipient_macro, &asset_macro, &500_000_000, &0, &500, &0, &None);
+    assert_eq!(id_macro, 2);
+    assert_eq!(client.get_stream(&id_macro).total_amount, 500_000_000);
+    assert_eq!(client_macro.balance(&sender), 500_000_000);
+    assert_eq!(client_macro.balance(&contract_id), 500_000_000);
+}
