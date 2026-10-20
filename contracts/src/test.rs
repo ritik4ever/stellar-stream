@@ -6296,3 +6296,47 @@ fn test_recipient_authorization_check_signer_authority() {
     assert_eq!(token_client.balance(&contract_id), 750);
     assert_eq!(client.get_stream(&stream_id).claimed_amount, 250);
 }
+
+
+// =============================================================================
+// #1150 - Make failure atomic in Recipient authorization
+// =============================================================================
+
+#[test]
+fn test_recipient_authorization_atomic_failure_rollback() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let mismatched_account = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+
+    // Create stream for 1000 tokens from t=0 to t=100
+    env.ledger().set_timestamp(0);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &0, &100, &0, &None);
+    assert_eq!(stream_id, 1);
+
+    // Advance to t=50 (500 claimable)
+    env.ledger().set_timestamp(50);
+
+    // 1. Account mismatch / wrong recipient fails atomically before token transfer
+    let fail_res = client.try_claim(&stream_id, &mismatched_account, &500);
+    assert!(fail_res.is_err());
+    assert_eq!(token_client.balance(&mismatched_account), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+    assert_eq!(client.get_stream(&stream_id).claimed_amount, 0);
+
+    // 2. Storage and balances remain consistent and recoverable
+    let valid_claimed = client.claim(&stream_id, &recipient, &500);
+    assert_eq!(valid_claimed, 500);
+    assert_eq!(token_client.balance(&recipient), 500);
+    assert_eq!(token_client.balance(&contract_id), 500);
+    assert_eq!(client.get_stream(&stream_id).claimed_amount, 500);
+}
