@@ -5236,3 +5236,34 @@ fn test_stream_id_allocation_unauthorized_sender_fails_before_id_allocation() {
     let id2 = client.create_stream(&sender, &recipient, &token, &500, &0, &100, &0, &None);
     assert_eq!(id2, 2);
 }
+
+
+// =============================================================================
+// #1170 — Make failure atomic in Stream ID allocation
+// =============================================================================
+
+#[test]
+fn test_stream_id_allocation_atomic_failure_rollback() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+
+    token_admin.mint(&sender, &400);
+
+    let res = client.try_create_stream(&sender, &recipient, &token, &1000, &0, &100, &0, &None);
+    assert!(res.is_err());
+    assert_eq!(token::Client::new(&env, &token).balance(&sender), 400);
+
+    token_admin.mint(&sender, &600);
+
+    let id = client.create_stream(&sender, &recipient, &token, &1000, &0, &100, &0, &None);
+    assert_eq!(id, 1);
+    assert_eq!(client.get_stream(&id).total_amount, 1000);
+    assert_eq!(token::Client::new(&env, &token).balance(&sender), 0);
+}
