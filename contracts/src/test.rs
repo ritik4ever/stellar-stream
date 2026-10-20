@@ -6654,3 +6654,72 @@ fn test_cancellation_refund_edge_behavior_boundaries() {
     assert_eq!(token_client.balance(&recipient), 1_600);
     assert_eq!(token_client.balance(&contract_id), 0);
 }
+
+// =============================================================================
+// #1143 - Add Soroban regression for Clawback integration
+// =============================================================================
+
+#[test]
+fn test_clawback_integration_regression() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let token_admin = Address::generate(&env);
+    let compliance_admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    let token_asset = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    // Initialize contract with compliance admin
+    client.initialize(
+        &compliance_admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env],
+    );
+
+    token_asset.mint(&sender, &1_000);
+
+    // 1. Create stream: 1000 tokens from t=0 to t=100
+    env.ledger().set_timestamp(0);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &0, &100, &0, &None);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 2. Advance to t=50 (vested = 500)
+    env.ledger().set_timestamp(50);
+
+    // 3. Recipient claims 200
+    let claimed = client.claim(&stream_id, &recipient, &200);
+    assert_eq!(claimed, 200);
+    assert_eq!(token_client.balance(&recipient), 200);
+    assert_eq!(token_client.balance(&contract_id), 800);
+
+    // 4. Admin claws back 500 (capped at remaining unclaimed vested = 300)
+    let clawed = client.clawback(&stream_id, &500, &compliance_admin);
+    assert_eq!(clawed, 300);
+    assert_eq!(token_client.balance(&compliance_admin), 300);
+    assert_eq!(token_client.balance(&contract_id), 500);
+
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.claimed_amount, 500); // 200 claimed + 300 clawed
+
+    // 5. Subsequent clawback at same timestamp yields 0
+    let second_claw = client.clawback(&stream_id, &100, &compliance_admin);
+    assert_eq!(second_claw, 0);
+
+    // 6. Advance to t=100 (total vested = 1000, remaining unclaimed = 500)
+    env.ledger().set_timestamp(100);
+    let final_claim = client.claim(&stream_id, &recipient, &250);
+    assert_eq!(final_claim, 250);
+    assert_eq!(token_client.balance(&recipient), 450);
+
+    let final_claw = client.clawback(&stream_id, &250, &compliance_admin);
+    assert_eq!(final_claw, 250);
+    assert_eq!(token_client.balance(&compliance_admin), 550);
+    assert_eq!(token_client.balance(&contract_id), 0);
+
+    let stream_final = client.get_stream(&stream_id);
+    assert_eq!(stream_final.claimed_amount, 1_000);
+}
