@@ -6844,3 +6844,71 @@ fn test_clawback_integration_checks_authority_and_guards_funds() {
     let stream = client.get_stream(&stream_id);
     assert_eq!(stream.claimed_amount, 300);
 }
+
+// =============================================================================
+// #1140 - Make failure atomic in Clawback integration
+// =============================================================================
+
+#[test]
+fn test_clawback_integration_failure_is_atomic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let token_admin = Address::generate(&env);
+    let compliance_admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let token = create_token(&env, &token_admin);
+    let token_asset = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    // 1. Calling clawback before initialization fails atomically
+    let uninit_res = client.try_clawback(&1, &100, &compliance_admin);
+    assert!(uninit_res.is_err());
+
+    // 2. Initialize contract
+    client.initialize(
+        &compliance_admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env],
+    );
+
+    token_asset.mint(&sender, &1_000);
+
+    // 3. Create stream: 1000 tokens from t=0 to t=100
+    env.ledger().set_timestamp(0);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1_000, &0, &100, &0, &None);
+
+    // 4. Advance to t=50 (vested = 500)
+    env.ledger().set_timestamp(50);
+
+    // 5. Zero / negative amount clawback fails atomically
+    let events_before_zero = env.events().all().len();
+    let zero_res = client.try_clawback(&stream_id, &0, &compliance_admin);
+    assert!(zero_res.is_err());
+    assert_eq!(env.events().all().len(), events_before_zero);
+    assert_eq!(token_client.balance(&compliance_admin), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+    assert_eq!(client.get_stream(&stream_id).claimed_amount, 0);
+
+    // 6. Non-existent stream ID fails atomically
+    let invalid_id_res = client.try_clawback(&999_999, &100, &compliance_admin);
+    assert!(invalid_id_res.is_err());
+    assert_eq!(token_client.balance(&compliance_admin), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 7. Unauthorized caller fails atomically
+    let unauth_res = client.try_clawback(&stream_id, &100, &stranger);
+    assert!(unauth_res.is_err());
+    assert_eq!(token_client.balance(&stranger), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+
+    // 8. Legitimate clawback executes atomically
+    let clawed = client.clawback(&stream_id, &300, &compliance_admin);
+    assert_eq!(clawed, 300);
+    assert_eq!(token_client.balance(&compliance_admin), 300);
+    assert_eq!(token_client.balance(&contract_id), 700);
+    assert_eq!(client.get_stream(&stream_id).claimed_amount, 300);
+}
