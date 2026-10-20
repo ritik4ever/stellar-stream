@@ -993,3 +993,28 @@ After you fix the cause, re-run `npm run compose:up`. To check the script itself
    - The server refuses to start (no partial rollout) if only one of the two variables is set, the
      previous secret is shorter than 32 characters or equals `JWT_SECRET`, or the cutover time is not a
      valid date. Errors name the variable only and never print secret values.
+
+---
+
+## Frontend CI and Browser Test Timeout (Issues #1192, #1193)
+
+### Symptoms
+- Pull requests modifying frontend components, styles, or tests fail during `Frontend CI` with `browser test timed out` or headless execution delay.
+- The outcome status is classified as `TRANSIENT_TIMEOUT`.
+
+### Triage & Classification
+- **SUCCESS:** All frontend build, lint, and unit test suites passed.
+- **TRANSIENT_TIMEOUT:** Runner resource contention or headless browser startup latency exceeded timeout. Action: Retry the GitHub Actions job.
+- **BLOCKED:** Deterministic TypeScript type check failure (`npx tsc --noEmit`) or linting error (`npm run lint`). Action: Fix source code locally before re-pushing.
+
+### Owner Action & Remediation
+1. **Local Smoke Verification:**
+   Run the local verification suite:
+   ```bash
+   node scripts/check-frontend-ci.mjs
+   node --test scripts/check-frontend-ci.test.mjs
+   ```
+2. **Component & Style Inspection:**
+   Verify that recently modified components in `frontend/src` have matching type definitions and unit tests.
+3. **Transient Delay Recovery:**
+   If the job failed solely due to runner timeout with zero type or syntax errors, trigger a re-run of failed jobs from the GitHub Actions UI.

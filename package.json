@@ -10,6 +10,8 @@
     "verify:dependencies": "node scripts/verify-dependencies.mjs",
     "verify:backend-ci": "node scripts/check-backend-ci.mjs",
     "verify:contract-ci": "node scripts/check-contract-ci.mjs",
+    "verify:frontend-ci": "node scripts/check-frontend-ci.mjs",
+    "test:frontend-ci": "node --test scripts/check-frontend-ci.test.mjs",
     "verify:openapi-responses": "node scripts/check-openapi-responses.mjs",
     "test:openapi-responses": "node --test scripts/check-openapi-responses.test.mjs",
     "compose:up": "bash scripts/compose-up.sh",
