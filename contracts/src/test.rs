@@ -5498,3 +5498,72 @@ fn test_asset_contract_handling_authority_check_across_assets() {
     assert_eq!(client_b.balance(&sender), 12_000);
     assert_eq!(client_b.balance(&contract_id), 8_000);
 }
+
+
+// =============================================================================
+// #1165 - Make failure atomic in Asset contract handling
+// =============================================================================
+
+#[test]
+fn test_asset_contract_handling_atomic_failure_rollback() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let allowed_token = create_token(&env, &token_admin);
+    let unsupported_token = create_token(&env, &token_admin);
+
+    let client_allowed = token::Client::new(&env, &allowed_token);
+    let client_unsupported = token::Client::new(&env, &unsupported_token);
+    let mint_allowed = token::StellarAssetClient::new(&env, &allowed_token);
+    let mint_unsupported = token::StellarAssetClient::new(&env, &unsupported_token);
+
+    mint_allowed.mint(&sender, &5_000);
+    mint_unsupported.mint(&sender, &5_000);
+
+    // Initialize allowlist with allowed_token
+    client.initialize(
+        &admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env, allowed_token.clone()],
+    );
+
+    // 1. Attempt to create stream with unsupported asset must fail atomically
+    let fail_res = client.try_create_stream(
+        &sender,
+        &recipient,
+        &unsupported_token,
+        &2_000,
+        &0,
+        &100,
+        &0,
+        &None,
+    );
+    assert!(fail_res.is_err());
+
+    // 2. State & balances remain strictly unmutated
+    assert_eq!(client_unsupported.balance(&sender), 5_000);
+    assert_eq!(client_unsupported.balance(&contract_id), 0);
+    assert_eq!(client_allowed.balance(&sender), 5_000);
+    assert_eq!(client_allowed.balance(&contract_id), 0);
+
+    // 3. Next valid call receives clean stream ID 1
+    let id1 = client.create_stream(
+        &sender,
+        &recipient,
+        &allowed_token,
+        &2_000,
+        &0,
+        &100,
+        &0,
+        &None,
+    );
+    assert_eq!(id1, 1);
+    assert_eq!(client_allowed.balance(&sender), 3_000);
+    assert_eq!(client_allowed.balance(&contract_id), 2_000);
+}
