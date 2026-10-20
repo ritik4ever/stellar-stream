@@ -5442,3 +5442,59 @@ fn test_asset_contract_handling_events_aligned_with_state() {
     assert_eq!(stream_b.token, asset_b);
     assert_eq!(stream_b.total_amount, 12_000);
 }
+
+
+// =============================================================================
+// #1166 - Check authority in Asset contract handling
+// =============================================================================
+
+#[test]
+fn test_asset_contract_handling_authority_check_across_assets() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient_a = Address::generate(&env);
+    let recipient_b = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let asset_a = create_token(&env, &token_admin);
+    let asset_b = create_token(&env, &token_admin);
+
+    let client_a = token::Client::new(&env, &asset_a);
+    let client_b = token::Client::new(&env, &asset_b);
+    let token_mint_a = token::StellarAssetClient::new(&env, &asset_a);
+    let token_mint_b = token::StellarAssetClient::new(&env, &asset_b);
+
+    token_mint_a.mint(&sender, &10_000);
+    token_mint_b.mint(&sender, &20_000);
+
+    client.initialize(
+        &admin,
+        &Address::generate(&env),
+        &soroban_sdk::vec![&env, asset_a.clone(), asset_b.clone()],
+    );
+
+    // 1. Authorized call succeeds for asset A
+    let id_a = client.create_stream(&sender, &recipient_a, &asset_a, &4_000, &0, &100, &0, &None);
+    assert_eq!(id_a, 1);
+    assert_eq!(client_a.balance(&sender), 6_000);
+
+    // 2. Unauthorized call for asset B without sender auth fails
+    env.mock_auths(&[]);
+    let unauth_res = client.try_create_stream(&sender, &recipient_b, &asset_b, &8_000, &0, &100, &0, &None);
+    assert!(unauth_res.is_err());
+
+    // 3. Asset B balance and contract state remain completely unchanged
+    assert_eq!(client_b.balance(&sender), 20_000);
+    assert_eq!(client_b.balance(&contract_id), 0);
+
+    // 4. Authorized call succeeds when auth is provided
+    env.mock_all_auths();
+    let id_b = client.create_stream(&sender, &recipient_b, &asset_b, &8_000, &0, &100, &0, &None);
+    assert_eq!(id_b, 2);
+    assert_eq!(client_b.balance(&sender), 12_000);
+    assert_eq!(client_b.balance(&contract_id), 8_000);
+}
