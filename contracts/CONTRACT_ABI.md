@@ -136,6 +136,13 @@ Within a single Soroban transaction the contract emits events in the following
 fixed order.  The indexer relies on this ordering to reconstruct the committed
 action **exactly once** without double-counting.
 
+### `create_stream()` / `create_split_stream()` (Stream creation escrow)
+
+1. **Token transfer / Escrow**: Tokens are transferred from `sender` to `contract_address` (`total_amount`). The underlying token contract emits its transfer event first.
+2. **State persistence**: `DataKey::NextStreamId` is incremented and `DataKey::Stream(next_id)` is committed to persistent storage.
+3. `StreamCreated`: Emitted **after** escrowed token transfer and storage persistence succeed (one per child stream for split streams). The indexer reconstructs the initial stream state (`sender`, `recipient`, `token`, `total_amount`, `start_time`, `end_time`, `cliff_seconds`, `vesting_type`, `min_claim_interval_seconds`, `metadata`) **exactly once**.
+4. **Failure atomicity**: If the sender balance is insufficient, authorization fails, or any validation fails before storage, the invocation reverts atomically. Zero contract events are emitted, no stream ID is consumed, and escrowed balances remain unchanged.
+
 ### `claim()` call
 
 1. `StreamClaimed` — always emitted after the token transfer and accounting

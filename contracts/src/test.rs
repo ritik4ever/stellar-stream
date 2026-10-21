@@ -1,3 +1,4 @@
+#![allow(clippy::bool_assert_comparison)]
 extern crate std;
 use super::*;
 use crate::errors::ContractError;
