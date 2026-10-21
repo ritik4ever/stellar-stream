@@ -20,8 +20,26 @@ import { resetStatsCache } from "./stats";
 import { resetStreamMetricsCache } from "./streamMetrics";
 import { logger } from "../logger";
 import { retryWithBackoff, SorobanSubmitError } from "../utils/sorobanRetry";
+import {
+  evaluateStreamProgressClockSkew,
+  classifyStreamProgressOutcome,
+  getLastStreamProgressSignal,
+  resetStreamProgressOutcome,
+  STREAM_PROGRESS_OUTCOME_CODES,
+  type StreamProgressOutcome,
+  type StreamProgressOutcomeSignal,
+} from "./streamProgressOutcome";
 
-export { SorobanSubmitError };
+export {
+  SorobanSubmitError,
+  evaluateStreamProgressClockSkew,
+  classifyStreamProgressOutcome,
+  getLastStreamProgressSignal,
+  resetStreamProgressOutcome,
+  STREAM_PROGRESS_OUTCOME_CODES,
+  type StreamProgressOutcome,
+  type StreamProgressOutcomeSignal,
+};
 
 export type StreamStatus = "scheduled" | "active" | "paused" | "completed" | "canceled";
 
@@ -448,8 +466,15 @@ export function calculateProgress(
   stream: StreamRecord,
   at = nowInSeconds(),
 ): StreamProgress {
+  const startPerf = Date.now();
+  evaluateStreamProgressClockSkew(stream, at, startPerf);
+
   const effectiveAt =
-    stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
+    stream.canceledAt !== undefined
+      ? stream.canceledAt
+      : stream.pausedAt !== undefined
+      ? Math.min(at, stream.pausedAt)
+      : at;
 
   const elapsed = Math.max(0, Math.max(0, effectiveAt - stream.startAt) - stream.pausedDuration);
   const ratio = stream.durationSeconds <= 0 ? 1 : Math.min(1, elapsed / stream.durationSeconds);

@@ -91,3 +91,22 @@ export const secretsRotationOutcome = new Gauge({
   help: "Secrets rotation (JWT_SECRET / SERVER_SIGNING_KEY) rollout outcome: 0=success, 1=transient_delay, 2=blocked",
   registers: [register],
 });
+
+export const streamProgressOutcome = new Gauge({
+  name: "stream_progress_outcome",
+  help: "Stream progress calculation outcome: 0=success, 1=transient_delay, 2=blocked",
+  registers: [register],
+});
+
+export const streamProgressClockSkewSeconds = new Gauge({
+  name: "stream_progress_clock_skew_seconds",
+  help: "System clock backwards skew delta in seconds during stream progress math",
+  registers: [register],
+});
+
+export const streamProgressClockSkewTotal = new Counter({
+  name: "stream_progress_clock_skew_total",
+  help: "Total number of system clock backwards events observed during stream progress math",
+  registers: [register],
+});
+

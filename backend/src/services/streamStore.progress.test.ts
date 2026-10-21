@@ -1,5 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
-import { calculateProgress, StreamRecord } from "./streamStore";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  calculateProgress,
+  getLastStreamProgressSignal,
+  resetStreamProgressOutcome,
+  STREAM_PROGRESS_OUTCOME_CODES,
+  StreamRecord,
+} from "./streamStore";
+import { register } from "./metrics";
+import { logger } from "../logger";
 
 // Mock the nowInSeconds function to control time in tests
 vi.mock("./streamStore", async (importOriginal) => {
@@ -11,6 +19,9 @@ vi.mock("./streamStore", async (importOriginal) => {
 });
 
 describe("calculateProgress", () => {
+  beforeEach(() => {
+    resetStreamProgressOutcome();
+  });
   const mockSender = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
   const mockRecipient = "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
   
@@ -366,6 +377,229 @@ describe("calculateProgress", () => {
       expect(progress.status).toBe("active");
       expect(progress.vestedAmount).toBeGreaterThan(0);
       expect(progress.percentComplete).toBeGreaterThan(0);
+    });
+  });
+
+  describe("Observability signals and clock regression handling (SSB-2026-129)", () => {
+    it("distinguishes normal empty case (before start) from clock failure", () => {
+      const stream = createBaseStream({
+        id: "stream-sched-1",
+        createdAt: 999000,
+        startAt: 1000000,
+        durationSeconds: 3600,
+      });
+
+      // Forward clock, but before stream start: normal empty case
+      const progress = calculateProgress(stream, 999500);
+
+      expect(progress.status).toBe("scheduled");
+      expect(progress.vestedAmount).toBe(0);
+      expect(progress.percentComplete).toBe(0);
+
+      const signal = getLastStreamProgressSignal();
+      expect(signal).not.toBeNull();
+      expect(signal!.outcome).toBe("success");
+      expect(signal!.outcomeCode).toBe(STREAM_PROGRESS_OUTCOME_CODES.success);
+      expect(signal!.isNormalEmpty).toBe(true);
+      expect(signal!.clockSkewSeconds).toBe(0);
+      expect(signal!.streamId).toBe("stream-sched-1");
+    });
+
+    it("evaluates progress correctly at exact start timestamp", () => {
+      const stream = createBaseStream({
+        id: "stream-start-1",
+        createdAt: 999000,
+        startAt: 1000000,
+        durationSeconds: 3600,
+      });
+
+      const progress = calculateProgress(stream, 1000000);
+
+      expect(progress.status).toBe("active");
+      expect(progress.vestedAmount).toBe(0);
+      expect(progress.percentComplete).toBe(0);
+
+      const signal = getLastStreamProgressSignal();
+      expect(signal).not.toBeNull();
+      expect(signal!.outcome).toBe("success");
+      expect(signal!.isNormalEmpty).toBe(false);
+      expect(signal!.clockSkewSeconds).toBe(0);
+    });
+
+    it("evaluates progress correctly at end timestamp", () => {
+      const stream = createBaseStream({
+        id: "stream-end-1",
+        createdAt: 999000,
+        startAt: 1000000,
+        durationSeconds: 3600,
+      });
+
+      const progress = calculateProgress(stream, 1003600);
+
+      expect(progress.status).toBe("completed");
+      expect(progress.vestedAmount).toBe(1000);
+      expect(progress.percentComplete).toBe(100);
+
+      const signal = getLastStreamProgressSignal();
+      expect(signal).not.toBeNull();
+      expect(signal!.outcome).toBe("success");
+      expect(signal!.isNormalEmpty).toBe(false);
+      expect(signal!.clockSkewSeconds).toBe(0);
+    });
+
+    it("emits blocked outcome signal when clock moves backwards behind stream creation time", () => {
+      const warnSpy = vi.spyOn(logger, "warn");
+      const stream = createBaseStream({
+        id: "stream-backwards-create",
+        createdAt: 1000000,
+        startAt: 1005000,
+        durationSeconds: 3600,
+      });
+
+      // System clock evaluated at 999000 (1000s before stream was created)
+      const progress = calculateProgress(stream, 999000);
+
+      // Preserves safe math (vested amount 0, does not crash)
+      expect(progress.vestedAmount).toBe(0);
+      expect(progress.elapsedSeconds).toBe(0);
+
+      const signal = getLastStreamProgressSignal();
+      expect(signal).not.toBeNull();
+      expect(signal!.outcome).toBe("blocked");
+      expect(signal!.outcomeCode).toBe(STREAM_PROGRESS_OUTCOME_CODES.blocked);
+      // Operators can tell this is NOT a normal empty case!
+      expect(signal!.isNormalEmpty).toBe(false);
+      expect(signal!.clockSkewSeconds).toBe(1000);
+      expect(signal!.streamId).toBe("stream-backwards-create");
+      expect(signal!.detail).toContain("System clock moved backwards");
+      expect(signal!.detail).toContain("prior to stream creation");
+
+      // Verify structured warning was logged
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "stream_progress_clock_skew",
+          streamId: "stream-backwards-create",
+          outcome: "blocked",
+          outcomeCode: 2,
+          clockSkewSeconds: 1000,
+          isNormalEmpty: false,
+        }),
+        expect.stringContaining("System clock moved backwards"),
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    it("emits transient_delay signal for small backwards clock step from previous calculation", () => {
+      const warnSpy = vi.spyOn(logger, "warn");
+      const stream = createBaseStream({
+        id: "stream-small-skew",
+        createdAt: 1000000,
+        startAt: 1000000,
+        durationSeconds: 3600,
+      });
+
+      // First observation at 1001000
+      calculateProgress(stream, 1001000);
+      let signal = getLastStreamProgressSignal();
+      expect(signal!.outcome).toBe("success");
+
+      // Second observation at 1000997 (clock moved backwards by 3s, <= 5s transient threshold)
+      const progress = calculateProgress(stream, 1000997);
+      expect(progress.status).toBe("active");
+
+      signal = getLastStreamProgressSignal();
+      expect(signal!.outcome).toBe("transient_delay");
+      expect(signal!.outcomeCode).toBe(STREAM_PROGRESS_OUTCOME_CODES.transient_delay);
+      expect(signal!.isNormalEmpty).toBe(false);
+      expect(signal!.clockSkewSeconds).toBe(3);
+      expect(signal!.detail).toContain("transient skew within 5s tolerance");
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "stream_progress_clock_skew",
+          streamId: "stream-small-skew",
+          outcome: "transient_delay",
+          outcomeCode: 1,
+          clockSkewSeconds: 3,
+        }),
+        expect.any(String),
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    it("emits blocked signal for large backwards clock step from previous calculation", () => {
+      const stream = createBaseStream({
+        id: "stream-large-skew",
+        createdAt: 1000000,
+        startAt: 1000000,
+        durationSeconds: 3600,
+      });
+
+      // First observation at 1001000
+      calculateProgress(stream, 1001000);
+
+      // Second observation at 1000900 (clock jumped backwards by 100s, > 5s)
+      calculateProgress(stream, 1000900);
+
+      const signal = getLastStreamProgressSignal();
+      expect(signal!.outcome).toBe("blocked");
+      expect(signal!.outcomeCode).toBe(STREAM_PROGRESS_OUTCOME_CODES.blocked);
+      expect(signal!.isNormalEmpty).toBe(false);
+      expect(signal!.clockSkewSeconds).toBe(100);
+      expect(signal!.detail).toContain("operator action required to inspect clock synchronization");
+    });
+
+    it("ensures signals and logs do not leak wallet secrets or credentials", () => {
+      const warnSpy = vi.spyOn(logger, "warn");
+      const fakeSecretKey = "SBABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF12";
+
+      const stream = createBaseStream({
+        id: "stream-secret-safety",
+        createdAt: 1000000,
+        startAt: 1005000,
+      });
+
+      // Force clock backwards
+      calculateProgress(stream, 999000);
+
+      const signal = getLastStreamProgressSignal();
+      const signalJson = JSON.stringify(signal);
+      expect(signalJson).not.toContain(fakeSecretKey);
+      expect(signalJson).not.toContain("seed");
+      expect(signalJson).not.toContain("privateKey");
+
+      for (const call of warnSpy.mock.calls) {
+        const loggedObj = call[0];
+        const loggedStr = JSON.stringify(loggedObj);
+        expect(loggedStr).not.toContain(fakeSecretKey);
+        expect(loggedStr).not.toContain("secretKey");
+        expect(loggedStr).not.toContain("privateKey");
+      }
+
+      warnSpy.mockRestore();
+    });
+
+    it("updates Prometheus metrics correctly on clock regression and recovery", async () => {
+      const stream = createBaseStream({
+        id: "stream-metrics-test",
+        createdAt: 1000000,
+        startAt: 1000000,
+        durationSeconds: 3600,
+      });
+
+      // Normal progress
+      calculateProgress(stream, 1001000);
+      let metrics = await register.metrics();
+      expect(metrics).toContain("stream_progress_outcome 0");
+
+      // Clock backwards step
+      calculateProgress(stream, 1000900);
+      metrics = await register.metrics();
+      expect(metrics).toContain("stream_progress_outcome 2");
+      expect(metrics).toContain("stream_progress_clock_skew_seconds 100");
+      expect(metrics).toContain("stream_progress_clock_skew_total");
     });
   });
 });
