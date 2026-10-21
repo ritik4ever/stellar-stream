@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import request from "supertest";
 import { Keypair } from "@stellar/stellar-sdk";
+import { logger } from "./logger";
 
 const SENDER = Keypair.random().publicKey();
 const VALID_RECIPIENT = Keypair.random().publicKey();
@@ -100,6 +101,7 @@ const sampleProgress = {
 
 describe("Recipient streams endpoint recovery & account validation (#1055)", () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     vi.clearAllMocks();
     streamStoreMocks.calculateProgress.mockReturnValue(sampleProgress);
   });
@@ -122,16 +124,28 @@ describe("Recipient streams endpoint recovery & account validation (#1055)", () 
 
     streamStoreMocks.listStreamsByRecipient.mockReturnValue([]);
 
-    const emptyRes1 = await request(app).get(
-      `/api/recipients/${EMPTY_VALID_RECIPIENT}/streams`,
-    );
+    const infoSpy = vi.spyOn(logger, "info");
+    const emptyRes1 = await request(app)
+      .get(`/api/recipients/${EMPTY_VALID_RECIPIENT}/streams`)
+      .set("X-Request-ID", "recipient-empty-query");
     expect(emptyRes1.status).toBe(200);
+    expect(emptyRes1.headers["x-request-id"]).toBe("recipient-empty-query");
     expect(emptyRes1.body).toEqual({
       data: [],
       total: 0,
       page: 1,
       limit: 0,
     });
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "recipient_stream_query",
+        outcome: "empty",
+        durationMs: expect.any(Number),
+        attempts: 1,
+        resultCount: 0,
+      }),
+      "recipient streams query completed",
+    );
 
     const emptyRes2 = await request(app).get(
       `/api/streams/recipient/${EMPTY_VALID_RECIPIENT}`,
@@ -155,6 +169,7 @@ describe("Recipient streams endpoint recovery & account validation (#1055)", () 
         throw timeoutErr;
       })
       .mockReturnValueOnce([sampleStream]);
+    const infoSpy = vi.spyOn(logger, "info");
 
     const res = await request(app).get(
       `/api/recipients/${VALID_RECIPIENT}/streams`,
@@ -164,6 +179,15 @@ describe("Recipient streams endpoint recovery & account validation (#1055)", () 
     expect(res.body.total).toBe(1);
     expect(res.body.data[0].id).toBe("1");
     expect(streamStoreMocks.listStreamsByRecipient).toHaveBeenCalledTimes(2);
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "recipient_stream_query",
+        outcome: "recovered_after_retry",
+        attempts: 2,
+        resultCount: 1,
+      }),
+      "recipient streams query completed",
+    );
     expect(streamStoreMocks.createStream).not.toHaveBeenCalled();
     expect(eventHistoryMocks.recordEvent).not.toHaveBeenCalled();
   });
@@ -176,6 +200,7 @@ describe("Recipient streams endpoint recovery & account validation (#1055)", () 
     streamStoreMocks.listStreamsByRecipient.mockImplementation(() => {
       throw timeoutErr;
     });
+    const errorSpy = vi.spyOn(logger, "error");
 
     const res1 = await request(app).get(
       `/api/recipients/${VALID_RECIPIENT}/streams`,
@@ -184,6 +209,20 @@ describe("Recipient streams endpoint recovery & account validation (#1055)", () 
     expect(res1.body.code).toBe("DATABASE_TIMEOUT");
     expect(res1.body.error).toContain("Database query timed out");
     expect(streamStoreMocks.listStreamsByRecipient).toHaveBeenCalledTimes(2);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "recipient_stream_query",
+        outcome: "timeout",
+        durationMs: expect.any(Number),
+        attempts: 2,
+        errorCode: "DATABASE_TIMEOUT",
+      }),
+      "recipient streams query failed",
+    );
+    expect(errorSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: VALID_RECIPIENT }),
+      expect.anything(),
+    );
 
     streamStoreMocks.listStreamsByRecipient.mockClear();
 

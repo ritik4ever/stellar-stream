@@ -1019,13 +1019,48 @@ function queryRecipientStreamsWithRetry(
   sort: "totalAmount" | "startAt" | "createdAt" | "durationSeconds",
   order: "asc" | "desc",
 ): StreamRecord[] {
+  const startedAt = Date.now();
+  let attempts = 0;
   try {
-    return listStreamsByRecipient(recipientAddress, sort, order);
-  } catch (error) {
-    if (isDatabaseTimeoutError(error)) {
+    attempts++;
+    let streams: StreamRecord[];
+    try {
+      streams = listStreamsByRecipient(recipientAddress, sort, order);
+    } catch (error) {
+      if (!isDatabaseTimeoutError(error)) throw error;
       // Read-only retry on transient database timeout/lock: never duplicates state or events
-      return listStreamsByRecipient(recipientAddress, sort, order);
+      attempts++;
+      streams = listStreamsByRecipient(recipientAddress, sort, order);
     }
+
+    logger.info(
+      {
+        operation: "recipient_stream_query",
+        outcome:
+          attempts > 1
+            ? "recovered_after_retry"
+            : streams.length === 0
+              ? "empty"
+              : "success",
+        durationMs: Date.now() - startedAt,
+        attempts,
+        resultCount: streams.length,
+      },
+      "recipient streams query completed",
+    );
+    return streams;
+  } catch (error) {
+    const timedOut = isDatabaseTimeoutError(error);
+    logger.error(
+      {
+        operation: "recipient_stream_query",
+        outcome: timedOut ? "timeout" : "error",
+        durationMs: Date.now() - startedAt,
+        attempts,
+        errorCode: timedOut ? "DATABASE_TIMEOUT" : "RECIPIENT_QUERY_FAILED",
+      },
+      "recipient streams query failed",
+    );
     throw error;
   }
 }
@@ -1033,10 +1068,8 @@ function queryRecipientStreamsWithRetry(
 function sendRecipientStreamsQueryError(
   req: Request,
   res: Response,
-  accountId: string,
   error: unknown,
 ) {
-  logger.error({ err: error, accountId }, "failed to query recipient streams");
   if (isDatabaseTimeoutError(error)) {
     const normalized = normalizeUnknownApiError(
       error,
@@ -1093,7 +1126,7 @@ app.get(
           ),
       );
     } catch (error: unknown) {
-      sendRecipientStreamsQueryError(req, res, address, error);
+      sendRecipientStreamsQueryError(req, res, error);
       return;
     }
 
@@ -1266,7 +1299,7 @@ app.get(
         query.order ?? "desc",
       );
     } catch (error: unknown) {
-      sendRecipientStreamsQueryError(req, res, accountId, error);
+      sendRecipientStreamsQueryError(req, res, error);
       return;
     }
 

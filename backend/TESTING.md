@@ -63,8 +63,9 @@ npm test -- --coverage
 
 #### GET /api/recipients/:accountId/streams
 - ✅ Get streams for recipient
--  Empty array for recipient with no streams
-- ✅ 400 for invalid account ID
+- ✅ Empty array for a valid recipient with no streams; query logs use `outcome: "empty"`
+- ✅ 400 `VALIDATION_ERROR` for an invalid account checksum, without querying the recipient store
+- ✅ Database timeouts retry once; query logs distinguish recovery from persistent timeout and include duration, attempts, and result count without the account address
 
 #### GET /api/senders/:accountId/streams
 - ✅ Get streams for sender
