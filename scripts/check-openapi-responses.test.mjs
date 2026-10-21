@@ -1,8 +1,18 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { validateOpenApiResponses, redactSecrets } from "./check-openapi-responses.mjs";
+import { validateOpenApiResponses, redactSecrets, hasStatusResponse } from "./check-openapi-responses.mjs";
 
 describe("OpenAPI Responses and Error Model Verification Suite (Issues #1119-#1123)", () => {
+  for (const statusCode of [400, 404, 409]) {
+    for (const quote of ['"', "'", ""]) {
+      it(`recognizes response ${statusCode} with ${quote || "no"} quotes`, () => {
+        const source = `responses: { ${quote}${statusCode}${quote} : {} }`;
+        assert.equal(hasStatusResponse(source, statusCode), true);
+        assert.equal(hasStatusResponse(source.replace(String(statusCode), `1${statusCode}`), statusCode), false);
+      });
+    }
+  }
+
   it("redacts secrets properly without leaking private keys", () => {
     const raw = "password: mySecretToken123 with key: SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     const cleaned = redactSecrets(raw);

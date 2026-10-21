@@ -40,6 +40,11 @@ export function redactSecrets(input) {
   return sanitized;
 }
 
+export function hasStatusResponse(source, statusCode) {
+  // Both quote styles and numeric keys are valid in the TypeScript spec.
+  return new RegExp(`(?:"${statusCode}"|'${statusCode}'|\\b${statusCode})\\s*:`).test(source);
+}
+
 export function validateOpenApiResponses(baseDir = root) {
   const results = [];
   function check(name, ok, detail = "") {
@@ -67,21 +72,21 @@ export function validateOpenApiResponses(baseDir = root) {
   // Check 1: 400 Bad Request error model and responses
   check(
     "OpenAPI spec documents 400 Bad Request error responses",
-    swaggerContent.includes('"400":') || swaggerContent.includes("400:"),
+    hasStatusResponse(swaggerContent, 400),
     "400 status code present in path responses"
   );
 
   // Check 2: 404 Not Found error model and responses
   check(
     "OpenAPI spec documents 404 Not Found error responses",
-    swaggerContent.includes('"404":') || swaggerContent.includes("404:"),
+    hasStatusResponse(swaggerContent, 404),
     "404 status code present in path responses"
   );
 
   // Check 3: 409 Conflict error model and responses
   check(
     "OpenAPI spec documents 409 Conflict error responses",
-    swaggerContent.includes('"409":') || swaggerContent.includes("409:"),
+    hasStatusResponse(swaggerContent, 409),
     "409 status code present in path responses"
   );
 

@@ -320,7 +320,17 @@ Response: { "data": OpenIssue[] }
 GET /api/streams/:id/history
 Purpose: Fetch event history timeline for a specific stream
 
-Response: { "data": StreamEvent[] } (ordered by timestamp ascending)
+Response: 200 with { "data": StreamEvent[], "total": number, "page": number, "pageSize": number, "hasMore": boolean }
+
+Query parameters: `page` (default 1), `pageSize` (default 20, maximum 100), and `order` (default `desc`; use `asc` for oldest first). Existing pagination normalization is preserved: integer prefixes are parsed, missing/zero/unparseable values use defaults, negative values clamp to 1, and page sizes above 100 clamp to 100. Only the exact value `order=asc` selects ascending order; other values use descending order.
+
+Events are sorted by timestamp first. For equal timestamps, ascending order puts `created` events before other event types, even when creation was backfilled after a claim. Insertion ID breaks remaining ties. Descending order reverses all three keys. Thus same-second creation and claim succeed with 200: `created, claimed` in ascending order and `claimed, created` by default. This tie rule never moves an event ahead of an earlier timestamp. Sorting occurs before pagination, so successive pages of unchanged history preserve the same order without duplicates or omissions.
+
+An existing stream with no events, or a page beyond its history, returns 200 with an empty `data` array and `hasMore: false`. Errors: 400 `VALIDATION_ERROR` for an invalid stream ID; 404 `NOT_FOUND` for a missing stream.
+
+The event count and event page are read independently, each with at most one read-only retry. A transient failure that recovers returns 200. A persistent ordinary read error returns 500 with the standard error body (`error`, `statusCode`, `code`, `requestId`, `correlationId`), without a partial history payload. The default code is `HISTORY_READ_FAILED`; a supplied error code/status is retained by the existing error normalizer (for example, `SQLITE_BUSY` with status 500). Reading history never writes events or changes stream state.
+
+For `POST /api/streams/:id/claim`, a history read failing after the claim commits does not undo or repeat the claim: it still returns 200 with the claim result and `history: []` after one failed retry. A duplicate claim remains 409 `ALREADY_CLAIMED`; clients can fetch history separately after recovery.
 
 Event types: created, claimed, canceled, start_time_updated
 

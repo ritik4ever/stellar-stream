@@ -1,17 +1,17 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import Database from "better-sqlite3";
-import { recordEventWithDb, getStreamHistory } from "./eventHistory";
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { recordEventWithDb, getStreamHistory } from './eventHistory';
 
 const dbMocks = vi.hoisted(() => ({
   getDb: vi.fn(),
   initDb: vi.fn(),
 }));
 
-vi.mock("./db", () => dbMocks);
+vi.mock('./db', () => dbMocks);
 
 function createTestDb() {
-  const db = new Database(":memory:");
-  db.pragma("foreign_keys = OFF");
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = OFF');
   db.exec(`
     CREATE TABLE stream_events (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +30,7 @@ function createTestDb() {
   return db;
 }
 
-describe("eventHistory", () => {
+describe('eventHistory', () => {
   let db: ReturnType<typeof createTestDb>;
 
   beforeEach(() => {
@@ -43,144 +43,225 @@ describe("eventHistory", () => {
     vi.clearAllMocks();
   });
 
-  describe("recordEventWithDb basic operations", () => {
-    it("inserts an event normally", () => {
-      recordEventWithDb(db, "1", "created", 1000, "GSENDER", 100, undefined, 42);
-      const rows = db.prepare("SELECT * FROM stream_events").all();
+  describe('recordEventWithDb basic operations', () => {
+    it('inserts an event normally', () => {
+      recordEventWithDb(
+        db,
+        '1',
+        'created',
+        1000,
+        'GSENDER',
+        100,
+        undefined,
+        42,
+      );
+      const rows = db.prepare('SELECT * FROM stream_events').all();
       expect(rows).toHaveLength(1);
     });
 
-    it("silently ignores a duplicate (stream_id, event_type, ledger_sequence)", () => {
-      recordEventWithDb(db, "1", "created", 1000, "GSENDER", 100, undefined, 42);
-      recordEventWithDb(db, "1", "created", 1000, "GSENDER", 100, undefined, 42);
+    it('silently ignores a duplicate (stream_id, event_type, ledger_sequence)', () => {
+      recordEventWithDb(
+        db,
+        '1',
+        'created',
+        1000,
+        'GSENDER',
+        100,
+        undefined,
+        42,
+      );
+      recordEventWithDb(
+        db,
+        '1',
+        'created',
+        1000,
+        'GSENDER',
+        100,
+        undefined,
+        42,
+      );
 
-      const rows = db.prepare("SELECT * FROM stream_events").all();
+      const rows = db.prepare('SELECT * FROM stream_events').all();
       expect(rows).toHaveLength(1);
     });
 
-    it("allows same event_type on different ledger sequences", () => {
-      recordEventWithDb(db, "1", "claimed", 1000, "GRECIPIENT", 50, undefined, 10);
-      recordEventWithDb(db, "1", "claimed", 2000, "GRECIPIENT", 50, undefined, 20);
+    it('allows same event_type on different ledger sequences', () => {
+      recordEventWithDb(
+        db,
+        '1',
+        'claimed',
+        1000,
+        'GRECIPIENT',
+        50,
+        undefined,
+        10,
+      );
+      recordEventWithDb(
+        db,
+        '1',
+        'claimed',
+        2000,
+        'GRECIPIENT',
+        50,
+        undefined,
+        20,
+      );
 
-      const rows = db.prepare("SELECT * FROM stream_events").all();
+      const rows = db.prepare('SELECT * FROM stream_events').all();
       expect(rows).toHaveLength(2);
     });
 
-    it("allows events without ledger_sequence to coexist (reconciliation path)", () => {
-      recordEventWithDb(db, "1", "created", 1000, "GSENDER", 100);
-      recordEventWithDb(db, "1", "created", 1000, "GSENDER", 100);
+    it('allows events without ledger_sequence to coexist (reconciliation path)', () => {
+      recordEventWithDb(db, '1', 'created', 1000, 'GSENDER', 100);
+      recordEventWithDb(db, '1', 'created', 1000, 'GSENDER', 100);
 
       // NULL is not equal to NULL in SQLite unique index, so both rows are inserted
-      const rows = db.prepare("SELECT * FROM stream_events").all();
+      const rows = db.prepare('SELECT * FROM stream_events').all();
       expect(rows).toHaveLength(2);
     });
   });
 
-  describe("indexer restart deduplication", () => {
-    it("produces no duplicate rows after reprocessing the same ledger range", () => {
+  describe('indexer restart deduplication', () => {
+    it('produces no duplicate rows after reprocessing the same ledger range', () => {
       // Simulate first indexer run: ledger 5
-      recordEventWithDb(db, "42", "created", 1000, "GSENDER", 500, undefined, 5);
-      recordEventWithDb(db, "42", "claimed", 2000, "GRECIPIENT", 100, undefined, 6);
+      recordEventWithDb(
+        db,
+        '42',
+        'created',
+        1000,
+        'GSENDER',
+        500,
+        undefined,
+        5,
+      );
+      recordEventWithDb(
+        db,
+        '42',
+        'claimed',
+        2000,
+        'GRECIPIENT',
+        100,
+        undefined,
+        6,
+      );
 
       // Simulate restart — same ledger range replayed
-      recordEventWithDb(db, "42", "created", 1000, "GSENDER", 500, undefined, 5);
-      recordEventWithDb(db, "42", "claimed", 2000, "GRECIPIENT", 100, undefined, 6);
+      recordEventWithDb(
+        db,
+        '42',
+        'created',
+        1000,
+        'GSENDER',
+        500,
+        undefined,
+        5,
+      );
+      recordEventWithDb(
+        db,
+        '42',
+        'claimed',
+        2000,
+        'GRECIPIENT',
+        100,
+        undefined,
+        6,
+      );
 
-      const rows = db.prepare("SELECT * FROM stream_events WHERE stream_id = '42'").all();
+      const rows = db
+        .prepare("SELECT * FROM stream_events WHERE stream_id = '42'")
+        .all();
       expect(rows).toHaveLength(2);
     });
   });
 
-  describe("recordEvent", () => {
-    it("stores both events when two are recorded for the same stream", async () => {
-      const { recordEvent, countStreamEvents, getStreamHistory } = await import(
-        "./eventHistory"
-      );
+  describe('recordEvent', () => {
+    it('stores both events when two are recorded for the same stream', async () => {
+      const { recordEvent, countStreamEvents, getStreamHistory } =
+        await import('./eventHistory');
 
-      recordEvent("stream-1", "created", 1000, "GACTOR1", 100);
-      recordEvent("stream-1", "claimed", 2000, "GACTOR2", 50);
+      recordEvent('stream-1', 'created', 1000, 'GACTOR1', 100);
+      recordEvent('stream-1', 'claimed', 2000, 'GACTOR2', 50);
 
-      expect(countStreamEvents("stream-1")).toBe(2);
+      expect(countStreamEvents('stream-1')).toBe(2);
 
-      const history = getStreamHistory("stream-1", 20, 0, "asc");
+      const history = getStreamHistory('stream-1', 20, 0, 'asc');
       expect(history).toHaveLength(2);
-      expect(history.map((e) => e.eventType)).toEqual(["created", "claimed"]);
+      expect(history.map((e) => e.eventType)).toEqual(['created', 'claimed']);
     });
 
-    it("stores duplicate event types for the same stream without deduping", async () => {
-      const { recordEvent, countStreamEvents } = await import("./eventHistory");
+    it('stores duplicate event types for the same stream without deduping', async () => {
+      const { recordEvent, countStreamEvents } = await import('./eventHistory');
 
-      recordEvent("stream-2", "claimed", 1000, "GACTOR1", 25);
-      recordEvent("stream-2", "claimed", 2000, "GACTOR1", 25);
+      recordEvent('stream-2', 'claimed', 1000, 'GACTOR1', 25);
+      recordEvent('stream-2', 'claimed', 2000, 'GACTOR1', 25);
 
-      expect(countStreamEvents("stream-2")).toBe(2);
+      expect(countStreamEvents('stream-2')).toBe(2);
     });
   });
 
-  describe("recordEventWithDb import tests", () => {
-    it("inserts using the provided db handle", async () => {
-      const { recordEventWithDb, getStreamHistory } = await import(
-        "./eventHistory"
-      );
+  describe('recordEventWithDb import tests', () => {
+    it('inserts using the provided db handle', async () => {
+      const { recordEventWithDb, getStreamHistory } =
+        await import('./eventHistory');
 
-      recordEventWithDb(db, "stream-3", "created", 500, "GACTOR3", 200, {
-        note: "test",
+      recordEventWithDb(db, 'stream-3', 'created', 500, 'GACTOR3', 200, {
+        note: 'test',
       });
 
-      const history = getStreamHistory("stream-3");
+      const history = getStreamHistory('stream-3');
       expect(history).toHaveLength(1);
       expect(history[0]).toMatchObject({
-        streamId: "stream-3",
-        eventType: "created",
+        streamId: 'stream-3',
+        eventType: 'created',
         timestamp: 500,
-        actor: "GACTOR3",
+        actor: 'GACTOR3',
         amount: 200,
-        metadata: { note: "test" },
+        metadata: { note: 'test' },
       });
     });
   });
 
-  describe("getStreamHistory ordering", () => {
-    it("returns events ascending by timestamp even when inserted out of order", async () => {
-      const { recordEvent, getStreamHistory } = await import("./eventHistory");
+  describe('getStreamHistory ordering', () => {
+    it('returns events ascending by timestamp even when inserted out of order', async () => {
+      const { recordEvent, getStreamHistory } = await import('./eventHistory');
 
-      recordEvent("stream-4", "claimed", 3000);
-      recordEvent("stream-4", "created", 1000);
-      recordEvent("stream-4", "start_time_updated", 2000);
-      recordEvent("stream-4", "canceled", 4000);
+      recordEvent('stream-4', 'claimed', 3000);
+      recordEvent('stream-4', 'created', 1000);
+      recordEvent('stream-4', 'start_time_updated', 2000);
+      recordEvent('stream-4', 'canceled', 4000);
 
-      const history = getStreamHistory("stream-4", 20, 0, "asc");
+      const history = getStreamHistory('stream-4', 20, 0, 'asc');
 
       expect(history.map((e) => e.timestamp)).toEqual([1000, 2000, 3000, 4000]);
       expect(history.map((e) => e.eventType)).toEqual([
-        "created",
-        "start_time_updated",
-        "claimed",
-        "canceled",
+        'created',
+        'start_time_updated',
+        'claimed',
+        'canceled',
       ]);
     });
 
-    it("breaks ties on equal timestamps by insertion order (id ASC)", async () => {
-      const { recordEvent, getStreamHistory } = await import("./eventHistory");
+    it('breaks ties on equal timestamps by insertion order (id ASC)', async () => {
+      const { recordEvent, getStreamHistory } = await import('./eventHistory');
 
-      recordEvent("stream-5", "created", 1000, "first");
-      recordEvent("stream-5", "claimed", 1000, "second");
-      recordEvent("stream-5", "canceled", 1000, "third");
+      recordEvent('stream-5', 'created', 1000, 'first');
+      recordEvent('stream-5', 'claimed', 1000, 'second');
+      recordEvent('stream-5', 'canceled', 1000, 'third');
 
-      const history = getStreamHistory("stream-5", 20, 0, "asc");
+      const history = getStreamHistory('stream-5', 20, 0, 'asc');
 
-      expect(history.map((e) => e.actor)).toEqual(["first", "second", "third"]);
+      expect(history.map((e) => e.actor)).toEqual(['first', 'second', 'third']);
     });
 
-    it("isolates events by streamId", async () => {
-      const { recordEvent, getStreamHistory } = await import("./eventHistory");
+    it('isolates events by streamId', async () => {
+      const { recordEvent, getStreamHistory } = await import('./eventHistory');
 
-      recordEvent("stream-A", "created", 1000);
-      recordEvent("stream-B", "created", 500);
-      recordEvent("stream-A", "claimed", 2000);
+      recordEvent('stream-A', 'created', 1000);
+      recordEvent('stream-B', 'created', 500);
+      recordEvent('stream-A', 'claimed', 2000);
 
-      const historyA = getStreamHistory("stream-A", 20, 0, "asc");
-      const historyB = getStreamHistory("stream-B", 20, 0, "asc");
+      const historyA = getStreamHistory('stream-A', 20, 0, 'asc');
+      const historyB = getStreamHistory('stream-B', 20, 0, 'asc');
 
       expect(historyA).toHaveLength(2);
       expect(historyA.map((e) => e.timestamp)).toEqual([1000, 2000]);
@@ -188,18 +269,58 @@ describe("eventHistory", () => {
       expect(historyB[0].timestamp).toBe(500);
     });
 
-    it("orders same-second created before claimed in asc and claimed before created in desc even if created is backfilled later", async () => {
-      const { recordEvent, getStreamHistory } = await import("./eventHistory");
+    it('orders same-second created before claimed in asc and claimed before created in desc even if created is backfilled later', async () => {
+      const { recordEvent, getStreamHistory } = await import('./eventHistory');
 
       // Simulate claimed recorded before a backfilled created at the exact same second
-      recordEvent("stream-same-sec", "claimed", 1000, "GRECIPIENT", 50);
-      recordEvent("stream-same-sec", "created", 1000, "GSENDER", 100);
+      recordEvent('stream-same-sec', 'claimed', 1000, 'GRECIPIENT', 50);
+      recordEvent('stream-same-sec', 'created', 1000, 'GSENDER', 100);
 
-      const ascHistory = getStreamHistory("stream-same-sec", 20, 0, "asc");
-      expect(ascHistory.map((e) => e.eventType)).toEqual(["created", "claimed"]);
+      const ascHistory = getStreamHistory('stream-same-sec', 20, 0, 'asc');
+      expect(ascHistory.map((e) => e.eventType)).toEqual([
+        'created',
+        'claimed',
+      ]);
 
-      const descHistory = getStreamHistory("stream-same-sec", 20, 0, "desc");
-      expect(descHistory.map((e) => e.eventType)).toEqual(["claimed", "created"]);
+      const descHistory = getStreamHistory('stream-same-sec', 20, 0, 'desc');
+      expect(descHistory.map((e) => e.eventType)).toEqual([
+        'claimed',
+        'created',
+      ]);
     });
+
+    it.each(['asc', 'desc'] as const)(
+      'preserves timestamp and insertion order across same-second %s page boundaries',
+      (order) => {
+        // Mix timestamps and event types, with creation backfilled after claims.
+        recordEventWithDb(db, 'boundary', 'claimed', 1001);
+        recordEventWithDb(db, 'boundary', 'claimed', 1000);
+        recordEventWithDb(db, 'boundary', 'paused', 1000);
+        recordEventWithDb(db, 'boundary', 'created', 1000);
+        recordEventWithDb(db, 'boundary', 'claimed', 1000);
+        recordEventWithDb(db, 'boundary', 'created', 999);
+
+        const ascendingIds = [6, 4, 2, 3, 5, 1];
+        const expectedIds =
+          order === 'asc' ? ascendingIds : [...ascendingIds].reverse();
+        const history = getStreamHistory('boundary', 20, 0, order);
+        expect(history.map((event) => event.id)).toEqual(expectedIds);
+
+        const pages = expectedIds.flatMap((_, offset) =>
+          getStreamHistory('boundary', 1, offset, order),
+        );
+        expect(pages).toEqual(history);
+        expect(
+          getStreamHistory('boundary', 1, expectedIds.length, order),
+        ).toEqual([]);
+        expect(getStreamHistory('boundary', 20, 0, order)).toEqual(history);
+        if (order === 'desc') {
+          expect(getStreamHistory('boundary')).toEqual(history);
+        }
+        expect(
+          db.prepare('SELECT COUNT(*) AS count FROM stream_events').get(),
+        ).toEqual({ count: 6 });
+      },
+    );
   });
 });
