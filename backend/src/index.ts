@@ -193,6 +193,13 @@ const listStreamsQuerySchema = z.object({
     .optional(),
 });
 
+import { reportUnsupportedQueryFilters } from "./utils/queryFilters";
+
+const LIST_STREAMS_ALLOWED_KEYS: ReadonlySet<string> = new Set(
+  Object.keys(listStreamsQuerySchema.shape),
+);
+const SEARCH_ALLOWED_KEYS: ReadonlySet<string> = new Set(["q", "asset"]);
+
 const AUTH_CHALLENGE_RATE_LIMIT = Number(
   process.env.AUTH_CHALLENGE_RATE_LIMIT ?? 10,
 );
@@ -550,6 +557,8 @@ app.post(["/api/admin/auth", "/api/auth/admin"], (req: Request, res: Response) =
 });
 
 app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
+  reportUnsupportedQueryFilters(req, "/api/streams", LIST_STREAMS_ALLOWED_KEYS);
+
   const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
   if (!parsedQuery.success) {
     sendValidationError(req, res, parsedQuery.error.issues);
@@ -674,6 +683,8 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
  * • Valid `q` + `asset` combo         → 200, intersection of both filters
  */
 app.get("/api/streams/search", readLimiter, (req: Request, res: Response) => {
+  reportUnsupportedQueryFilters(req, "/api/streams/search", SEARCH_ALLOWED_KEYS);
+
   // --- validate q ---
   const qResult = z.string().min(1, "search query must not be empty").safeParse(req.query.q);
   if (!qResult.success) {
