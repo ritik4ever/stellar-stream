@@ -400,7 +400,7 @@ function recordBackfilledCreatedEvent(stream: StreamRecord): void {
   }
 
   const db = getDb();
-  db.transaction(() => {
+  runStreamWriteTransaction(db, stream.id, "created", () => {
     recordEventWithDb(
       db,
       stream.id,
@@ -415,7 +415,41 @@ function recordBackfilledCreatedEvent(stream: StreamRecord): void {
         source: "reconciliation",
       },
     );
-  })();
+  });
+}
+
+function runStreamWriteTransaction(
+  db: any,
+  streamId: string,
+  eventType: string,
+  write: () => void,
+): void {
+  const startedAt = process.hrtime.bigint();
+  try {
+    db.transaction(write)();
+  } catch (err) {
+    logger.error(
+      {
+        streamId,
+        eventType,
+        outcome: "rolled_back",
+        latencyMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+        errorType: err instanceof Error ? err.name : typeof err,
+      },
+      "stream write transaction failed",
+    );
+    throw err;
+  }
+
+  logger.info(
+    {
+      streamId,
+      eventType,
+      outcome: "committed",
+      latencyMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+    },
+    "stream write transaction completed",
+  );
 }
 
 function computeStatus(stream: StreamRecord, at: number): StreamStatus {
@@ -859,7 +893,7 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
   };
 
   const db = getDb();
-  db.transaction(() => {
+  runStreamWriteTransaction(db, streamIdStr, "created", () => {
     upsertStream(stream);
     recordEventWithDb(
       db,
@@ -874,7 +908,7 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
         durationSeconds: input.durationSeconds,
       },
     );
-  })();
+  });
 
   await invalidateCache("stream:");
   await invalidateCache("streams:list:");
@@ -1225,10 +1259,10 @@ export async function cancelStream(
   resetStreamMetricsCache();
 
   const db = getDb();
-  db.transaction(() => {
+  runStreamWriteTransaction(db, stream.id, "canceled", () => {
     upsertStream(stream);
     recordEventWithDb(db, stream.id, "canceled", stream.canceledAt!, stream.sender);
-  })();
+  });
 
   triggerWebhook("canceled", stream);
   return stream;
@@ -1251,10 +1285,10 @@ export async function pauseStream(id: string): Promise<StreamRecord> {
 
   stream.pausedAt = nowInSeconds();
   const db = getDb();
-  db.transaction(() => {
+  runStreamWriteTransaction(db, stream.id, "paused", () => {
     upsertStream(stream);
     recordEventWithDb(db, stream.id, "paused", stream.pausedAt!, stream.sender);
-  })();
+  });
 
   await invalidateCache(`stream:${id}`);
   await invalidateCache("streams:list:");
@@ -1287,12 +1321,12 @@ export async function resumeStream(id: string): Promise<StreamRecord> {
   stream.pausedAt = undefined;
 
   const db = getDb();
-  db.transaction(() => {
+  runStreamWriteTransaction(db, stream.id, "resumed", () => {
     upsertStream(stream);
     recordEventWithDb(db, stream.id, "resumed", now, stream.sender, undefined, {
       pausedDuration: stream.pausedDuration,
     });
-  })();
+  });
 
   await invalidateCache(`stream:${id}`);
   await invalidateCache("streams:list:");
@@ -1328,7 +1362,7 @@ export async function updateStreamStartAt(id: string,
   const updatedAt = nowInSeconds();
 
   const db = getDb();
-  db.transaction(() => {
+  runStreamWriteTransaction(db, stream.id, "start_time_updated", () => {
     upsertStream(stream);
     recordEventWithDb(
       db,
@@ -1339,7 +1373,7 @@ export async function updateStreamStartAt(id: string,
       undefined,
       { oldStartAt, newStartAt },
     );
-  })();
+  });
 
   await invalidateCache(`stream:${id}`);
   await invalidateCache("streams:list:");
@@ -1380,10 +1414,10 @@ export function markStreamComplete(id: string, at: number = nowInSeconds()): Str
   stream.completedAt = at;
 
   const db = getDb();
-  db.transaction(() => {
+  runStreamWriteTransaction(db, stream.id, "completed", () => {
     upsertStream(stream);
     recordEventWithDb(db, stream.id, "completed", at, stream.sender);
-  })();
+  });
 
   triggerWebhook("completed", stream);
   // SSB-2026-108: keep list results consistent with committed state.

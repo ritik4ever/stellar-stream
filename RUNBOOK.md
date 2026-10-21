@@ -13,9 +13,10 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 9. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
 10. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
 11. [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal)
-12. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
-13. [Contract Invocation Timeout](#contract-invocation-timeout)
-14. [Docker Compose Startup Failure](#docker-compose-startup-failure)
+12. [SQLite Stream Write Outcome Signal](#sqlite-stream-write-outcome-signal)
+13. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
+14. [Contract Invocation Timeout](#contract-invocation-timeout)
+15. [Docker Compose Startup Failure](#docker-compose-startup-failure)
 
 ---
 
@@ -793,6 +794,24 @@ needs attention.
    still hold old artifacts, force re-authentication or wait for expiry.
 3. After any rotation, record what was rotated and when, and confirm the signal reads
    `success` (gauge `0`) before closing the change window.
+
+---
+
+### SQLite Stream Write Outcome Signal
+
+Single-stream writes that persist a stream and its lifecycle event emit one
+structured log after commit, or on failure after the transaction rolls back.
+Each entry includes `streamId`, `eventType`, `outcome`, and `latencyMs`;
+request-scoped entries also include the automatic `correlation_id`.
+
+- `outcome: "committed"` is a normal completed write. An ignored duplicate event
+   (`INSERT OR IGNORE`) is still a successful transaction.
+- `outcome: "rolled_back"` means a write or event insert threw and the database
+   transaction was rolled back. The log includes `errorType` without raw error
+   details, which could contain wallet or credential data.
+- To inspect two writers updating one stream, filter by `streamId` and compare
+   their event type, outcome, latency, and correlation IDs. The log omits wallet
+   actors and credentials.
 
 ---
 

@@ -48,6 +48,7 @@ const cacheMocks = vi.hoisted(() => ({
     clear: vi.fn(),
     isConnected: vi.fn(() => true),
   })),
+  shutdownCache: vi.fn(),
 }));
 
 const eventHistoryMocks = vi.hoisted(() => ({
@@ -66,22 +67,19 @@ const eventHistoryMocks = vi.hoisted(() => ({
   }),
 }));
 
-const cacheMocks = vi.hoisted(() => ({
-  initCache: vi.fn(),
-  getCache: vi.fn(() => ({
-    get: vi.fn(),
-    set: vi.fn(),
-    del: vi.fn(),
-    clear: vi.fn(),
-    isConnected: vi.fn(() => true),
-  })),
-  shutdownCache: vi.fn(),
+const loggerMocks = vi.hoisted(() => ({
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
 }));
 
 vi.mock("./cache", () => cacheMocks);
 vi.mock("./db", () => dbMocks);
 vi.mock("./eventHistory", () => eventHistoryMocks);
-vi.mock("./cache", () => cacheMocks);
+vi.mock("../logger", () => loggerMocks);
 
 // Import after mocking
 import { updateStreamStartAt, nowInSeconds } from "./streamStore";
@@ -175,9 +173,72 @@ describe("updateStreamStartAt", () => {
       expect(recordedEvent.actor).toBe(mockSender);
       expect(recordedEvent.timestamp).toBe(mockNow);
     });
+
+    it("logs a committed outcome and latency for each writer updating the same stream", async () => {
+      const streamId = "concurrent-stream";
+      mockState.streams.set(streamId, {
+        id: streamId,
+        sender: mockSender,
+        recipient: mockRecipient,
+        assetCode: "USDC",
+        totalAmount: 1000,
+        durationSeconds: 3600,
+        startAt: mockNow + 1800,
+        createdAt: mockNow - 900,
+      });
+
+      await Promise.all([
+        updateStreamStartAt(streamId, mockNow + 3600),
+        updateStreamStartAt(streamId, mockNow + 5400),
+      ]);
+
+      expect(loggerMocks.logger.info).toHaveBeenCalledTimes(2);
+      for (const [fields] of loggerMocks.logger.info.mock.calls) {
+        expect(fields).toMatchObject({
+          streamId,
+          eventType: "start_time_updated",
+          outcome: "committed",
+          latencyMs: expect.any(Number),
+        });
+        expect(fields.latencyMs).toBeGreaterThanOrEqual(0);
+      }
+    });
   });
 
   describe("Error cases", () => {
+    it("logs a rollback outcome when event insertion fails and rethrows the error", async () => {
+      const streamId = "event-insert-failure";
+      mockState.streams.set(streamId, {
+        id: streamId,
+        sender: mockSender,
+        recipient: mockRecipient,
+        assetCode: "USDC",
+        totalAmount: 1000,
+        durationSeconds: 3600,
+        startAt: mockNow + 1800,
+        createdAt: mockNow - 900,
+      });
+      const insertError = new Error("event insert failed");
+      eventHistoryMocks.recordEventWithDb.mockImplementationOnce(() => {
+        throw insertError;
+      });
+
+      await expect(updateStreamStartAt(streamId, mockNow + 3600)).rejects.toBe(
+        insertError,
+      );
+
+      expect(loggerMocks.logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          streamId,
+          eventType: "start_time_updated",
+          outcome: "rolled_back",
+          latencyMs: expect.any(Number),
+          errorType: "Error",
+        }),
+        "stream write transaction failed",
+      );
+    });
+
     it("should throw 404 error when stream does not exist", async () => {
       const nonExistentStreamId = "999";
       const newStartAt = mockNow + 3600;
