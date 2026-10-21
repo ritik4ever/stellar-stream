@@ -714,17 +714,40 @@ impl StellarStreamContract {
             .unwrap_or(0)
     }
 
+    /// Returns the amount of tokens the recipient may claim at `at_time`.
+    ///
+    /// # Boundary / edge behavior
+    ///
+    /// | Condition | Result |
+    /// |---|---|
+    /// | `at_time < start_time` | `0` — nothing has vested yet (before the cliff too) |
+    /// | `at_time == start_time` | `0` — the stream has just begun; zero elapsed |
+    /// | `at_time` within `[start_time, end_time)` | linear fraction of `total_amount`, floor-rounded to the nearest integer token unit |
+    /// | `at_time >= end_time` | `total_amount - claimed_amount` — fully vested; clamped so it never exceeds the remaining balance |
+    /// | stream is **canceled** | `cancel()` sets `end_time` and `total_amount` to the vested amount at cancel time, so this function automatically returns at most what was vested then |
+    /// | stream is **paused** | vesting is frozen at `pause_started_at`; `at_time` beyond that point still returns the paused vested amount |
+    ///
+    /// # Rounding
+    ///
+    /// Vesting uses integer (floor) division: `total_amount * elapsed / duration`.
+    /// Each call truncates sub-token fractions.  Dust (at most 1 token per partial claim
+    /// cycle) accumulates and becomes claimable once vesting reaches `total_amount`.
+    ///
+    /// # Arithmetic safety
+    ///
+    /// The subtraction `vested - claimed_amount` is performed with `checked_sub` and
+    /// saturates to `0` on underflow, so the return value is always non-negative.
     pub fn claimable(env: Env, stream_id: u64, at_time: u64) -> i128 {
         let stream = read_stream(&env, stream_id);
         let vested = vested_amount(&stream, at_time);
-        let claimable = vested - stream.claimed_amount;
-        if claimable < 0 {
-            0
-        } else {
-            claimable
-        }
+        vested.checked_sub(stream.claimed_amount).unwrap_or(0).max(0)
     }
 
+    /// Batch variant of [`claimable`].  Returns a map of stream_id → claimable
+    /// amount for up to 20 stream IDs at once.  Unknown stream IDs map to `0`.
+    ///
+    /// Applies the same edge-case rules as [`claimable`]: floor rounding,
+    /// saturating-to-zero `checked_sub`, and cancel/pause clamping.
     pub fn get_claimable_batch(env: Env, stream_ids: Vec<u64>, at_time: u64) -> Map<u64, i128> {
         if stream_ids.len() > 20 {
             panic!("too many stream ids");
@@ -736,12 +759,7 @@ impl StellarStreamContract {
             let amount = match stream_opt {
                 Some(stream) => {
                     let vested = vested_amount(&stream, at_time);
-                    let claimable = vested - stream.claimed_amount;
-                    if claimable < 0 {
-                        0
-                    } else {
-                        claimable
-                    }
+                    vested.checked_sub(stream.claimed_amount).unwrap_or(0).max(0)
                 }
                 None => 0,
             };
@@ -1377,6 +1395,28 @@ where
     }
 }
 
+/// Computes the gross amount vested for `stream` as of `at_time` (before
+/// subtracting already-claimed tokens).
+///
+/// # Boundary / edge behavior
+///
+/// | Condition | Result |
+/// |---|---|
+/// | `at_time < start_time + cliff_seconds` | `0` — cliff not yet reached |
+/// | `at_time` in `[start_time, end_time)` | `total_amount * elapsed / duration`, floor-rounded |
+/// | `at_time >= end_time` | `total_amount` — stream fully vested; clamped |
+/// | `total_duration == 0` | `0` — degenerate stream guard (prevents divide-by-zero) |
+/// | stream is **paused** | `at_time` is overridden by `pause_started_at` so vesting is frozen |
+///
+/// # Rounding
+///
+/// Uses integer (floor) division.  Dust of at most 1 token per call cycle
+/// may accumulate and will become claimable once `at_time >= end_time`.
+///
+/// # Arithmetic safety
+///
+/// The multiplication `total_amount * elapsed` is performed with
+/// `checked_mul`, saturating to `0` on overflow rather than panicking.
 fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
     let effective_now = if stream.paused {
         stream.pause_started_at.unwrap_or(at_time)

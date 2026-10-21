@@ -34,6 +34,10 @@ const eventHistoryMocks = vi.hoisted(() => ({
   }),
 }));
 
+const webhookMocks = vi.hoisted(() => ({
+  triggerWebhook: vi.fn(),
+}));
+
 const loggerMocks = vi.hoisted(() => ({
   logger: {
     info: vi.fn(),
@@ -45,9 +49,7 @@ const loggerMocks = vi.hoisted(() => ({
 
 vi.mock("./db", () => dbMocks);
 vi.mock("./eventHistory", () => eventHistoryMocks);
-vi.mock("./webhook", () => ({
-  triggerWebhook: vi.fn(),
-}));
+vi.mock("./webhook", () => webhookMocks);
 vi.mock("../logger", () => loggerMocks);
 
 vi.mock("@stellar/stellar-sdk", () => {
@@ -986,6 +988,127 @@ describe("getStreamById", () => {
     expect(result?.status).toBe("active");
     expect(result?.percentComplete).toBe(50);
     expect(result?.vestedAmount).toBe(500);
+  });
+
+  it("returns balanced progress at the start boundary without persisting side effects", async () => {
+    const startAt = frozenTime;
+    const mockRow = {
+      id: "stream-start-boundary",
+      sender: "GSENDER123",
+      recipient: "GRECIPIENT123",
+      asset_code: "USDC",
+      total_amount: 1000,
+      duration_seconds: 3600,
+      start_at: startAt,
+      created_at: startAt - 60,
+      canceled_at: null,
+      completed_at: null,
+      refunded_amount: null,
+      archived_at: null,
+      paused_at: null,
+      paused_duration: 0,
+      cliff_seconds: 0,
+      metadata: null,
+    };
+    const dbMock = createGetDbMock(mockRow);
+    dbMocks.getDb.mockReturnValue(dbMock);
+    const { getStreamById } = await import("./streamStore");
+    const clock = vi.spyOn(Date, "now");
+
+    clock.mockReturnValue((startAt - 1) * 1000);
+    const beforeStart = getStreamById(mockRow.id);
+    clock.mockReturnValue(startAt * 1000);
+    const atStart = getStreamById(mockRow.id);
+    clock.mockReturnValue((startAt + 3600) * 1000);
+    const atEnd = getStreamById(mockRow.id);
+
+    expect(beforeStart).toMatchObject({
+      status: "scheduled",
+      vestedAmount: 0,
+      remainingAmount: 1000,
+    });
+    expect(atStart).toMatchObject({
+      status: "active",
+      elapsedSeconds: 0,
+      vestedAmount: 0,
+      remainingAmount: 1000,
+    });
+    expect(atEnd).toMatchObject({
+      status: "completed",
+      vestedAmount: 1000,
+      remainingAmount: 0,
+    });
+    for (const response of [beforeStart, atStart, atEnd]) {
+      expect(response).not.toBeNull();
+      expect(response!.vestedAmount + response!.remainingAmount).toBe(
+        response!.totalAmount,
+      );
+    }
+
+    expect(mockRow).toMatchObject({
+      total_amount: 1000,
+      start_at: startAt,
+      canceled_at: null,
+      completed_at: null,
+    });
+    expect(eventHistoryMocks.recordEventWithDb).not.toHaveBeenCalled();
+    expect(webhookMocks.triggerWebhook).not.toHaveBeenCalled();
+  });
+
+  it("recalculates progress from the current wall clock after it moves backwards", async () => {
+    const startAt = frozenTime - 1200;
+    const mockRow = {
+      id: "stream-clock-rollback",
+      sender: "GSENDER123",
+      recipient: "GRECIPIENT123",
+      asset_code: "USDC",
+      total_amount: 1000,
+      duration_seconds: 3600,
+      start_at: startAt,
+      created_at: startAt,
+      canceled_at: null,
+      completed_at: null,
+      refunded_amount: null,
+      archived_at: null,
+      paused_at: null,
+      paused_duration: 0,
+      cliff_seconds: 0,
+      metadata: null,
+    };
+    const dbMock = createGetDbMock(mockRow);
+    dbMocks.getDb.mockReturnValue(dbMock);
+    const { getStreamById } = await import("./streamStore");
+    const clock = vi.spyOn(Date, "now");
+
+    clock.mockReturnValue((startAt + 1800) * 1000);
+    const laterResponse = getStreamById(mockRow.id);
+    clock.mockReturnValue((startAt + 600) * 1000);
+    const earlierResponse = getStreamById(mockRow.id);
+
+    expect(laterResponse).toMatchObject({
+      status: "active",
+      vestedAmount: 500,
+      remainingAmount: 500,
+    });
+    expect(earlierResponse).toMatchObject({
+      status: "active",
+      vestedAmount: 166.666667,
+      remainingAmount: 833.333333,
+    });
+    for (const response of [laterResponse, earlierResponse]) {
+      expect(response).not.toBeNull();
+      expect(response!.vestedAmount + response!.remainingAmount).toBe(
+        response!.totalAmount,
+      );
+    }
+    expect(mockRow).toMatchObject({
+      total_amount: 1000,
+      start_at: startAt,
+      canceled_at: null,
+      completed_at: null,
+    });
+    expect(eventHistoryMocks.recordEventWithDb).not.toHaveBeenCalled();
+    expect(webhookMocks.triggerWebhook).not.toHaveBeenCalled();
   });
 
   it("returns archived_at field populated for an archived stream", async () => {

@@ -742,7 +742,9 @@ export const swaggerDocument = {
           "- **assetCode only** → multi-asset match (comma-separated, case-insensitive).\n" +
           "- **q + asset (AND)** → asset filter pins the asset; q searches id, sender, and recipient only (not asset code).\n" +
           "- **q + assetCode (AND)** → same as q + asset but for multi-asset.\n" +
-          "- **any combination** → every supplied filter must be satisfied simultaneously.",
+          "- **any combination** → every supplied filter must be satisfied simultaneously.\n" +
+          "\n" +
+          "**Response consistency:** `total` equals the number of streams matching all supplied filters at request time, before pagination. Every row in `data` satisfies every supplied filter. The server-side 5-second cache is invalidated by every stream mutation (`createStream`, `cancelStream`, `pauseStream`, `resumeStream`, `updateStreamStartAt`, `markStreamComplete`, `deleteStreamById`), so a read following a committed write returns the updated state. If a mutation fails, no cache entry is invalidated and no state change is committed.",
         parameters: [
           {
             name: "status",
