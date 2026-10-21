@@ -979,6 +979,7 @@ export const swaggerDocument = {
           "- `asset` with invalid format (non-alphanumeric or >12 chars) → 400 VALIDATION_ERROR\n" +
           "- Valid `q` that matches nothing → 200, data: [], total: 0\n" +
           "- Valid `q` + `asset` combination → 200, intersection of both filters\n\n" +
+          "Invalid filters are rejected before stream lookup; they are not retried and do not mutate stream or event state.\n\n" +
           "The `total` field always reflects the number of matched rows returned; " +
           "`data` and `total` are always consistent.",
         parameters: [

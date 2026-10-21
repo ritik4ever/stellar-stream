@@ -8,7 +8,7 @@ import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
 import { z } from "zod";
 import { createServer } from "http";
-import { searchStreamsFts, getAllowedAssets, addAllowedAsset, removeAllowedAsset } from "./services/db";
+import { getAllowedAssets, addAllowedAsset, removeAllowedAsset } from "./services/db";
 import { initWebSocket } from "./services/websocket";
 import {
   normalizeUnknownApiError,
@@ -672,6 +672,8 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
  * • `asset` with invalid format       → 400 VALIDATION_ERROR
  * • Valid `q` that matches nothing    → 200, data:[], total:0
  * • Valid `q` + `asset` combo         → 200, intersection of both filters
+ * Invalid filters are rejected before stream lookup; they are not retried and
+ * do not start a transaction or mutate stream/event state.
  */
 app.get("/api/streams/search", readLimiter, (req: Request, res: Response) => {
   // --- validate q ---
@@ -695,25 +697,23 @@ app.get("/api/streams/search", readLimiter, (req: Request, res: Response) => {
 
   try {
     const now = nowInSeconds();
-    // Step 1: FTS scan — returns matching stream IDs ordered newest-first
-    const streamIds = searchStreamsFts(qResult.data);
-
-    // Step 2: Hydrate stream records and compute progress
-    let results = streamIds
-      .map((id) => getStream(id))
-      .filter((s): s is NonNullable<typeof s> => s !== null)
-      .map((s) => ({
-        ...s,
-        progress: calculateProgress(s, now),
-      }));
-
-    // Step 3: AND-filter by asset code (case-insensitive exact match)
+    const searchTerm = qResult.data.toLowerCase();
     const assetFilter = assetResult.data?.toUpperCase();
-    if (assetFilter) {
-      results = results.filter(
-        (s) => s.assetCode.toUpperCase() === assetFilter,
-      );
-    }
+    const results = listStreams()
+      .filter((stream) => {
+        const matchesQuery =
+          stream.id.toLowerCase().includes(searchTerm) ||
+          stream.sender.toLowerCase().includes(searchTerm) ||
+          stream.recipient.toLowerCase().includes(searchTerm) ||
+          stream.assetCode.toLowerCase().includes(searchTerm);
+        const matchesAsset =
+          !assetFilter || stream.assetCode.toUpperCase() === assetFilter;
+        return matchesQuery && matchesAsset;
+      })
+      .map((stream) => ({
+        ...stream,
+        progress: calculateProgress(stream, now),
+      }));
 
     res.set("Cache-Control", "max-age=5");
     res.json({
