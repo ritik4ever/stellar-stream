@@ -1754,6 +1754,8 @@ export const swaggerDocument = {
         description:
           "Forces an immediate Soroban get_stream call to sync the local SQLite record with the on-chain state. " +
           "Useful when a transaction (claim, cancel) has been submitted but the indexer hasn't polled yet. " +
+          "A successful reconciliation updates the local stream only and does not advance the indexer cursor. " +
+          "A stream absent on-chain returns 404; an RPC lookup failure returns 503 without changing local state. " +
           "Rate limited to 5 calls per stream per minute.",
         parameters: [
           {
@@ -1784,7 +1786,7 @@ export const swaggerDocument = {
             },
           },
           "404": {
-            description: "Stream not found on-chain.",
+            description: "Stream not found on-chain (STREAM_NOT_FOUND_ON_CHAIN).",
             content: {
               "application/json": {
                 schema: {
@@ -1805,6 +1807,16 @@ export const swaggerDocument = {
           },
           "500": {
             description: "Failed to reconcile stream.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
+          "503": {
+            description: "Stellar RPC unavailable (RPC_UNAVAILABLE); local state was not changed.",
             content: {
               "application/json": {
                 schema: {

@@ -81,6 +81,17 @@ export interface StreamRecord {
   metadata?: Record<string, string> | null;
 }
 
+class StreamReconciliationError extends Error {
+  constructor(
+    message: string,
+    public readonly statusCode: number,
+    public readonly code: string,
+  ) {
+    super(message);
+    this.name = "StreamReconciliationError";
+  }
+}
+
 export interface StreamProgress {
   status: StreamStatus;
   ratePerSecond: number;
@@ -718,9 +729,10 @@ export async function reconcileStream(streamId: string): Promise<StreamRecord> {
     throw new Error("Invalid stream ID");
   }
 
+  let onChainStream: StreamRecord | null;
   try {
     const sourceAccount = await sorobanContext.sourceAccountPromise;
-    const onChainStream = await retryWithBackoff(
+    onChainStream = await retryWithBackoff(
       () =>
         fetchOnChainStreamRecord(
           sorobanContext.contract,
@@ -730,23 +742,31 @@ export async function reconcileStream(streamId: string): Promise<StreamRecord> {
         ),
       2,
     );
-
-    if (!onChainStream) {
-      throw new Error("Stream not found on-chain");
-    }
-
-    const db = getDb();
-    db.transaction(() => {
-      upsertStream(onChainStream);
-      recordBackfilledCreatedEvent(onChainStream, db);
-    })();
-
-    logger.info({ streamId }, "stream reconciled with on-chain state");
-    return onChainStream;
   } catch (err) {
     logger.error({ err, streamId }, "failed to reconcile stream");
-    throw err;
+    throw new StreamReconciliationError(
+      "Unable to fetch stream from Stellar RPC.",
+      503,
+      "RPC_UNAVAILABLE",
+    );
   }
+
+  if (!onChainStream) {
+    throw new StreamReconciliationError(
+      "Stream not found on-chain.",
+      404,
+      "STREAM_NOT_FOUND_ON_CHAIN",
+    );
+  }
+
+  const db = getDb();
+  db.transaction(() => {
+    upsertStream(onChainStream);
+    recordBackfilledCreatedEvent(onChainStream, db);
+  })();
+
+  logger.info({ streamId }, "stream reconciled with on-chain state");
+  return onChainStream;
 }
 
 export async function reconcileMissingStreams(): Promise<number> {
