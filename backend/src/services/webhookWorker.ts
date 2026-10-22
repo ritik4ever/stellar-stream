@@ -38,13 +38,31 @@ export const processWebhookQueue = async () => {
   try {
     const url = process.env.WEBHOOK_DESTINATION_URL;
     if (!url) {
+      logger.info(
+        {
+          outcome: "normal_empty",
+          outcomeCode: 0,
+          isNormalEmpty: true,
+          detail: "WEBHOOK_DESTINATION_URL is not configured; no webhook deliveries to process.",
+        },
+        "webhook worker idle: destination URL not configured",
+      );
       isProcessing = false;
       return;
     }
 
     const urlValidation = validateWebhookUrl(url);
     if (!urlValidation.valid) {
-      logger.error({ reason: urlValidation.reason }, "webhook delivery skipped because destination URL is invalid");
+      logger.error(
+        {
+          reason: urlValidation.reason,
+          outcome: "blocked",
+          outcomeCode: 2,
+          isNormalEmpty: false,
+          detail: "Webhook destination URL is invalid; deliveries are skipped until configuration is corrected.",
+        },
+        "webhook delivery skipped because destination URL is invalid",
+      );
       isProcessing = false;
       return;
     }
@@ -60,6 +78,18 @@ export const processWebhookQueue = async () => {
          ORDER BY next_retry_at ASC LIMIT 10`
       )
       .all(now);
+
+    if (pendingDeliveries.length === 0) {
+      logger.info(
+        {
+          outcome: "normal_empty",
+          outcomeCode: 0,
+          isNormalEmpty: true,
+          detail: "No pending webhook deliveries are due for processing.",
+        },
+        "webhook worker idle: no pending deliveries",
+      );
+    }
 
     for (const delivery of pendingDeliveries) {
       const { id, event, payload, attempt, max_attempts } = delivery;
@@ -157,15 +187,97 @@ export const processWebhookQueue = async () => {
         const newAttempt = attempt + 1;
         if (newAttempt >= max_attempts) {
           // Move to dead-letter storage
-          db.prepare(
-            `INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at)
-             VALUES (?, ?, ?, ?, ?, ?)`
-          ).run(delivery.stream_id, event, url, payload, errorMsg, updateNow);
+          const transitionStart = Date.now();
+          try {
+            db.prepare(
+              `INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at)
+               VALUES (?, ?, ?, ?, ?, ?)`
+            ).run(delivery.stream_id, event, url, payload, errorMsg, updateNow);
 
-          db.prepare(
-            `DELETE FROM webhook_deliveries WHERE id = ?`
-          ).run(id);
-          logger.error({ deliveryId: id, event, maxAttempts: max_attempts }, "webhook delivery moved to dead-letter storage");
+            db.prepare(
+              `DELETE FROM webhook_deliveries WHERE id = ?`
+            ).run(id);
+            const transitionLatencyMs = Math.max(0, Date.now() - transitionStart);
+            logger.error(
+              {
+                event,
+                deliveryId: id,
+                streamId: delivery.stream_id,
+                attempt: newAttempt,
+                maxAttempts: max_attempts,
+                outcome: "dead_letter",
+                outcomeCode: 3,
+                isNormalEmpty: false,
+                latencyMs: transitionLatencyMs,
+                detail: "Webhook delivery exhausted retries and was moved to dead-letter storage.",
+              },
+              "webhook delivery moved to dead-letter storage",
+            );
+          } catch (transitionError: any) {
+            const transitionLatencyMs = Math.max(0, Date.now() - transitionStart);
+            logger.error(
+              {
+                event,
+                deliveryId: id,
+                streamId: delivery.stream_id,
+                attempt: newAttempt,
+                maxAttempts: max_attempts,
+                outcome: "dead_letter_transition_failed",
+                outcomeCode: 4,
+                isNormalEmpty: false,
+                latencyMs: transitionLatencyMs,
+                detail: "Worker failed to move the delivery into dead-letter storage; delivery remains in the active queue for retry.",
+                error: sanitizeWebhookError(transitionError),
+              },
+              "webhook dead-letter transition failed",
+            );
+          }
+
+          // Emit a structured signal for worker restart during dead-letter transition.
+          // Detects the case where the delivery was already removed from the active queue
+          // but the dead-letter insert did not complete (e.g. worker restart mid-transition).
+          try {
+            const stillActive = db
+              .prepare(`SELECT id FROM webhook_deliveries WHERE id = ?`)
+              .get(id);
+            const deadLettered = db
+              .prepare(
+                `SELECT id FROM webhook_dead_letters WHERE stream_id = ? AND event = ? AND failed_at = ?`
+              )
+              .get(delivery.stream_id, event, updateNow);
+
+            if (!stillActive && !deadLettered) {
+              logger.error(
+                {
+                  event,
+                  deliveryId: id,
+                  streamId: delivery.stream_id,
+                  attempt: newAttempt,
+                  maxAttempts: max_attempts,
+                  outcome: "dead_letter_transition_interrupted",
+                  outcomeCode: 5,
+                  isNormalEmpty: false,
+                  latencyMs: Math.max(0, Date.now() - transitionStart),
+                  detail: "Worker restart detected during dead-letter transition; delivery is neither active nor dead-lettered and requires operator review.",
+                },
+                "webhook dead-letter transition interrupted by worker restart",
+              );
+            }
+          } catch (reconcileError: any) {
+            logger.error(
+              {
+                event,
+                deliveryId: id,
+                streamId: delivery.stream_id,
+                outcome: "dead_letter_transition_reconcile_failed",
+                outcomeCode: 6,
+                isNormalEmpty: false,
+                detail: "Failed to reconcile dead-letter transition state after worker restart.",
+                error: sanitizeWebhookError(reconcileError),
+              },
+              "webhook dead-letter transition reconciliation failed",
+            );
+          }
         } else {
           // Use configured retry delays: 5s, 15s, 60s, 300s, 900s
           const delaySeconds = getRetryDelaySeconds(newAttempt - 1);
