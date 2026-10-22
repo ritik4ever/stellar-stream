@@ -158,6 +158,39 @@ describe("Webhook Dead Letter Integration Tests", () => {
       expect(delivery.event).toBe("stream.created");
       expect(delivery.status).toBe("pending");
       expect(delivery.attempt).toBe(0);
+      expect(response.body.delivery).toEqual({
+        id: delivery.id,
+        stream_id: "s-requeue",
+        event: "stream.created",
+        attempt: 0,
+        max_attempts: 5,
+        status: "pending",
+        next_retry_at: delivery.next_retry_at,
+      });
+    });
+
+    it("does not claim a change when requeue fails to commit", async () => {
+      const db = getDb();
+      // Insert dead letter referencing a stream that does not exist in `streams` (violates FK on webhook_deliveries)
+      db.prepare(`
+        INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run("missing-stream", "stream.created", "url", '{"id":"missing-stream"}', "503 Service Unavailable", 100);
+
+      const deadLetter = db.prepare("SELECT id FROM webhook_dead_letters WHERE stream_id = ?").get("missing-stream") as any;
+
+      const response = await request(app)
+        .post(`/api/webhooks/dead-letters/${deadLetter.id}/requeue`)
+        .set("Authorization", `Bearer ${token}`);
+
+      expect(response.status).toBe(500);
+      expect(response.body.success).toBeUndefined();
+
+      // Dead letter must remain in webhook_dead_letters and nothing committed to webhook_deliveries
+      const deadLetterCount = db.prepare("SELECT COUNT(*) as count FROM webhook_dead_letters").get() as any;
+      expect(deadLetterCount.count).toBe(1);
+      const deliveryCount = db.prepare("SELECT COUNT(*) as count FROM webhook_deliveries").get() as any;
+      expect(deliveryCount.count).toBe(0);
     });
 
     it("should return 404 for non-existent dead letter", async () => {
