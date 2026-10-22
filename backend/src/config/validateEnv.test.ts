@@ -169,6 +169,55 @@ describe('validateEnv', () => {
       assertNoLoggerOutputContains('rpc-secret-token');
     });
 
+    it('should not mutate process.env or report success when validation fails', () => {
+      process.env = {
+        CONTRACT_ID: 'C' + 'A'.repeat(55),
+        SERVER_PRIVATE_KEY: 'S' + 'A'.repeat(55),
+        RPC_URL: 'https://rpc.example:bad/path?api_key=rpc-secret-token',
+      };
+      const before = { ...process.env };
+
+      expect(() => validateEnv()).toThrow('Environment validation failed');
+
+      expect(process.env).toEqual(before);
+      expect(loggerInfoSpy).not.toHaveBeenCalledWith(
+        'Soroban configuration validated',
+      );
+    });
+
+    it('should not report Soroban success when a later check fails', () => {
+      process.env = {
+        CONTRACT_ID: 'C' + 'A'.repeat(55),
+        SERVER_PRIVATE_KEY: 'S' + 'A'.repeat(55),
+        ALLOWED_ASSETS: ' , ',
+      };
+      const before = { ...process.env };
+
+      expect(() => validateEnv()).toThrow('Environment validation failed');
+
+      expect(process.env).toEqual(before);
+      expect(loggerInfoSpy).not.toHaveBeenCalledWith(
+        'Soroban configuration validated',
+      );
+      assertNoLoggerOutputContains('S' + 'A'.repeat(55));
+    });
+
+    it('should publish derived env values only after successful validation', () => {
+      process.env = {
+        CONTRACT_ID: 'C' + 'A'.repeat(55),
+        SERVER_PRIVATE_KEY: 'S' + 'A'.repeat(55),
+      };
+
+      const config = validateEnv();
+
+      expect(process.env.STELLAR_CONTRACT_ID).toBe(config.contractId);
+      expect(process.env.RPC_URL).toBe(config.rpcUrl);
+      expect(process.env.SOROBAN_RPC_URL).toBe(config.rpcUrl);
+      expect(loggerInfoSpy).toHaveBeenCalledWith(
+        'Soroban configuration validated',
+      );
+    });
+
     it('should provide helpful error message listing required keys', () => {
       process.env = {
         // missing CONTRACT_ID
