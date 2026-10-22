@@ -1407,6 +1407,8 @@ export async function cancelStream(
 export async function pauseStream(id: string): Promise<StreamRecord> {
   const pausedAt = nowInSeconds();
   const { stream } = mutateStreamAndEvent(id, (current) => {
+    // Re-read committed state under the writer lock so a concurrent writer
+    // (e.g. cancel) cannot be overwritten with a stale record.
     const status = computeStatus(current, pausedAt);
     if (status !== "active") {
       throw streamError("Only active streams can be paused.", 400);
@@ -1428,6 +1430,8 @@ export async function pauseStream(id: string): Promise<StreamRecord> {
 export async function resumeStream(id: string): Promise<StreamRecord> {
   const now = nowInSeconds();
   const { stream } = mutateStreamAndEvent(id, (current) => {
+    // Re-read committed state under the writer lock so a concurrent writer
+    // (e.g. cancel) cannot be overwritten with a stale record.
     if (current.pausedAt === undefined) {
       throw streamError("Stream is not paused.", 400);
     }
@@ -1458,6 +1462,8 @@ export async function updateStreamStartAt(id: string,
 ): Promise<StreamRecord> {
   const updatedAt = nowInSeconds();
   const { stream } = mutateStreamAndEvent(id, (current) => {
+    // Re-read committed state under the writer lock so a concurrent writer
+    // (e.g. cancel) cannot be overwritten with a stale record.
     const status = computeStatus(current, updatedAt);
     if (status !== "scheduled") {
       throw streamError(
@@ -1486,6 +1492,8 @@ export async function updateStreamStartAt(id: string,
 
 export function markStreamComplete(id: string, at: number = nowInSeconds()): StreamRecord {
   const { stream } = mutateStreamAndEvent(id, (current) => {
+    // Re-read committed state under the writer lock so a concurrent writer
+    // (e.g. cancel) cannot be overwritten with a stale record.
     const status = computeStatus(current, at);
     if (status === "completed") {
       throw streamError("Stream is already completed.", 400);
@@ -1515,16 +1523,26 @@ export function markStreamComplete(id: string, at: number = nowInSeconds()): Str
 export function deleteStreamById(id: string): boolean {
   const db = getDb();
 
-  const stream = db
-    .prepare("SELECT id, archived_at FROM streams WHERE id = ?")
-    .get(id) as { id: string; archived_at: number | null } | undefined;
-
-  if (!stream) return false;
-
-  if (stream.archived_at !== null) return false;
-
   const now = nowInSeconds();
-  db.prepare("UPDATE streams SET archived_at = ? WHERE id = ?").run(now, id);
+  let deleted = false;
+  try {
+    db.transaction(() => {
+      const stream = db
+        .prepare("SELECT id, archived_at FROM streams WHERE id = ?")
+        .get(id) as { id: string; archived_at: number | null } | undefined;
+
+      if (!stream) return;
+      if (stream.archived_at !== null) return;
+
+      db.prepare("UPDATE streams SET archived_at = ? WHERE id = ?").run(now, id);
+      deleted = true;
+    })();
+  } catch (err) {
+    logger.error({ err, streamId: id }, "stream delete rolled back");
+    return false;
+  }
+
+  if (!deleted) return false;
 
   // SSB-2026-108: keep list results consistent with committed state.
   invalidateCacheSync(`stream:${id}`);
