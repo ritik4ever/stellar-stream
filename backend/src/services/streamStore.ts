@@ -741,14 +741,23 @@ export async function reconcileStream(streamId: string): Promise<StreamRecord> {
       recordBackfilledCreatedEvent(onChainStream, db);
     })();
 
+    const persistedStream = getStream(streamId);
+    if (!persistedStream) {
+      throw new Error("Reconciled stream was not persisted");
+    }
+
     logger.info({ streamId }, "stream reconciled with on-chain state");
-    return onChainStream;
+    return persistedStream;
   } catch (err) {
     logger.error({ err, streamId }, "failed to reconcile stream");
     throw err;
   }
 }
 
+/**
+ * Returns the number of missing streams whose stream and created-event writes
+ * committed. This repair path does not advance the indexer's ledger checkpoint.
+ */
 export async function reconcileMissingStreams(): Promise<number> {
   const sorobanContext = getSorobanContext();
   if (!sorobanContext) {

@@ -39,6 +39,19 @@ npm test -- --watch
 npm test -- --coverage
 ```
 
+## Reconciliation Consistency
+
+`POST /api/streams/:id/reconcile` reports the stream read back from SQLite after
+the stream and event transaction commits. If the RPC read or transaction fails,
+the handler returns an error and the transaction leaves no partial correction.
+
+The background repair count is the number of missing streams whose stream and
+created-event writes committed in that run. If RPC fails after earlier repairs,
+the count includes those committed repairs only; failed and unattempted streams
+are not counted. This worker does not maintain a separate reconciled-ledger
+checkpoint: `indexer_cursor.last_ledger_sequence` remains the authoritative
+indexer checkpoint and advances only after a fully processed indexer poll.
+
 ## Test Coverage
 
 ### 1. Health Check
