@@ -299,9 +299,11 @@ function getFallbackPollInterval(): number {
  * Because event writes and the checkpoint write are separate operations
  * (events are committed page-by-page; the checkpoint is saved after the
  * poll completes), a crash between them can leave events persisted ahead
- * of the checkpoint.  That is safe: the dedup index on
+ * of the checkpoint. That is safe: the dedup index on
  * stream_events(stream_id, event_type, ledger_sequence) makes reprocessing
- * idempotent, and the next poll simply re-reads from the stale checkpoint.
+ * idempotent, and the next poll re-reads from the stale checkpoint. Event
+ * decoding or storage errors must escape the page transaction so it rolls
+ * back and the checkpoint remains unchanged.
  *
  * Callers must not report a poll as successful unless the checkpoint
  * reflects the events actually committed.  `saveCheckpoint` is only
@@ -580,16 +582,29 @@ async function indexEventsWithFallback(db: any, currentLedger: number, currentPo
   let dedupedCount = 0;
 
   if (eventCount > 0) {
-  db.transaction(() => {
-    for (const event of events.events || []) {
-      const result = processEvent(db, event);
-      if (result === "inserted") insertedCount++;
-      else if (result === "deduped") dedupedCount++;
-    }
-  })();
-  if (insertedCount > 0) eventsIndexedTotal.inc(insertedCount);
-  if (dedupedCount > 0) indexerEventsDedupedTotal.inc(dedupedCount);
-}
+    db.transaction(() => {
+      for (const event of events.events || []) {
+        const changesBefore = db.prepare("SELECT changes() AS n").get() as { n: number } | undefined;
+        processEvent(db, event);
+        // `changes()` returns the number of rows modified by the most recent
+        // statement. A value of 0 after INSERT OR IGNORE means the row was
+        // already present (dedup hit).
+        const changesAfter = db.prepare("SELECT changes() AS n").get() as { n: number } | undefined;
+        if ((changesAfter?.n ?? 1) === 0) {
+          dedupedCount++;
+        } else {
+          insertedCount++;
+        }
+      }
+    })();
+  }
+
+  for (let i = 0; i < insertedCount; i++) {
+    eventsIndexedTotal.inc();
+  }
+  for (let i = 0; i < dedupedCount; i++) {
+    indexerEventsDedupedTotal.inc();
+  }
 
   saveCheckpoint(db, currentLedger);
   lastProcessedLedger = currentLedger;
@@ -692,19 +707,32 @@ async function indexEventsWithCursorPagination(db: any, currentLedger: number, c
     let pageDeduped = 0;
 
     db.transaction(() => {
-  for (const event of events) {
-    const result = processEvent(db, event);
-    if (result === "inserted") pageInserted++;
-    else if (result === "deduped") pageDeduped++;
+      for (const event of events) {
+        processEvent(db, event);
+        // Detect whether the row was actually inserted or silently skipped.
+        // `changes()` returns 0 when INSERT OR IGNORE finds a conflict.
+        const changes = db.prepare("SELECT changes() AS n").get() as { n: number } | undefined;
+        if ((changes?.n ?? 1) === 0) {
+          pageDeduped++;
+        } else {
+          pageInserted++;
+        }
 
-    if (event.ledger > maxLedgerSeen) {
-      maxLedgerSeen = event.ledger;
+        if (event.ledger > maxLedgerSeen) {
+          maxLedgerSeen = event.ledger;
+        }
+      }
+    })();
+
+    for (let i = 0; i < pageInserted; i++) {
+      eventsIndexedTotal.inc();
     }
-  }
-})();
+    for (let i = 0; i < pageDeduped; i++) {
+      indexerEventsDedupedTotal.inc();
+    }
 
-if (pageInserted > 0) eventsIndexedTotal.inc(pageInserted);
-if (pageDeduped > 0) indexerEventsDedupedTotal.inc(pageDeduped);
+    totalInserted += pageInserted;
+    totalDeduped += pageDeduped;
 
     if (pageDeduped > 0) {
       logger.info(
@@ -923,5 +951,6 @@ function processEvent(db: any, event: rpc.Api.EventResponse): ProcessResult {
     }
   } catch (err) {
     logger.error({ err }, "failed to process event");
+    throw err;
   }
 }

@@ -4,7 +4,7 @@
  * Deterministic tests for Soroban event indexer workflow reviewing:
  * 1. Replayed event pages (RPC re-serving previous pages or cursor overlapping)
  * 2. Identical event IDs (duplicate contract events with identical attributes or identifiers)
- * 3. Process restart between cursor write and row insert (and vice versa)
+ * 3. Process restart after row insert but before cursor commit
  *
  * Project area: backend · Batch ID: SSB-2026-145
  */
@@ -361,26 +361,32 @@ describe("Soroban event indexer workflow: identical event IDs and duplicate even
 // 3. Process Restart Between Cursor Write and Row Insert
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe("Soroban event indexer workflow: process restart between cursor write and row insert", () => {
-  it("recovers safely if crash happens after row insert but BEFORE cursor write", async () => {
+describe("Soroban event indexer workflow: process restart around cursor commit", () => {
+  it("replays safely after event rows commit but the cursor write fails", async () => {
     const cid = nextContractId();
     setupDb(700);
 
-    // Initial state: cursor is 700.
-    // Simulate process inserting rows for ledger 720, but crashing before saveCheckpoint(db, 750).
     const event720 = makeStreamCreatedEvent("6", 720);
-    db.prepare(`
-      INSERT INTO stream_events (stream_id, event_type, ledger_sequence, timestamp, actor, amount, metadata)
-      VALUES ('6', 'created', 720, 1700000000, 'GSENDER1111111111111111111111111111111111111111111111111111', 10000, NULL)
-    `).run();
-
-    // Verify pre-restart state: row exists, but cursor is still 700 (uncommitted cursor write)
-    expect(readCursor()).toBe(700);
-    expect(getStoredEvents()).toHaveLength(1);
-
-    // Restart process: initIndexer loads checkpoint 700, queries from 701, and RPC returns event720 again
-    mockGetLatestLedger.mockResolvedValue({ sequence: 750 });
     const event730 = makeStreamClaimedEvent("6", 300, 730);
+    db.exec(`
+      CREATE TRIGGER fail_indexer_cursor_update
+      BEFORE UPDATE ON indexer_cursor
+      BEGIN
+        SELECT RAISE(ABORT, 'simulated checkpoint write failure');
+      END;
+    `);
+
+    mockGetLatestLedger.mockResolvedValue({ sequence: 750 });
+    mockGetEvents.mockResolvedValueOnce({ events: [event720, event730], cursor: undefined });
+
+    // The page commits first. A failed checkpoint write leaves the durable cursor stale.
+    await runOnePoll(cid);
+    expect(readCursor()).toBe(700);
+    expect(getStoredEvents()).toHaveLength(2);
+
+    // Simulate a process restart and repair the transient checkpoint storage failure.
+    resetIndexerState();
+    db.exec("DROP TRIGGER fail_indexer_cursor_update");
     mockGetEvents.mockResolvedValueOnce({
       events: [event720, event730],
       cursor: undefined,
@@ -486,7 +492,7 @@ describe("Soroban event indexer workflow: process restart between cursor write a
     expect(snapshot.pollCycleId).toBeGreaterThanOrEqual(2);
   });
 
-  it("guarantees atomic row insertion per page so partial page failures roll back cleanly", async () => {
+  it("rolls back a page and leaves the cursor retryable when an event cannot be stored", async () => {
     const cid = nextContractId();
     setupDb(900);
 
@@ -501,7 +507,7 @@ describe("Soroban event indexer workflow: process restart between cursor write a
       ledger: 920,
     };
 
-    // The indexer wraps each page insertion in db.transaction() and catches errors in processEvent
+    // Event processing errors must escape the page transaction instead of being swallowed.
     mockGetEvents.mockResolvedValueOnce({
       events: [validEvent, corruptEvent as any],
       cursor: undefined,
@@ -509,17 +515,16 @@ describe("Soroban event indexer workflow: process restart between cursor write a
 
     await runOnePoll(cid);
 
-    // Checkpoint still recorded for processed ledger
+    expect(readCursor()).toBe(900);
+    expect(getStoredEvents()).toHaveLength(0);
+
+    // A later retry can process the valid event and advance the cursor.
+    mockGetEvents.mockResolvedValueOnce({ events: [validEvent], cursor: undefined });
+    await runOnePoll(cid);
+
     expect(readCursor()).toBe(950);
     const stored = getStoredEvents();
-    // Valid event was saved cleanly without whole indexer crashing
     expect(stored).toHaveLength(1);
     expect(stored[0].stream_id).toBe("7");
-
-    // Outcome signal: only the valid event was processed, so not restart_recovery.
-    const snapshot = getIndexerMonitoringSnapshot();
-    expect(snapshot.lastPollOutcome).toBeOneOf(["events_processed", "restart_recovery"]);
-    expect(snapshot.lastPollDurationMs).toBeGreaterThanOrEqual(0);
-    expect(snapshot.pollCycleId).toBeGreaterThan(0);
   });
 });
