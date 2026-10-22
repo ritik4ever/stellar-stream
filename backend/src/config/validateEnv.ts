@@ -562,12 +562,20 @@ export function validateEnv(): ValidatedConfig {
   const allowedAssets = (env.ALLOWED_ASSETS || '')
     .split(',')
     .map((asset: string) => asset.trim().toUpperCase())
-    .filter((asset: string) => asset.length > 0);
+    .filter((asset: string) => asset.length > 0)
+    .filter((asset: string, index: number, arr: string[]) => arr.indexOf(asset) === index);
 
   if (allowedAssets.length === 0) {
     logger.error('ALLOWED_ASSETS must contain at least one asset code');
     process.exit(1);
     throw new Error('Environment validation failed');
+  }
+
+  const invalidAsset = allowedAssets.find((asset) => !/^[A-Za-z0-9]{1,12}$/.test(asset));
+  if (invalidAsset) {
+    logger.error(`ALLOWED_ASSETS contains an invalid asset code: ${invalidAsset}`);
+    process.exit(1);
+    throw new Error("Environment validation failed");
   }
 
   // Validate ADMIN_API_KEY if provided

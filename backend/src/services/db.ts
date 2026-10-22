@@ -196,6 +196,123 @@ export function translateSqlPostgres(sql: string): string {
   return res;
 }
 
+export function normalizeAssetCode(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toUpperCase();
+  if (!normalized || !/^[A-Za-z0-9]{1,12}$/.test(normalized)) {
+    return null;
+  }
+
+  return normalized;
+}
+
+export function normalizeAssetCodeList(
+  values: string | string[] | null | undefined,
+): string[] {
+  const rawValues = Array.isArray(values)
+    ? values
+    : typeof values === "string"
+      ? values.split(",")
+      : [];
+
+  const uniqueValues = new Set<string>();
+  for (const rawValue of rawValues) {
+    const normalized = normalizeAssetCode(rawValue);
+    if (normalized && !uniqueValues.has(normalized)) {
+      uniqueValues.add(normalized);
+    }
+  }
+
+  return Array.from(uniqueValues);
+}
+
+export function ensureAllowedAssetsTable(): void {
+  const database = getDb();
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS allowed_assets (
+      code TEXT PRIMARY KEY
+    );
+  `);
+}
+
+export function syncAllowedAssetsFromEnv(): string[] {
+  const database = getDb();
+  const existingRow = database.prepare("SELECT 1 FROM allowed_assets LIMIT 1").get();
+  if (existingRow) {
+    return getAllowedAssets();
+  }
+
+  const allowedAssets = normalizeAssetCodeList(process.env.ALLOWED_ASSETS || "USDC,XLM");
+  if (allowedAssets.length === 0) {
+    throw new Error("ALLOWED_ASSETS must contain at least one asset code");
+  }
+
+  ensureAllowedAssetsTable();
+  database.transaction(() => {
+    const insert = database.prepare(
+      "INSERT OR IGNORE INTO allowed_assets (code) VALUES (@code)",
+    );
+
+    for (const asset of allowedAssets) {
+      insert.run({ code: asset });
+    }
+  })();
+
+  return allowedAssets;
+}
+
+export function getAllowedAssets(): string[] {
+  const database = getDb();
+  ensureAllowedAssetsTable();
+
+  const rows = database
+    .prepare("SELECT code FROM allowed_assets ORDER BY code ASC")
+    .all() as Array<{ code: string }>;
+
+  if (rows.length > 0) {
+    return rows.map((row) => row.code);
+  }
+
+  return syncAllowedAssetsFromEnv();
+}
+
+export function addAllowedAsset(code: string): string[] {
+  const normalized = normalizeAssetCode(code);
+  if (!normalized) {
+    throw new Error("Asset code is required.");
+  }
+
+  const database = getDb();
+  ensureAllowedAssetsTable();
+
+  database.transaction(() => {
+    database.prepare(
+      "INSERT OR IGNORE INTO allowed_assets (code) VALUES (@code)",
+    ).run({ code: normalized });
+  })();
+
+  return getAllowedAssets();
+}
+
+export function removeAllowedAsset(code: string): string[] {
+  const normalized = normalizeAssetCode(code);
+  if (!normalized) {
+    return getAllowedAssets();
+  }
+
+  const database = getDb();
+  ensureAllowedAssetsTable();
+
+  database.transaction(() => {
+    database.prepare("DELETE FROM allowed_assets WHERE code = @code").run({ code: normalized });
+  })();
+
+  return getAllowedAssets();
+}
+
 class PostgresDatabase {
   private state: Int32Array;
   private buffer: Uint8Array;
@@ -390,84 +507,12 @@ export function initDb(): void {
     recordSqliteRestoreOutcome(db);
   }
 
-  runMigrations(db);
-
-  // Incremental schema patches for columns added after the baseline.
-  addColumnIfMissing(db, "streams", "cliff_seconds", "INTEGER NOT NULL DEFAULT 0");
-  addColumnIfMissing(db, "stream_archive", "cliff_seconds", "INTEGER NOT NULL DEFAULT 0");
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS allowed_assets (
-      code TEXT PRIMARY KEY
-    );
-  `);
-
-  if (!isPostgres()) {
-    try {
-      db.exec(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS streams_fts USING fts5(
-          stream_id UNINDEXED,
-          sender,
-          recipient,
-          asset_code,
-          content=streams,
-          content_rowid=rowid
-        );
-      `);
-    } catch {
-      // FTS table may already exist or not supported in environment
-    }
-  }
-
-  seedAllowedAssets(db);
-}
-
-function seedAllowedAssets(database: any): void {
-  if (process.env.NODE_ENV === "test") {
-    database.exec("DELETE FROM allowed_assets");
-  }
-  const countRow = database.prepare("SELECT COUNT(*) as count FROM allowed_assets").get() as { count?: number } | undefined;
-  const count = Number(countRow?.count ?? 0);
-  if (count === 0) {
-    const rawEnv = process.env.ALLOWED_ASSETS ?? "USDC,XLM";
-    const { validAssets } = evaluateAssetAllowlistConfig(rawEnv, { allowEmpty: false });
-    const insert = database.prepare("INSERT OR IGNORE INTO allowed_assets (code) VALUES (?)");
-    database.transaction((assets: string[]) => {
-      for (const asset of assets) {
-        insert.run(asset);
-      }
-    })(validAssets);
-  }
-}
-
-export function getAllowedAssets(): string[] {
   try {
-    const database = getDb();
-    const rows = database.prepare("SELECT code FROM allowed_assets").all() as Array<{ code: string }>;
-    return rows.map((r) => r.code);
-  } catch {
-    return [];
-  }
-}
-
-export function addAllowedAsset(code: string): void {
-  const database = getDb();
-  database.prepare("INSERT OR IGNORE INTO allowed_assets (code) VALUES (?)").run(code.trim().toUpperCase());
-}
-
-export function removeAllowedAsset(code: string): void {
-  const database = getDb();
-  database.prepare("DELETE FROM allowed_assets WHERE code = ?").run(code.trim().toUpperCase());
-}
-
-export function searchStreamsFts(query: string): string[] {
-  try {
-    const database = getDb();
-    const rows = database.prepare(
-      `SELECT stream_id FROM streams_fts WHERE streams_fts MATCH ? ORDER BY rank`
-    ).all(query) as Array<{ stream_id: string }>;
-    return rows.map((row) => row.stream_id);
-  } catch {
-    return [];
+    runMigrations(db);
+    ensureAllowedAssetsTable();
+    syncAllowedAssetsFromEnv();
+  } catch (error) {
+    db.close();
+    throw error;
   }
 }

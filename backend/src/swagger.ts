@@ -306,7 +306,7 @@ export const swaggerDocument = {
           },
           history: {
             type: "array",
-            description: "Chronological history of stream events.",
+            description: "Chronological history of stream events. Results are ordered by timestamp, then by event id for stable same-second ordering.",
             items: {
               $ref: "#/components/schemas/StreamEvent",
             },
@@ -1885,7 +1885,7 @@ export const swaggerDocument = {
       get: {
         summary: "Get Stream History",
         description:
-          "Retrieves the complete event history for a specific stream.",
+          "Retrieves the complete event history for a specific stream. Results are ordered by timestamp, then by event id for a stable same-second sequence.",
         parameters: [
           {
             name: "id",

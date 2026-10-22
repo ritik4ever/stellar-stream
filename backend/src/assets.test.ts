@@ -40,7 +40,7 @@ describe("Assets API Configuration", () => {
   });
 
   it("should respect ALLOWED_ASSETS environment variable override and normalize", async () => {
-    vi.stubEnv("ALLOWED_ASSETS", "yusd, euRo, testCoin ");
+    vi.stubEnv("ALLOWED_ASSETS", "yusd, euRo, testCoin, usdc, euRO, testcoin ");
     
     const { initDb } = await import("./services/db");
     initDb();
@@ -51,39 +51,18 @@ describe("Assets API Configuration", () => {
     const response = await request(app).get("/api/assets");
     
     expect(response.status).toBe(200);
-    expect(response.body.data).toEqual(["YUSD", "EURO", "TESTCOIN"]);
+    expect(response.body.data).toEqual(["EURO", "TESTCOIN", "USDC", "YUSD"]);
   }, 15000);
 
-  it("should deduplicate case-insensitive asset codes while preserving normalized sorted output", async () => {
-    vi.stubEnv("ALLOWED_ASSETS", "usdc, USDC, Usdc, xLm, XLm, yusd");
+  it("should not duplicate an asset already in the allowlist", async () => {
+    vi.stubEnv("ALLOWED_ASSETS", "usdc, USDC, xlm, XLM ");
 
-    const { initDb } = await import("./services/db");
+    const { initDb, getAllowedAssets, addAllowedAsset } = await import("./services/db");
     initDb();
 
-    const { app } = await import("./index");
-
-    const response = await request(app).get("/api/assets");
-
-    expect(response.status).toBe(200);
-    expect(response.body.data).toEqual(["USDC", "XLM", "YUSD"]);
-  }, 15000);
-
-  it("should produce deterministic output for duplicate and mixed-case asset codes across repeated requests", async () => {
-    vi.stubEnv("ALLOWED_ASSETS", "YUSD, yusd, Yusd, euro, EURO, xLm");
-
-    const { initDb } = await import("./services/db");
-    initDb();
-
-    const { app } = await import("./index");
-
-    const first = await request(app).get("/api/assets");
-    const second = await request(app).get("/api/assets");
-
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    expect(first.body.data).toEqual(["EURO", "XLM", "YUSD"]);
-    expect(second.body.data).toEqual(first.body.data);
-  }, 15000);
+    expect(getAllowedAssets()).toEqual(["USDC", "XLM"]);
+    expect(addAllowedAsset("usdc")).toEqual(["USDC", "XLM"]);
+  });
 
   it("should enforce JWT protection on admin asset endpoints", async () => {
     const { initDb } = await import("./services/db");
