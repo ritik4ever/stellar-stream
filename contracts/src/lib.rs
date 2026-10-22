@@ -541,6 +541,27 @@ impl StellarStreamContract {
         )
     }
 
+    /// Creates a stream and escrows exactly `total_amount` tokens from `sender`.
+    ///
+    /// # Escrow amount boundaries
+    ///
+    /// | `total_amount` | Result |
+    /// |---|---|
+    /// | `<= 0` (including `0` and `i128::MIN`) | panics with `"total_amount must be positive"`; nothing is transferred and no stream record is written |
+    /// | `1` | accepted — the smallest representable escrow; vesting floor-rounds to `0` until `end_time` |
+    /// | `2 ..= i128::MAX` | accepted when the sender's balance covers it; vesting is exact at every point of the schedule (see [`vested_amount`]) |
+    /// | greater than the sender's balance | panics with `"insufficient sender balance"` before any transfer |
+    ///
+    /// # Failure ordering (escrow vs. storage)
+    ///
+    /// The token transfer is attempted **before** any stream state is written.
+    /// If either the balance pre-check or the transfer itself fails, the whole
+    /// invocation is rolled back by the host: no `Stream` record, no
+    /// `NextStreamId` increment, and no balance movement survive.  Callers can
+    /// therefore treat a failed creation as having had no effect at all.
+    ///
+    /// `create_stream_from_template` shares this behavior; `create_split_stream`
+    /// has the additional `allocations == total_amount` rule documented there.
     #[allow(clippy::too_many_arguments)]
     pub fn create_stream(
         env: Env,
@@ -568,6 +589,21 @@ impl StellarStreamContract {
         )
     }
 
+    /// Creates a parent stream id plus one vesting child stream per recipient,
+    /// escrowing exactly `total_amount` tokens from `sender`.
+    ///
+    /// # Allocation boundaries
+    ///
+    /// | Condition | Result |
+    /// |---|---|
+    /// | `recipients` is empty | panics with `"recipients must not be empty"` |
+    /// | any single allocation `<= 0` | panics with `"allocation must be positive"` |
+    /// | allocations sum to less or more than `total_amount` | panics with `"allocations must equal total_amount"` |
+    /// | allocations sum overflows `i128` | panics with `"allocations must equal total_amount"` — the running total is checked, so it can never wrap into a value that satisfies the equality test |
+    ///
+    /// Validation happens in the same invocation as the escrow transfer, so a
+    /// rejected split reverts the transfer: no tokens move, no child `Stream`
+    /// record is persisted, and `NextStreamId` is not advanced.
     pub fn create_split_stream(
         env: Env,
         sender: Address,
@@ -623,7 +659,14 @@ impl StellarStreamContract {
             if allocation <= 0 {
                 panic!("allocation must be positive");
             }
-            allocated_total += allocation;
+            // Checked accumulation: a sum that cannot be represented in `i128`
+            // is not a valid allocation set, so it must fail with the same
+            // defined error as any other mismatch instead of wrapping (which
+            // under `overflow-checks = false` could satisfy the equality test
+            // below and escrow more than `total_amount`).
+            allocated_total = allocated_total
+                .checked_add(allocation)
+                .expect("allocations must equal total_amount");
 
             next_id += 1;
             let child_stream_id = next_id;
@@ -740,7 +783,10 @@ impl StellarStreamContract {
     pub fn claimable(env: Env, stream_id: u64, at_time: u64) -> i128 {
         let stream = read_stream(&env, stream_id);
         let vested = vested_amount(&stream, at_time);
-        vested.checked_sub(stream.claimed_amount).unwrap_or(0).max(0)
+        vested
+            .checked_sub(stream.claimed_amount)
+            .unwrap_or(0)
+            .max(0)
     }
 
     /// Batch variant of [`claimable`].  Returns a map of stream_id → claimable
@@ -759,7 +805,10 @@ impl StellarStreamContract {
             let amount = match stream_opt {
                 Some(stream) => {
                     let vested = vested_amount(&stream, at_time);
-                    vested.checked_sub(stream.claimed_amount).unwrap_or(0).max(0)
+                    vested
+                        .checked_sub(stream.claimed_amount)
+                        .unwrap_or(0)
+                        .max(0)
                 }
                 None => 0,
             };
@@ -1406,6 +1455,8 @@ where
 /// | `at_time` in `[start_time, end_time)` | `total_amount * elapsed / duration`, floor-rounded |
 /// | `at_time >= end_time` | `total_amount` — stream fully vested; clamped |
 /// | `total_duration == 0` | `0` — degenerate stream guard (prevents divide-by-zero) |
+/// | `total_amount == 1` | `0` until `at_time == end_time`, then `1` (floor rounding) |
+/// | `total_amount == i128::MAX` | the exact floor quotient — vesting is never truncated to `0` |
 /// | stream is **paused** | `at_time` is overridden by `pause_started_at` so vesting is frozen |
 ///
 /// # Rounding
@@ -1415,8 +1466,19 @@ where
 ///
 /// # Arithmetic safety
 ///
-/// The multiplication `total_amount * elapsed` is performed with
-/// `checked_mul`, saturating to `0` on overflow rather than panicking.
+/// `total_amount * elapsed / duration` is evaluated as
+/// `(total_amount / duration) * elapsed + (total_amount % duration) * elapsed / duration`
+/// so the intermediate product never has to be represented.  Because
+/// `elapsed <= duration` for every input:
+///
+/// * `(total_amount / duration) * elapsed <= total_amount`, so it fits `i128`;
+/// * `(total_amount % duration) * elapsed < duration²  <= 2¹²⁸`, so it fits `u128`.
+///
+/// The result is therefore the exact floor quotient for **every** amount up to
+/// and including `i128::MAX`, and it is always `<= total_amount`.  Earlier
+/// builds computed `total_amount.checked_mul(elapsed).unwrap_or(0)`, which made
+/// any amount large enough to overflow the product vest as `0` for the whole
+/// life of the stream — an escrowed-but-never-claimable stream.  See #1124.
 fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
     let effective_now = if stream.paused {
         stream.pause_started_at.unwrap_or(at_time)
@@ -1437,15 +1499,22 @@ fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
     let elapsed = effective_time.saturating_sub(stream.start_time);
     let total_duration = stream.end_time.saturating_sub(stream.start_time);
 
-    if total_duration == 0 {
+    // Degenerate guards: a zero-length window has no schedule to prorate
+    // against, and a non-positive amount has nothing to vest.
+    if total_duration == 0 || stream.total_amount <= 0 {
         return 0;
     }
 
-    stream
-        .total_amount
-        .checked_mul(elapsed as i128)
-        .unwrap_or(0)
-        / (total_duration as i128)
+    let total = stream.total_amount;
+    let duration = total_duration as i128;
+    let whole = total / duration;
+    let remainder = total % duration;
+
+    let whole_part = whole * elapsed as i128;
+    let fraction_part =
+        ((remainder as u128) * (elapsed as u128) / (total_duration as u128)) as i128;
+
+    whole_part + fraction_part
 }
 
 #[cfg(test)]
