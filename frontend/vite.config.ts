@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -17,6 +18,17 @@ const securityHeaders = {
 };
 
 export default defineConfig(({ command, mode }) => ({
+  resolve: {
+    alias:
+      process.env.VITE_E2E_MOCK_FREIGHTER === 'true'
+        ? {
+            '@stellar/freighter-api': path.resolve(
+              __dirname,
+              'tests/e2e/mocks/freighter-mock.ts',
+            ),
+          }
+        : undefined,
+  },
   plugins: [
     react(),
     {
@@ -49,15 +61,15 @@ export default defineConfig(({ command, mode }) => ({
         });
       },
     },
-    ...(mode === 'analyze' ? [visualizer({ 
-      open: process.env.CI !== 'true',
-      filename: 'dist/stats.html',
-      gzipSize: true,
-    })] : []),
-    // Only enable PWA plugin when not running in CI (GitHub Actions sets CI=true).
-    // Some CI environments cause workbox validation to fail; skipping the plugin
-    // in CI ensures the build completes reliably. To test PWA locally, run
-    // without CI=true.
+    ...(mode === 'analyze'
+      ? [
+          visualizer({
+            open: process.env.CI !== 'true',
+            filename: 'dist/stats.html',
+            gzipSize: true,
+          }),
+        ]
+      : []),
     ...(process.env.CI === 'true'
       ? []
       : [
