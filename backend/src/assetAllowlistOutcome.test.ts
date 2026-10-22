@@ -10,7 +10,7 @@ import {
   assetAllowlistLatencyMs,
 } from "./services/metrics";
 
-describe("Asset allowlist outcome signals & boundary normalization (SSB-2026-124 / #1067)", () => {
+describe("Asset allowlist outcome signals & boundary normalization (SSB-2026-121 / #1067)", () => {
   beforeEach(() => {
     resetAssetAllowlistOutcome();
   });
@@ -39,6 +39,24 @@ describe("Asset allowlist outcome signals & boundary normalization (SSB-2026-124
       expect(signal.duplicateCount).toBe(0);
       expect(signal.outcome).toBe("success");
     });
+
+    it("preserves normalized sorted asset list order deterministically across duplicate inputs", () => {
+      const a = evaluateAssetAllowlistConfig("XLM,USDC,XLM,USDC");
+      resetAssetAllowlistOutcome();
+      const b = evaluateAssetAllowlistConfig("xlm,usdc,Xlm,Usdc");
+
+      expect(a.validAssets).toEqual(["XLM", "USDC"]);
+      expect(b.validAssets).toEqual(a.validAssets);
+      expect(a.signal.outcomeCode).toBe(b.signal.outcomeCode);
+    });
+
+    it("treats duplicate-only mixed-case input as success with stable outcome", () => {
+      const { validAssets, signal } = evaluateAssetAllowlistConfig("usdc,USDC,Usdc");
+
+      expect(validAssets).toEqual(["USDC"]);
+      expect(signal.outcomeCode).toBe(ASSET_ALLOWLIST_OUTCOME_CODES.success);
+      expect(signal.duplicateCount).toBe(2);
+    });
   });
 
   describe("Invalid configuration on startup", () => {
@@ -53,7 +71,7 @@ describe("Asset allowlist outcome signals & boundary normalization (SSB-2026-124
     });
 
     it("emits blocked outcome signal when asset codes violate length or character constraints", () => {
-      const raw = "USDC,TOOLONGASSETCODE123,VALID,INVALID@CODE";
+      const raw = "USDC,TOOLONGASSETCODE123,VALID,RNVALID$CODE";
       const { validAssets, signal } = evaluateAssetAllowlistConfig(raw);
 
       expect(validAssets).toEqual(["USDC", "VALID"]);
@@ -73,6 +91,16 @@ describe("Asset allowlist outcome signals & boundary normalization (SSB-2026-124
       expect(signal.outcomeCode).toBe(ASSET_ALLOWLIST_OUTCOME_CODES.blocked);
       expect(signal.hasInvalidCodes).toBe(true);
       expect(signal.isNormalEmpty).toBe(false);
+    });
+
+    it("emits blocked outcome when invalid codes are mixed with duplicates", () => {
+      const raw = "USDC,usdc,TOOLONGASSETCODE123,USDC";
+      const { validAssets, signal } = evaluateAssetAllowlistConfig(raw);
+
+      expect(validAssets).toEqual(["USDC"]);
+      expect(signal.outcomeCode).toBe(ASSET_ALLOWLIST_OUTCOME_CODES.blocked);
+      expect(signal.hasInvalidCodes).toBe(true);
+      expect(signal.duplicateCount).toBe(2);
     });
   });
 
@@ -94,7 +122,7 @@ describe("Asset allowlist outcome signals & boundary normalization (SSB-2026-124
 
   describe("Actionable latency and correlation linking", () => {
     it("records non-negative latency and links requestId, correlationId, and streamId", () => {
-      const { signal } = evaluateAssetAllowlistConfig("USDC,XLM", {
+      const { signal } = evaluateAssetAllowlistConfig("uSDC,XLM", {
         requestId: "req-12345",
         correlationId: "corr-67890",
         streamId: "stream-abc",

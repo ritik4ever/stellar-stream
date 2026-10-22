@@ -77,6 +77,13 @@ export function resetAssetAllowlistOutcome(): void {
 /**
  * Evaluates, normalizes, and deduplicates raw asset codes from configuration or requests,
  * surfacing structured outcome and latency signals.
+ *
+ * Boundary semantics (documented, deterministic):
+ * - Asset codes are trimmed, uppercased (mixed-case normalized), and deduplicated in first-seen
+ *   order. The resulting `validAssets` list is stable and never silently reordered.
+ * - Duplicates (including mixed-case variants of the same code) are stripped and counted;
+ *   this is a `success` outcome.
+ * - Empty tokens and malformed codes are treated as invalid configuration (`blocked`).
  */
 export function evaluateAssetAllowlistConfig(
   rawInput: string | undefined,
@@ -91,7 +98,7 @@ export function evaluateAssetAllowlistConfig(
   validAssets: string[];
   signal: AssetAllowlistOutcomeSignal;
 } {
-  const start = context?.startPerf ?? Date.now();
+  const start = context?.startPerf ?? date.now();
   const rawString = typeof rawInput === "string" ? rawInput.trim() : "";
   const allowEmpty = context?.allowEmpty ?? false;
 

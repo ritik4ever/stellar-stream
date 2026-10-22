@@ -129,9 +129,38 @@ const STREAM_HISTORY_MAX_LIMIT = 200;
 
 export const app = express();
 const port = Number(process.env.PORT ?? 3001);
-const ALLOWED_ASSETS = (process.env.ALLOWED_ASSETS || "USDC,XLM")
-  .split(",")
-  .map((asset) => asset.trim().toUpperCase());
+const ASSET_CODE_REGEX = /^[A-Za-z0-9]{1,12}$/;
+
+/**
+ * Parse and validate the ALLOWED_ASSETS environment configuration.
+ *
+ * Boundary semantics (documented, deterministic):
+ * - Each entry is trimmed and upper-cased (mixed-case input is normalized).
+ * - Empty entries (e.g. from trailing commas) are ignored.
+ * - Duplicate entries (case-insensitive, post-normalization) are collapsed.
+ * - The resulting list is de-duplicated and sorted for a stable order.
+ * - If any entry is not 1-12 alphanumeric characters, startup fails with an
+ *   explicit error (invalid configuration on startup) rather than silently
+ *   dropping or accepting it.
+ */
+export function parseAllowedAssetsConfig(raw: string | undefined): string[] {
+  const source = raw === undefined ? "USDC,XLM" : raw;
+  const entries = source
+    .split(",")
+    .map((asset) => asset.trim().toUpperCase())
+    .filter((asset) => asset.length > 0);
+
+  const invalid = entries.filter((asset) => !ASSET_CODE_REGEX.test(asset));
+  if (invalid.length > 0) {
+    throw new Error(
+      `Invalid ALLOWED_ASSETS configuration: ${invalid
+        .map((asset) => JSON.stringify(asset))
+        .join(", ")} must be 1-12 alphanumeric characters.`,
+    );
+  }
+
+  return Array.from(new Set(entries)).sort();
+}
 
 const SORT_FIELDS = ["totalAmount", "startAt", "createdAt", "durationSeconds"] as const;
 const SORT_ORDERS = ["asc", "desc"] as const;
@@ -498,7 +527,9 @@ app.get(
 
 app.get("/api/assets", (req: Request, res: Response) => {
   const startPerf = Date.now();
-  const assets = getAllowedAssets();
+  // Guarantee a stable, normalized, sorted, de-duplicated list regardless of
+  // insertion order or duplicate rows in the backing store.
+  const assets = Array.from(new Set(getAllowedAssets().map((a) => a.toUpperCase()))).sort();
   const latencyMs = Math.max(0, Date.now() - startPerf);
   const isNormalEmpty = assets.length === 0;
 
@@ -535,7 +566,6 @@ app.post("/api/admin/assets", adminJwtAuth, (req: Request, res: Response) => {
     return;
   }
   const cleanCode = code.trim().toUpperCase();
-  const ASSET_CODE_REGEX = /^[A-Za-z0-9]{1,12}$/;
   if (!ASSET_CODE_REGEX.test(cleanCode)) {
     sendApiError(req, res, 400, "Asset code must be 1–12 alphanumeric characters.", { code: "VALIDATION_ERROR" });
     return;
@@ -702,7 +732,6 @@ app.get("/api/streams/search", readLimiter, (req: Request, res: Response) => {
   }
 
   // --- validate optional asset filter ---
-  const ASSET_CODE_REGEX = /^[A-Za-z0-9]{1,12}$/;
   const assetResult = z
     .string()
     .regex(ASSET_CODE_REGEX, "asset must be 1–12 alphanumeric characters (e.g. USDC, XLM)")
@@ -2510,3 +2539,13 @@ app.delete("/api/streams/:id", adminAuth, (req: Request, res: Response) => {
     );
   }
 });
+
+// Validate the allowlist configuration at module load so that invalid
+// ALLOWED_ASSETS values fail fast on startup with an explicit error instead of
+// silently producing an empty or malformed list.
+try {
+  parseAllowedAssetsConfig(process.env.ALLOWED_ASSETS);
+} catch (error) {
+  logger.error({ err: error }, "invalid ALLOWED_ASSETS configuration");
+  throw error;
+}
