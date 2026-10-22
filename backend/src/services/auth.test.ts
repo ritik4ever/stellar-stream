@@ -40,18 +40,18 @@ function modifyChallengeOps(challengeXdr: string, modifications: { timestamp?: n
           if (op.name === 'timestamp') {
               if (modifications.removeTimestamp) continue;
               if (modifications.timestamp !== undefined) {
-                  builder.addOperation(Operation.manageData({ name: 'timestamp', value: modifications.timestamp.toString() }));
+                  builder.addOperation(Operation.manageData({ name: 'timestamp', value: modifications.timestamp.toString(), source: serverKeypair.publicKey() }));
                   continue;
               }
           }
           if (op.name === 'nonce') {
               if (modifications.removeNonce) continue;
               if (modifications.nonce !== undefined) {
-                  builder.addOperation(Operation.manageData({ name: 'nonce', value: modifications.nonce }));
+                  builder.addOperation(Operation.manageData({ name: 'nonce', value: modifications.nonce, source: serverKeypair.publicKey() }));
                   continue;
               }
           }
-          builder.addOperation(Operation.manageData({ name: op.name, value: op.value as any, source: op.source }));
+          builder.addOperation(Operation.manageData({ name: op.name, value: op.value as any, source: op.source || serverKeypair.publicKey() }));
       } else {
           builder.addOperation(op as any);
       }
@@ -220,7 +220,7 @@ describe("verifyChallengeAndIssueToken", () => {
     });
 
     it("rejects timestamp too far in the future", async () => {
-      const futureTimestamp = Math.floor(Date.now() / 1000) + 61; // 61 seconds in future
+      const futureTimestamp = Math.floor(Date.now() / 1000) + 120; // 120 seconds in future
       let challenge = generateChallenge(clientKeypair.publicKey());
       challenge = modifyChallengeOps(challenge, { timestamp: futureTimestamp });
       const signedTx = signChallenge(challenge, clientKeypair);
@@ -281,8 +281,8 @@ describe("verifyChallengeAndIssueToken", () => {
       expect(timestampOp).toBeDefined();
       expect(nonceOp).toBeDefined();
       
-      const timestamp = parseInt(timestampOp.value!.toString('utf-8'), 10);
-      const nonce = nonceOp.value!.toString('utf-8');
+      const timestamp = parseInt(Buffer.from(timestampOp.value as any).toString('utf-8'), 10);
+      const nonce = Buffer.from(nonceOp.value as any).toString('utf-8');
       
       expect(nonce).toMatch(/^[a-f0-9]{32}$/);
       

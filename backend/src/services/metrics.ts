@@ -110,3 +110,27 @@ export const streamProgressClockSkewTotal = new Counter({
   registers: [register],
 });
 
+export const authChallengeOutcome = new Gauge({
+  name: "auth_challenge_outcome",
+  help: "Authentication challenge verification outcome: 0=success, 1=transient_delay, 2=blocked",
+  registers: [register],
+});
+
+export const authChallengeDurationSeconds = new Gauge({
+  name: "auth_challenge_duration_seconds",
+  help: "Latency of the most recent authentication challenge verification in seconds",
+  registers: [register],
+});
+
+export const authChallengeWrongNetworkTotal = new Counter({
+  name: "auth_challenge_wrong_network_total",
+  help: "Total number of challenge verification failures caused by wallet signing for the wrong network",
+  registers: [register],
+});
+
+export const authChallengeReplayTotal = new Counter({
+  name: "auth_challenge_replay_total",
+  help: "Total number of challenge verification failures caused by reused nonces (replay attacks)",
+  registers: [register],
+});
+
