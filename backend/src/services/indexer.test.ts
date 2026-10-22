@@ -54,6 +54,7 @@ import {
   resetIndexerState,
   getIndexerMonitoringSnapshot,
   classifyRpcFailure,
+  runIndexerBackfill,
 } from "./indexer";
 
 beforeEach(() => {
@@ -651,5 +652,183 @@ describe("classifyRpcFailure", () => {
     expect(classifyRpcFailure({ status: 500 })).toBe("provider_error");
     expect(classifyRpcFailure(new Error("weird failure"))).toBe("unknown");
     expect(classifyRpcFailure(undefined)).toBe("unknown");
+  });
+});
+
+describe("runIndexerBackfill — first page at configured start ledger and RPC truncation/delay", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.INDEXER_START_LEDGER;
+    delete process.env.INDEXER_FALLBACK_POLLING_ENABLED;
+  });
+
+  afterEach(() => {
+    delete process.env.INDEXER_START_LEDGER;
+    delete process.env.INDEXER_FALLBACK_POLLING_ENABLED;
+  });
+
+  it("returns 200 OK and advances persisted checkpoint when first page at configured start ledger completes cleanly", async () => {
+    const cid = nextContractId();
+    setupDb(cid, 100);
+    process.env.INDEXER_START_LEDGER = "500";
+    mockGetLatestLedger.mockResolvedValue({ sequence: 550 });
+    const event = makeClaimedEvent({ streamId: "9", ledger: 510 });
+    mockGetEvents.mockResolvedValueOnce({ events: [event], cursor: undefined });
+
+    initIndexer("https://rpc.example.com", cid);
+    // Before running backfill, persisted checkpoint in DB must still be 100
+    const beforeRow = db.prepare("SELECT last_ledger_sequence FROM indexer_cursor WHERE id = 1").get() as { last_ledger_sequence: number };
+    expect(beforeRow.last_ledger_sequence).toBe(100);
+
+    const result = await runIndexerBackfill();
+
+    expect(result.ok).toBe(true);
+    expect(result.statusCode).toBe(200);
+    expect(result.outcome).toBe("success");
+    expect(result.code).toBe("OK");
+    expect(result.startLedger).toBe(501);
+    expect(result.persistedCheckpointBefore).toBe(100);
+    expect(result.persistedCheckpointAfter).toBe(550);
+    expect(result.eventsIndexed).toBe(1);
+    expect(result.pagesFetched).toBe(1);
+    expect(result.truncated).toBe(false);
+    expect(mockGetEvents).toHaveBeenCalledWith(expect.objectContaining({ startLedger: 501 }));
+  });
+
+  it("returns 400 INVALID_START_LEDGER and does not change persisted checkpoint on invalid startLedger input", async () => {
+    const cid = nextContractId();
+    setupDb(cid, 250);
+    mockGetLatestLedger.mockResolvedValue({ sequence: 300 });
+
+    initIndexer("https://rpc.example.com", cid);
+
+    const negResult = await runIndexerBackfill({ startLedger: -5 });
+    expect(negResult.ok).toBe(false);
+    expect(negResult.statusCode).toBe(400);
+    expect(negResult.outcome).toBe("invalid_start_ledger");
+    expect(negResult.code).toBe("INVALID_START_LEDGER");
+    expect(negResult.persistedCheckpointBefore).toBe(250);
+    expect(negResult.persistedCheckpointAfter).toBe(250);
+    expect(mockGetEvents).not.toHaveBeenCalled();
+
+    const nanResult = await runIndexerBackfill({ startLedger: "not-a-ledger" });
+    expect(nanResult.ok).toBe(false);
+    expect(nanResult.statusCode).toBe(400);
+    expect(nanResult.code).toBe("INVALID_START_LEDGER");
+    expect(nanResult.persistedCheckpointAfter).toBe(250);
+  });
+
+  it("returns 400 INVALID_START_LEDGER when INDEXER_START_LEDGER env var is malformed without changing persisted checkpoint", async () => {
+    const cid = nextContractId();
+    setupDb(cid, 250);
+    process.env.INDEXER_START_LEDGER = "-100";
+    mockGetLatestLedger.mockResolvedValue({ sequence: 300 });
+
+    initIndexer("https://rpc.example.com", cid);
+    const result = await runIndexerBackfill();
+
+    expect(result.ok).toBe(false);
+    expect(result.statusCode).toBe(400);
+    expect(result.outcome).toBe("invalid_start_ledger");
+    expect(result.code).toBe("INVALID_START_LEDGER");
+    expect(result.persistedCheckpointBefore).toBe(250);
+    expect(result.persistedCheckpointAfter).toBe(250);
+  });
+
+  it("returns 200 NO_NEW_LEDGERS and preserves persisted checkpoint when configured startLedger is at or ahead of RPC head", async () => {
+    const cid = nextContractId();
+    setupDb(cid, 200);
+    process.env.INDEXER_START_LEDGER = "600";
+    mockGetLatestLedger.mockResolvedValue({ sequence: 550 });
+
+    initIndexer("https://rpc.example.com", cid);
+    const result = await runIndexerBackfill();
+
+    expect(result.ok).toBe(true);
+    expect(result.statusCode).toBe(200);
+    expect(result.outcome).toBe("success");
+    expect(result.code).toBe("NO_NEW_LEDGERS");
+    expect(result.persistedCheckpointBefore).toBe(200);
+    expect(result.persistedCheckpointAfter).toBe(200);
+    expect(mockGetEvents).not.toHaveBeenCalled();
+
+    const row = db.prepare("SELECT last_ledger_sequence FROM indexer_cursor WHERE id = 1").get() as { last_ledger_sequence: number };
+    expect(row.last_ledger_sequence).toBe(200);
+  });
+
+  it("returns 200 TRUNCATED_PAGE and does not advance persisted checkpoint when RPC truncates or delays first page (empty events with cursor)", async () => {
+    const cid = nextContractId();
+    setupDb(cid, 300);
+    process.env.INDEXER_START_LEDGER = "400";
+    mockGetLatestLedger.mockResolvedValue({ sequence: 500 });
+    mockGetEvents.mockResolvedValueOnce({ events: [], cursor: "delayed-page-cursor" });
+
+    initIndexer("https://rpc.example.com", cid);
+    const result = await runIndexerBackfill();
+
+    expect(result.ok).toBe(true);
+    expect(result.statusCode).toBe(200);
+    expect(result.outcome).toBe("transient_delay");
+    expect(result.code).toBe("TRUNCATED_PAGE");
+    expect(result.truncated).toBe(true);
+    expect(result.persistedCheckpointBefore).toBe(300);
+    expect(result.persistedCheckpointAfter).toBe(300);
+
+    const row = db.prepare("SELECT last_ledger_sequence FROM indexer_cursor WHERE id = 1").get() as { last_ledger_sequence: number };
+    expect(row.last_ledger_sequence).toBe(300);
+  });
+
+  it("returns 200 TRUNCATED_PAGE and preserves persisted checkpoint when RPC returns a repeating cursor during pagination", async () => {
+    const cid = nextContractId();
+    setupDb(cid, 300);
+    mockGetLatestLedger.mockResolvedValue({ sequence: 500 });
+    const event1 = makeClaimedEvent({ streamId: "1", ledger: 310 });
+    mockGetEvents
+      .mockResolvedValueOnce({ events: [event1], cursor: "stuck-cursor" })
+      .mockResolvedValueOnce({ events: [event1], cursor: "stuck-cursor" });
+
+    initIndexer("https://rpc.example.com", cid);
+    const result = await runIndexerBackfill();
+
+    expect(result.ok).toBe(true);
+    expect(result.statusCode).toBe(200);
+    expect(result.outcome).toBe("transient_delay");
+    expect(result.code).toBe("TRUNCATED_PAGE");
+    expect(result.truncated).toBe(true);
+    expect(result.persistedCheckpointBefore).toBe(300);
+    expect(result.persistedCheckpointAfter).toBe(300);
+  });
+
+  it("returns deterministic error status codes (429, 503, 502) and preserves persisted checkpoint when first page fails at configured start ledger", async () => {
+    const cid = nextContractId();
+    setupDb(cid, 300);
+    process.env.INDEXER_START_LEDGER = "450";
+    mockGetLatestLedger.mockResolvedValue({ sequence: 500 });
+
+    initIndexer("https://rpc.example.com", cid);
+
+    // 429 Rate limited
+    mockGetEvents.mockRejectedValueOnce(Object.assign(new Error("429 Too Many Requests"), { status: 429 }));
+    const rateLimited = await runIndexerBackfill({ startLedger: 450 });
+    expect(rateLimited.ok).toBe(false);
+    expect(rateLimited.statusCode).toBe(429);
+    expect(rateLimited.code).toBe("RATE_LIMITED");
+    expect(rateLimited.persistedCheckpointAfter).toBe(300);
+
+    // 503 Disconnected
+    mockGetEvents.mockRejectedValueOnce(new Error("socket hang up"));
+    const disconnected = await runIndexerBackfill({ startLedger: 450 });
+    expect(disconnected.ok).toBe(false);
+    expect(disconnected.statusCode).toBe(503);
+    expect(disconnected.code).toBe("DISCONNECTED");
+    expect(disconnected.persistedCheckpointAfter).toBe(300);
+
+    // 502 Provider error
+    mockGetEvents.mockRejectedValueOnce({ status: 500, message: "Internal RPC Error" });
+    const providerErr = await runIndexerBackfill({ startLedger: 450 });
+    expect(providerErr.ok).toBe(false);
+    expect(providerErr.statusCode).toBe(502);
+    expect(providerErr.code).toBe("PROVIDER_ERROR");
+    expect(providerErr.persistedCheckpointAfter).toBe(300);
   });
 });

@@ -852,13 +852,16 @@ impl StellarStreamContract {
         let token_client = TokenClient::new(&env, &actual_token);
         let contract_address = env.current_contract_address();
 
-        token_client.transfer(&contract_address, &recipient, &amount);
-
+        // Effects before interaction: persist accounting first so the external token
+        // call cannot observe stale state. A failing transfer aborts the invocation,
+        // rolling back this write together with any partial balance changes.
         stream.claimed_amount += amount;
         stream.last_claim_time = now;
         env.storage()
             .persistent()
             .set(&DataKey::Stream(stream_id), &stream);
+
+        token_client.transfer(&contract_address, &recipient, &amount);
 
         let new_claimed_total = stream.claimed_amount;
 

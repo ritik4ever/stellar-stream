@@ -7156,6 +7156,46 @@ fn test_claimable_calculation_failure_is_atomic_and_rounding_across_partial_clai
     assert_eq!(token_client.balance(&contract_id), 0);
 }
 
+#[test]
+fn test_partial_claim_one_unit_then_remaining_transfer_failure_is_atomic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let thief = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+    token_admin.mint(&sender, &1000);
+    let stream_id = client.create_stream(&sender, &recipient, &token, &1000, &0, &1000, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    client.claim(&stream_id, &recipient, &1);
+    let before = client.get_stream(&stream_id);
+    assert_eq!(token_client.balance(&recipient), 1);
+
+    // Drain the contract so the next token transfer fails after authorization.
+    token_client.transfer(&contract_id, &thief, &999);
+
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    assert!(client.try_claim(&stream_id, &recipient, &999).is_err());
+
+    let after = client.get_stream(&stream_id);
+    assert_eq!(after.claimed_amount, before.claimed_amount);
+    assert_eq!(after.last_claim_time, before.last_claim_time);
+    assert_eq!(token_client.balance(&recipient), 1);
+    assert_eq!(token_client.balance(&contract_id), 0);
+
+    // Recoverable: once funds are restored the remaining claim succeeds.
+    token_client.transfer(&thief, &contract_id, &999);
+    client.claim(&stream_id, &recipient, &999);
+    assert_eq!(token_client.balance(&recipient), 1000);
+    assert_eq!(client.get_stream(&stream_id).claimed_amount, 1000);
+}
+
 // =============================================================================
 // #1129 — Specify edge behavior for Claimable calculation
 //

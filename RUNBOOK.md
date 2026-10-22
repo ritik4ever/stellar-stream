@@ -480,8 +480,8 @@ Both `JWT_SECRET` and `SERVER_SIGNING_KEY` can be rotated simultaneously by upda
 
 **Expected Output:**
 
-- Backend logs show: `INDEXER_START_LEDGER override active: starting from ledger 1234567`.
-- The indexer will process events starting from that ledger, potentially updating local records.
+- Backend logs show: `INDEXER_START_LEDGER override active` and `applied INDEXER_START_LEDGER override to checkpoint`.
+- The indexer will process events starting from `INDEXER_START_LEDGER + 1`, updating the persisted `indexer_cursor` checkpoint only after the backfill scan completes cleanly without RPC page truncation, delay, or boundary errors.
 
 ---
 
