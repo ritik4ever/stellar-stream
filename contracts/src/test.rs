@@ -3578,7 +3578,7 @@ fn test_claim_allowed_after_interval_elapses() {
 // #695 — DAO governance scaffold
 // =============================================================================
 
-fn setup_dao(env: &Env) -> (dao::DaoContractClient, Address, Address, i128) {
+fn setup_dao(env: &Env) -> (dao::DaoContractClient<'_>, Address, Address, i128) {
     let contract_id = env.register_contract(None, dao::DaoContract);
     let client = dao::DaoContractClient::new(env, &contract_id);
     let admin = Address::generate(env);
@@ -5766,7 +5766,7 @@ fn test_contract_event_order_events_aligned_with_state() {
     assert_eq!(stream_after_create.recipient, recipient);
     assert_eq!(stream_after_create.total_amount, 2_000);
     assert_eq!(stream_after_create.claimed_amount, 0);
-    assert_eq!(stream_after_create.canceled, false);
+    assert!(!stream_after_create.canceled);
 
     // 2. Claim partial at t=150 (50% vested = 1000)
     env.ledger().set_timestamp(150);
@@ -5784,7 +5784,7 @@ fn test_contract_event_order_events_aligned_with_state() {
     assert!(env.events().all().len() > events_count_before_cancel);
 
     let stream_after_cancel = client.get_stream(&stream_id);
-    assert_eq!(stream_after_cancel.canceled, true);
+    assert!(stream_after_cancel.canceled);
 
     // 4. Failed call post-cancellation produces zero events
     let events_count_after_cancel = env.events().all().len();
@@ -5900,7 +5900,7 @@ fn test_contract_event_order_atomic_failure_rollback() {
     let unauth_cancel = client.try_cancel(&stream_id, &stranger);
     assert!(unauth_cancel.is_err());
     assert_eq!(token_client.balance(&contract_id), 600);
-    assert_eq!(client.get_stream(&stream_id).canceled, false);
+    assert!(!client.get_stream(&stream_id).canceled);
     assert_eq!(env.events().all().len(), events_before_stranger);
 
     // 4. Valid cancel succeeds: unvested 500 refunded to sender, contract retains 100 vested for recipient
@@ -5908,7 +5908,7 @@ fn test_contract_event_order_atomic_failure_rollback() {
     assert_eq!(token_client.balance(&sender), 500);
     assert_eq!(token_client.balance(&recipient), 400);
     assert_eq!(token_client.balance(&contract_id), 100);
-    assert_eq!(client.get_stream(&stream_id).canceled, true);
+    assert!(client.get_stream(&stream_id).canceled);
 }
 
 // =============================================================================
@@ -5951,7 +5951,7 @@ fn test_contract_event_order_edge_amounts_and_zero_boundary() {
     client.cancel(&stream_id, &sender);
     assert_eq!(token_client.balance(&sender), 99);
     assert_eq!(token_client.balance(&contract_id), 0);
-    assert_eq!(client.get_stream(&stream_id).canceled, true);
+    assert!(client.get_stream(&stream_id).canceled);
 }
 
 // =============================================================================
@@ -5985,13 +5985,13 @@ fn test_sender_authorization_cancel_by_unrelated_address_and_replayed_cancellati
     assert!(unauth_cancel.is_err());
     assert_eq!(token_client.balance(&contract_id), 1_000);
     assert_eq!(token_client.balance(&sender), 0);
-    assert_eq!(client.get_stream(&stream_id).canceled, false);
+    assert!(!client.get_stream(&stream_id).canceled);
 
     // 3. Authorized sender cancels stream at t=40
     env.ledger().set_timestamp(40);
     let events_before_cancel = env.events().all().len();
     client.cancel(&stream_id, &sender);
-    assert_eq!(client.get_stream(&stream_id).canceled, true);
+    assert!(client.get_stream(&stream_id).canceled);
     // Unvested 600 refunded to sender, contract retains 400 for recipient
     assert_eq!(token_client.balance(&sender), 600);
     assert_eq!(token_client.balance(&contract_id), 400);
@@ -6041,7 +6041,7 @@ fn test_sender_authorization_events_aligned_with_cancellation_state() {
     assert_eq!(events_after_cancel.len(), events_count_after_create + 2); // transfer + StreamCanceled
 
     let stream = client.get_stream(&stream_id);
-    assert_eq!(stream.canceled, true);
+    assert!(stream.canceled);
     assert_eq!(stream.sender, sender);
     assert_eq!(stream.total_amount, 300); // reduced to vested amount
 
@@ -6079,18 +6079,18 @@ fn test_sender_authorization_check_authority() {
     assert!(unauth_cancel.is_err());
     assert_eq!(token_client.balance(&contract_id), 1_000);
     assert_eq!(token_client.balance(&sender), 0);
-    assert_eq!(client.get_stream(&stream_id).canceled, false);
+    assert!(!client.get_stream(&stream_id).canceled);
 
     // 2. Stranger with their own auth attempting to pass sender address fails
     env.mock_all_auths();
     let stranger_res = client.try_cancel(&stream_id, &stranger);
     assert!(stranger_res.is_err());
     assert_eq!(token_client.balance(&contract_id), 1_000);
-    assert_eq!(client.get_stream(&stream_id).canceled, false);
+    assert!(!client.get_stream(&stream_id).canceled);
 
     // 3. Authorized sender succeeds
     client.cancel(&stream_id, &sender);
-    assert_eq!(client.get_stream(&stream_id).canceled, true);
+    assert!(client.get_stream(&stream_id).canceled);
     assert_eq!(token_client.balance(&sender), 1_000);
     assert_eq!(token_client.balance(&contract_id), 0);
 }
@@ -6128,11 +6128,11 @@ fn test_sender_authorization_atomic_failure_rollback() {
     assert!(failed_cancel.is_err());
     assert_eq!(token_client.balance(&contract_id), 1_000);
     assert_eq!(token_client.balance(&sender), 0);
-    assert_eq!(client.get_stream(&stream_id).canceled, false);
+    assert!(!client.get_stream(&stream_id).canceled);
 
     // 2. Sender cancels cleanly: 500 refunded to sender, 500 kept in contract for recipient
     client.cancel(&stream_id, &sender);
-    assert_eq!(client.get_stream(&stream_id).canceled, true);
+    assert!(client.get_stream(&stream_id).canceled);
     assert_eq!(token_client.balance(&sender), 500);
     assert_eq!(token_client.balance(&contract_id), 500);
 
@@ -6183,7 +6183,7 @@ fn test_sender_authorization_edge_amounts_and_boundary_cancellation() {
     client.cancel(&stream_id, &sender);
     assert_eq!(token_client.balance(&sender), 100);
     assert_eq!(token_client.balance(&contract_id), 0);
-    assert_eq!(client.get_stream(&stream_id).canceled, true);
+    assert!(client.get_stream(&stream_id).canceled);
 
     // 4. Boundary: Post-cancellation claim rejected cleanly without math underflow
     assert!(client.try_claim(&stream_id, &recipient, &1).is_err());
@@ -6463,7 +6463,7 @@ fn test_cancellation_refund_before_start_and_near_end_boundaries() {
     assert_eq!(token_client.balance(&contract_id), 1_000);
 
     client.cancel(&id1, &sender);
-    assert_eq!(client.get_stream(&id1).canceled, true);
+    assert!(client.get_stream(&id1).canceled);
     // 0 vested, full 1000 refunded to sender
     assert_eq!(token_client.balance(&sender), 2_000);
     assert_eq!(token_client.balance(&contract_id), 0);
@@ -6475,7 +6475,7 @@ fn test_cancellation_refund_before_start_and_near_end_boundaries() {
 
     env.ledger().set_timestamp(190);
     client.cancel(&id2, &sender);
-    assert_eq!(client.get_stream(&id2).canceled, true);
+    assert!(client.get_stream(&id2).canceled);
     // 90% vested (900), 10% unvested (100) refunded to sender
     assert_eq!(token_client.balance(&sender), 1_100);
     assert_eq!(token_client.balance(&contract_id), 900);
@@ -6519,7 +6519,7 @@ fn test_cancellation_refund_events_aligned_with_state() {
 
     // 3. Verify state aligns with emitted refund and recipient entitlement
     let stream = client.get_stream(&stream_id);
-    assert_eq!(stream.canceled, true);
+    assert!(stream.canceled);
     assert_eq!(stream.total_amount, 600); // 600 remaining entitlement for recipient
     assert_eq!(stream.claimed_amount, 0);
 
@@ -6575,7 +6575,7 @@ fn test_cancellation_refund_checks_authority_and_protects_funds() {
     assert_eq!(token_client.balance(&contract_id), 400);
 
     let stream = client.get_stream(&stream_id);
-    assert_eq!(stream.canceled, true);
+    assert!(stream.canceled);
     assert_eq!(stream.total_amount, 400);
 }
 
@@ -6617,7 +6617,7 @@ fn test_cancellation_refund_failure_is_atomic() {
     assert_eq!(token_client.balance(&contract_id), 1_000);
 
     let stream = client.get_stream(&stream_id);
-    assert_eq!(stream.canceled, false);
+    assert!(!stream.canceled);
     assert_eq!(stream.total_amount, 1_000);
 
     // 4. Non-existent stream cancel fails atomically
@@ -6632,7 +6632,7 @@ fn test_cancellation_refund_failure_is_atomic() {
     assert_eq!(token_client.balance(&contract_id), 500);
 
     let stream_canceled = client.get_stream(&stream_id);
-    assert_eq!(stream_canceled.canceled, true);
+    assert!(stream_canceled.canceled);
     assert_eq!(stream_canceled.total_amount, 500);
 
     // 6. Recipient can claim all remaining vested funds
@@ -6668,7 +6668,7 @@ fn test_cancellation_refund_edge_behavior_boundaries() {
     assert_eq!(token_client.balance(&sender), 3_000); // full 1000 refunded
     assert_eq!(token_client.balance(&contract_id), 0);
     let s1 = client.get_stream(&stream_1);
-    assert_eq!(s1.canceled, true);
+    assert!(s1.canceled);
     assert_eq!(s1.total_amount, 0);
 
     // Edge 2: Cancellation after full vesting (t = 250 >= 200) -> 0 refund
@@ -6679,7 +6679,7 @@ fn test_cancellation_refund_edge_behavior_boundaries() {
     assert_eq!(token_client.balance(&sender), 2_000); // 0 refund transferred
     assert_eq!(token_client.balance(&contract_id), 1_000); // all funds remain for recipient
     let s2 = client.get_stream(&stream_2);
-    assert_eq!(s2.canceled, true);
+    assert!(s2.canceled);
     assert_eq!(s2.total_amount, 1_000);
     // Recipient claims full 1000
     let claimed_2 = client.claim(&stream_2, &recipient, &1_000);
@@ -7512,7 +7512,7 @@ struct RegFixture<'a> {
     stream_id: u64,
 }
 
-fn reg_fixture<'a>(env: &'a Env, total: i128, start: u64, end: u64) -> RegFixture<'a> {
+fn reg_fixture(env: &Env, total: i128, start: u64, end: u64) -> RegFixture<'_> {
     env.mock_all_auths();
     let contract_id = env.register_contract(None, StellarStreamContract);
     let client = StellarStreamContractClient::new(env, &contract_id);
@@ -7545,7 +7545,7 @@ fn reg_fixture<'a>(env: &'a Env, total: i128, start: u64, end: u64) -> RegFixtur
     }
 }
 
-impl<'a> RegFixture<'a> {
+impl RegFixture<'_> {
     fn set_time(&self, ts: u64) {
         self.env.ledger().with_mut(|l| l.timestamp = ts);
     }
@@ -7914,4 +7914,430 @@ fn test_1138_transfer_failure_after_authorization_rolls_back() {
     let ev: StreamClaimed = f.last_event(symbol_short!("Claimed")).into_val(f.env);
     assert_eq!(ev.amount, 499);
     assert_eq!(ev.claimed_amount, 500);
+}
+
+// =============================================================================
+// #1124 — Specify edge behavior for Stream creation escrow
+//
+// Covers the escrow amount boundaries (`i128::MIN` … 1 … `i128::MAX`) and the
+// failure ordering between the escrow token transfer and stream storage.
+//
+// Confirmed-before-fix behavior: `create_stream` happily escrowed
+// `i128::MAX` (the transfer succeeded and the record was written), but
+// `vested_amount` evaluated `total_amount.checked_mul(elapsed).unwrap_or(0)`,
+// so every vesting computation overflowed and saturated to `0`. The stream was
+// therefore unclaimable for its entire life — `claimable()` returned 0 even at
+// and after `end_time` — and only `cancel()` could recover the escrow.
+// =============================================================================
+
+/// Token whose `balance` reports a satisfying value but whose `transfer`
+/// always traps. Used to model a token-level transfer failure that happens
+/// *after* the contract's own balance pre-check passes.
+///
+/// Declared in its own module: `#[contractimpl]` emits module-level symbols,
+/// which would otherwise collide with `MockToken` above.
+mod trap_token {
+    use super::*;
+
+    #[contract]
+    pub struct TrapOnTransferToken;
+
+    #[contractimpl]
+    impl TrapOnTransferToken {
+        pub fn transfer(_env: Env, _from: Address, _to: Address, _amount: i128) {
+            panic!("token transfer failed");
+        }
+        pub fn balance(_env: Env, _id: Address) -> i128 {
+            i128::MAX
+        }
+        pub fn symbol(env: Env) -> String {
+            String::from_str(&env, "TRAP")
+        }
+    }
+}
+
+use trap_token::TrapOnTransferToken;
+
+/// `i128::MAX` is the largest escrow the contract can represent. Creation must
+/// succeed, the full amount must sit in escrow, and vesting must be the exact
+/// floor quotient at every point of the schedule — not truncated to zero.
+#[test]
+fn test_create_stream_max_amount_escrows_and_vests_exactly() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_addr = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token_addr);
+    token_admin.mint(&sender, &i128::MAX);
+    let token_client = token::Client::new(&env, &token_addr);
+
+    let stream_id = client.create_stream(
+        &sender,
+        &recipient,
+        &token_addr,
+        &i128::MAX,
+        &0,
+        &1000,
+        &0,
+        &None,
+    );
+
+    // Escrow is fully funded and the record preserves the amount.
+    assert_eq!(token_client.balance(&sender), 0);
+    assert_eq!(token_client.balance(&contract_id), i128::MAX);
+    let stream = client.get_stream(&stream_id);
+    assert_eq!(stream.total_amount, i128::MAX);
+    assert_eq!(stream.claimed_amount, 0);
+
+    // Nothing before the start, exact floor quotient at each checkpoint.
+    assert_eq!(client.claimable(&stream_id, &0), 0);
+    assert_eq!(client.claimable(&stream_id, &250), i128::MAX / 4);
+    assert_eq!(client.claimable(&stream_id, &500), i128::MAX / 2);
+    // One second before the end vesting is still short of the total by design.
+    // Expectation computed independently: floor((2^127-1) * 999 / 1000).
+    let expected_999: i128 = 169971042277008762499955616412168221621;
+    assert_eq!(client.claimable(&stream_id, &999), expected_999);
+    assert!(expected_999 < i128::MAX);
+    // At the end the whole escrow is claimable.
+    assert_eq!(client.claimable(&stream_id, &1000), i128::MAX);
+    assert_eq!(client.claimable(&stream_id, &2000), i128::MAX);
+
+    // A claim at the end pays the full escrowed amount and completes the stream.
+    // `claim` reads the ledger clock, so move it to the end of the schedule.
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    let claimed = client.claim(&stream_id, &recipient, &i128::MAX);
+    assert_eq!(claimed, i128::MAX);
+    assert_eq!(token_client.balance(&recipient), i128::MAX);
+    assert_eq!(token_client.balance(&contract_id), 0);
+    assert_eq!(client.get_stream(&stream_id).claimed_amount, i128::MAX);
+    assert_eq!(client.claimable(&stream_id, &1000), 0);
+}
+
+/// A max-amount stream with a cliff honours the cliff, and partial claims at
+/// max precision never exceed the remaining balance.
+#[test]
+fn test_create_stream_max_amount_with_cliff_and_partial_claim() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_addr = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token_addr);
+    token_admin.mint(&sender, &i128::MAX);
+    let token_client = token::Client::new(&env, &token_addr);
+
+    // create_stream has no cliff parameter, so exercise the shared creation
+    // path through a template (duration 1000, cliff 200).
+    let template_id = client.create_template(
+        &sender,
+        &String::from_str(&env, "max-cliff"),
+        &token_addr,
+        &1000,
+        &200,
+        &String::from_str(&env, "linear"),
+    );
+    let stream_id = client.create_stream_from_template(&template_id, &recipient, &i128::MAX);
+    assert_eq!(token_client.balance(&contract_id), i128::MAX);
+
+    // Cliff not reached.
+    assert_eq!(client.claimable(&stream_id, &100), 0);
+    assert_eq!(client.claimable(&stream_id, &199), 0);
+    // At the cliff boundary vesting is `elapsed / duration`, floor-rounded:
+    // the cliff gates the start of vesting, it does not add a lump sum.
+    // Expectations computed independently: floor((2^127-1) * n / 1000).
+    let at_cliff: i128 = 34028236692093846346337460743176821145;
+    assert_eq!(client.claimable(&stream_id, &200), at_cliff);
+    let at_600: i128 = 102084710076281539039012382229530463436;
+    assert_eq!(client.claimable(&stream_id, &600), at_600);
+
+    let half = i128::MAX / 2;
+    env.ledger().with_mut(|l| l.timestamp = 600);
+    client.claim(&stream_id, &recipient, &half);
+    assert_eq!(token_client.balance(&recipient), half);
+    let remaining = client.claimable(&stream_id, &600);
+    assert_eq!(remaining, at_600 - half);
+    assert_eq!(
+        client.get_stream(&stream_id).claimed_amount + remaining,
+        at_600
+    );
+}
+
+/// Cancel at max precision refunds exactly the unvested remainder: recipient
+/// payout + sender refund == total_amount, and the contract holds nothing.
+#[test]
+fn test_create_stream_max_amount_cancel_conserves_balances() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_addr = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token_addr);
+    token_admin.mint(&sender, &i128::MAX);
+    let token_client = token::Client::new(&env, &token_addr);
+
+    let stream_id = client.create_stream(
+        &sender,
+        &recipient,
+        &token_addr,
+        &i128::MAX,
+        &0,
+        &1000,
+        &0,
+        &None,
+    );
+
+    env.ledger().with_mut(|l| l.timestamp = 500);
+    let vested = client.claimable(&stream_id, &500);
+    assert_eq!(vested, i128::MAX / 2);
+    client.claim(&stream_id, &recipient, &vested);
+    client.cancel(&stream_id, &sender);
+
+    assert_eq!(token_client.balance(&recipient), vested);
+    assert_eq!(token_client.balance(&sender), i128::MAX - vested);
+    assert_eq!(token_client.balance(&contract_id), 0);
+    assert_eq!(
+        token_client.balance(&recipient) + token_client.balance(&sender),
+        i128::MAX
+    );
+    assert_eq!(client.claimable(&stream_id, &2000), 0);
+}
+
+/// The smallest representable escrow (1 unit) is accepted, floors to zero
+/// mid-stream, and pays out entirely at `end_time`.
+#[test]
+fn test_create_stream_min_amount_one_unit_vests_at_end() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_addr = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token_addr);
+    token_admin.mint(&sender, &1);
+    let token_client = token::Client::new(&env, &token_addr);
+
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token_addr, &1, &0, &1000, &0, &None);
+    assert_eq!(token_client.balance(&contract_id), 1);
+
+    assert_eq!(client.claimable(&stream_id, &0), 0);
+    assert_eq!(client.claimable(&stream_id, &500), 0);
+    assert_eq!(client.claimable(&stream_id, &999), 0);
+    assert_eq!(client.claimable(&stream_id, &1000), 1);
+
+    // Claiming anything before the end must fail rather than overdraw.
+    assert!(client.try_claim(&stream_id, &recipient, &1).is_err());
+    assert_eq!(token_client.balance(&recipient), 0);
+
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    assert_eq!(client.claim(&stream_id, &recipient, &1), 1);
+    assert_eq!(token_client.balance(&recipient), 1);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+/// Amounts at or below zero — including `i128::MIN` — are refused before any
+/// transfer or storage write.
+#[test]
+fn test_create_stream_non_positive_amount_rejected_without_state_change() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_addr = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token_addr);
+    token_admin.mint(&sender, &1000);
+    let token_client = token::Client::new(&env, &token_addr);
+
+    for amount in [0_i128, -1, -1000, i128::MIN, i128::MIN + 1] {
+        let result = client.try_create_stream(
+            &sender,
+            &recipient,
+            &token_addr,
+            &amount,
+            &0,
+            &1000,
+            &0,
+            &None,
+        );
+        assert!(result.is_err(), "amount {amount} must be rejected");
+        assert_eq!(client.get_next_stream_id(), 0);
+        assert_eq!(token_client.balance(&sender), 1000);
+        assert_eq!(token_client.balance(&contract_id), 0);
+    }
+
+    // The invariant holds for the direct panic path as well.
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.create_stream(
+            &sender,
+            &recipient,
+            &token_addr,
+            &i128::MIN,
+            &0,
+            &1000,
+            &0,
+            &None,
+        );
+    }));
+    assert!(panicked.is_err());
+    assert_eq!(client.get_next_stream_id(), 0);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+/// A sender one unit short of the requested escrow is rejected up front, with
+/// no transfer, no stream record, and no id consumed.
+#[test]
+fn test_create_stream_balance_shortfall_leaves_no_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_addr = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token_addr);
+    token_admin.mint(&sender, &(i128::MAX - 1));
+    let token_client = token::Client::new(&env, &token_addr);
+
+    let result = client.try_create_stream(
+        &sender,
+        &recipient,
+        &token_addr,
+        &i128::MAX,
+        &0,
+        &1000,
+        &0,
+        &None,
+    );
+    assert!(result.is_err());
+    assert_eq!(client.get_next_stream_id(), 0);
+    assert!(client.try_get_stream(&1).is_err());
+    assert_eq!(token_client.balance(&sender), i128::MAX - 1);
+    assert_eq!(token_client.balance(&contract_id), 0);
+
+    // The same request succeeds once the sender holds the full amount.
+    let stream_id = client.create_stream(
+        &sender,
+        &recipient,
+        &token_addr,
+        &(i128::MAX - 1),
+        &0,
+        &1000,
+        &0,
+        &None,
+    );
+    assert_eq!(stream_id, 1);
+    assert_eq!(token_client.balance(&contract_id), i128::MAX - 1);
+    assert_eq!(client.claimable(&stream_id, &500), (i128::MAX - 1) / 2);
+}
+
+/// A token-level transfer failure (our balance pre-check passes, the token
+/// traps) must leave the contract exactly as it was: the transfer happens
+/// before any storage write, so nothing is persisted.
+#[test]
+fn test_create_stream_token_transfer_failure_before_storage_leaves_no_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let trap_token = env.register_contract(None, TrapOnTransferToken);
+    let trap_client = token::Client::new(&env, &trap_token);
+
+    // Pre-check passes: the token reports a huge balance...
+    assert_eq!(trap_client.balance(&sender), i128::MAX);
+
+    let result = client.try_create_stream(
+        &sender,
+        &recipient,
+        &trap_token,
+        &i128::MAX,
+        &0,
+        &1000,
+        &0,
+        &None,
+    );
+    assert!(result.is_err());
+
+    // ...but the transfer traps, so no stream, no id, no escrow, no event.
+    assert_eq!(client.get_next_stream_id(), 0);
+    assert!(client.try_get_stream(&1).is_err());
+    assert!(env.events().all().is_empty());
+}
+
+/// A split whose allocation vector overflows `i128` is rejected through the
+/// documented mismatch path (checked accumulation) instead of wrapping.
+#[test]
+#[should_panic(expected = "allocations must equal total_amount")]
+fn test_create_split_stream_overflowing_allocation_sum_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let token_addr = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token_addr);
+    token_admin.mint(&sender, &i128::MAX);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back((Address::generate(&env), i128::MAX / 2 + 1));
+    recipients.push_back((Address::generate(&env), i128::MAX / 2 + 1));
+
+    // (i128::MAX/2 + 1) * 2 == i128::MAX + 1: not representable in i128.
+    client.create_split_stream(&sender, &token_addr, &i128::MAX, &0, &1000, &recipients);
+}
+
+/// The rejected split leaves the escrow untouched and allocates no ids.
+#[test]
+fn test_create_split_stream_overflowing_allocation_sum_is_atomic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let token_addr = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token_addr);
+    token_admin.mint(&sender, &i128::MAX);
+    let token_client = token::Client::new(&env, &token_addr);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back((Address::generate(&env), i128::MAX / 2 + 1));
+    recipients.push_back((Address::generate(&env), i128::MAX / 2 + 1));
+
+    let result =
+        client.try_create_split_stream(&sender, &token_addr, &i128::MAX, &0, &1000, &recipients);
+    assert!(result.is_err());
+
+    assert_eq!(token_client.balance(&sender), i128::MAX);
+    assert_eq!(token_client.balance(&contract_id), 0);
+    assert_eq!(client.get_next_stream_id(), 0);
+    assert_eq!(client.get_split_children(&1).len(), 0);
+
+    // A representable split of the same escrow is still accepted afterwards.
+    let mut ok_recipients = Vec::new(&env);
+    ok_recipients.push_back((Address::generate(&env), i128::MAX / 2));
+    ok_recipients.push_back((Address::generate(&env), i128::MAX - i128::MAX / 2));
+    let parent_id =
+        client.create_split_stream(&sender, &token_addr, &i128::MAX, &0, &1000, &ok_recipients);
+    assert_eq!(parent_id, 1);
+    assert_eq!(client.get_split_children(&parent_id).len(), 2);
+    assert_eq!(token_client.balance(&contract_id), i128::MAX);
 }
