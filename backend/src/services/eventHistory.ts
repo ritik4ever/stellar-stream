@@ -1,6 +1,6 @@
 import { getDb } from "./db";
 
-export type StreamEventType = "created" | "claimed" | "canceled" | "start_time_updated" | "paused" | "resumed" | "completed" | "transferred";
+export type StreamEventType = "created" | "claimed" | "canceled" | "start_time_updated" | "paused" | "resumed" | "completed" | "transferred" | "clawback";
 
 export interface StreamEvent {
   id: number;
@@ -74,8 +74,10 @@ export function recordEventWithDb(
     ledgerSequence: ledgerSequence ?? null,
     timestamp,
     actor: actor ?? null,
-    amount: amount ?? null,
-    metadata: metadata ? JSON.stringify(metadata) : null,
+    amount: amount != null ? Number(amount) : null,
+    metadata: metadata
+      ? JSON.stringify(metadata, (_, v) => (typeof v === "bigint" ? v.toString() : v))
+      : null,
   });
 }
 

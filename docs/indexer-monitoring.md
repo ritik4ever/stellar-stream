@@ -214,6 +214,7 @@ hardcoded in the `CircuitBreaker` constructor in `indexer.ts`.
 | `backend/src/services/indexerMonitor.test.ts` | Unit tests: all outcome classifications, Prometheus publishing, secret safety |
 | `backend/src/services/indexer.circuitbreaker.test.ts` | Unit tests: all circuit breaker state transitions |
 | `backend/src/services/indexer.gap.test.ts` | Unit tests: gap-fill on restart, cursor persistence, deduplication |
+| `backend/src/services/indexer.backfill.test.ts` | Unit tests: first page at configured start ledger, RPC truncation pagination, delay and failure recovery |
 
 ## Validated monitoring thresholds
 

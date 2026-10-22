@@ -90,6 +90,10 @@ export function classifyRpcFailure(err: unknown): IndexerRpcFailureKind {
   if (
     statusCode === 503 ||
     statusCode === 504 ||
+    text.includes("503") ||
+    text.includes("504") ||
+    text.includes("service unavailable") ||
+    text.includes("gateway timeout") ||
     text.includes("econnrefused") ||
     text.includes("econnreset") ||
     text.includes("etimedout") ||
@@ -309,15 +313,17 @@ export function initIndexer(
     } else {
       logger.error({ value: startLedgerEnv }, "invalid INDEXER_START_LEDGER value");
     }
+  } else {
+    indexerStartLedger = null;
   }
 
   const db = getDb();
   ensureIndexerCursorTable(db);
   loadCheckpoint(db);
 
-  if (indexerStartLedger !== null && indexerStartLedger > lastProcessedLedger) {
-    lastProcessedLedger = indexerStartLedger;
-    logger.info({ lastProcessedLedger }, "applied INDEXER_START_LEDGER override to checkpoint");
+  if (indexerStartLedger !== null && indexerStartLedger > 0) {
+    lastProcessedLedger = Math.max(0, indexerStartLedger - 1);
+    logger.info({ lastProcessedLedger: indexerStartLedger }, "applied INDEXER_START_LEDGER override to checkpoint");
   }
 
   lastIndexedLedger.set(lastProcessedLedger);
@@ -434,7 +440,7 @@ async function indexEventsWithFallback(db: any, currentLedger: number): Promise<
   let events;
 
   try {
-    events = await rpcServer.getEvents({
+    events = await rpcServer!.getEvents({
       startLedger,
       filters: [
         {
@@ -501,7 +507,7 @@ async function indexEventsWithCursorPagination(db: any, currentLedger: number): 
     let eventsResponse: rpc.Api.GetEventsResponse;
 
     try {
-      eventsResponse = await rpcServer.getEvents(request);
+      eventsResponse = await rpcServer!.getEvents(request);
     } catch (err) {
       logger.error({ err }, "RPC getEvents failed during cursor pagination");
       throw err;
@@ -545,6 +551,7 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
     const value = scValToNative(event.value);
 
     if (topic.length < 2) return;
+    if (topic[0] !== "Stream") return;
 
     const eventName = topic[1];
     const timestamp = Math.floor(new Date(event.ledgerClosedAt).getTime() / 1000);
