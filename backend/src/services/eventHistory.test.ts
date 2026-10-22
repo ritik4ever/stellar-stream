@@ -172,6 +172,18 @@ describe("eventHistory", () => {
       expect(history.map((e) => e.actor)).toEqual(["first", "second", "third"]);
     });
 
+    it("keeps the default descending order deterministic when timestamps tie", async () => {
+      const { recordEvent, getStreamHistory } = await import("./eventHistory");
+
+      recordEvent("stream-6", "created", 1000, "first");
+      recordEvent("stream-6", "claimed", 1000, "second");
+      recordEvent("stream-6", "canceled", 1000, "third");
+
+      const history = getStreamHistory("stream-6", 20, 0, "desc");
+
+      expect(history.map((e) => e.actor)).toEqual(["third", "second", "first"]);
+    });
+
     it("isolates events by streamId", async () => {
       const { recordEvent, getStreamHistory } = await import("./eventHistory");
 

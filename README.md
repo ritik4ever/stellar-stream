@@ -435,7 +435,7 @@ Copy `backend/.env.example` to `backend/.env` and `frontend/.env.example` to `fr
 | `SERVER_PRIVATE_KEY` | Required (unless `SOROBAN_DISABLED=true`) | Secret key, exactly 56 characters starting with `S` (`stellarSecretKeySchema`) | `SD3F2K5L...` | Stellar account private key used to sign contract transactions |
 | `RPC_URL` | Optional (Default: `https://soroban-testnet.stellar.org:443`) | Valid HTTP/HTTPS URL schema (`z.string().url()`) | `https://soroban-testnet.stellar.org:443` | Stellar/Soroban RPC node endpoint URL |
 | `NETWORK_PASSPHRASE` | Optional (Default: `Test SDF Network ; September 2015`) | Non-empty string passphrase matching Stellar network | `Test SDF Network ; September 2015` | Network identifier passphrase |
-| `ALLOWED_ASSETS` | Optional (Default: `USDC,XLM`) | Comma-separated list of 1–12 alphanumeric asset codes | `USDC,XLM,EURC` | Supported token assets for payment streams |
+| `ALLOWED_ASSETS` | Optional (Default: `USDC,XLM`) | Comma-separated list of 1–12 alphanumeric asset codes; values are uppercased and duplicates are removed at startup | `USDC,XLM,EURC` | Supported token assets for payment streams |
 | `DB_PATH` | Optional (Default: `backend/data/streams.db`) | Valid filesystem file path string | `backend/data/streams.db` | SQLite database file location |
 | `WEBHOOK_DESTINATION_URL` | Optional | Valid HTTP/HTTPS URL (`z.string().url()`) | `https://example.com/webhooks/stellar` | Destination URL for outbound stream event webhooks |
 | `WEBHOOK_SIGNING_SECRET` | Optional (Recommended if URL set) | Secret string ($\ge 32$ random characters recommended) | `whsec_9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d` | Secret used to sign webhook payloads via HMAC-SHA256 |

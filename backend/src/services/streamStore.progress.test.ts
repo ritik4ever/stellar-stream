@@ -331,6 +331,34 @@ describe("calculateProgress", () => {
   });
 
   describe("Edge cases", () => {
+    it("should treat time before start, at start, and at end as exact boundaries", () => {
+      const stream = createBaseStream({
+        startAt: 1000000,
+        durationSeconds: 3600,
+        totalAmount: 1000,
+      });
+
+      expect(calculateProgress(stream, 999999).status).toBe("scheduled");
+      expect(calculateProgress(stream, 999999).vestedAmount).toBe(0);
+      expect(calculateProgress(stream, 1000000).status).toBe("active");
+      expect(calculateProgress(stream, 1000000).vestedAmount).toBe(0);
+      expect(calculateProgress(stream, 1003600).status).toBe("completed");
+      expect(calculateProgress(stream, 1003600).vestedAmount).toBe(1000);
+    });
+
+    it("should not regress vested amount when the system clock moves backwards", () => {
+      const stream = createBaseStream({
+        startAt: 1000000,
+        durationSeconds: 3600,
+        totalAmount: 1000,
+      });
+
+      expect(calculateProgress(stream, 1001800).vestedAmount).toBe(500);
+      expect(calculateProgress(stream, 1000900).vestedAmount).toBe(250);
+      expect(calculateProgress(stream, 1000000).vestedAmount).toBe(0);
+      expect(calculateProgress(stream, 999999).vestedAmount).toBe(0);
+    });
+
     it("should handle zero duration stream", () => {
       const stream = createBaseStream({
         startAt: 1000000,
