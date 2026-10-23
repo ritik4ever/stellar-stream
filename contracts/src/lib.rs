@@ -236,6 +236,13 @@ pub struct StreamCreated {
 }
 
 /// Emitted each time a recipient successfully claims vested tokens.
+///
+/// This event is the authoritative, self-describing record of a single committed
+/// claim. `amount` is the recipient payout for this call and `claimed_amount` is
+/// the cumulative claimed balance after the call. Across a partial claim (a
+/// one-unit claim followed by the remaining claim) the indexer reconstructs the
+/// payout by summing the `amount` fields and reads the resulting balance from the
+/// latest `claimed_amount`; it must never derive a payout from `StreamCompleted`.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StreamClaimed {
@@ -843,6 +850,15 @@ impl StellarStreamContract {
     /// The indexer reconstructs the committed action exactly once by processing
     /// `StreamClaimed` first.  `StreamCompleted` is a secondary signal; the
     /// indexer must not double-count the amount from both events.
+    ///
+    /// For a partial claim (one-unit claim followed by the remaining claim) each
+    /// successful call emits exactly one `StreamClaimed`, whose `amount` is that
+    /// call's recipient payout and whose `claimed_amount` is the committed
+    /// balance after it.  Because `StreamClaimed` is published only after the
+    /// token transfer and the accounting update both succeed, a payout that fails
+    /// after the recipient has already authorized reverts the whole call and
+    /// emits no event, so the indexer reconstructs exactly the payouts that
+    /// actually happened and no phantom claim for a rolled-back one.
     pub fn claim(
         env: Env,
         stream_id: u64,

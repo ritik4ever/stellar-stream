@@ -7923,6 +7923,112 @@ fn test_1138_transfer_failure_after_authorization_rolls_back() {
 }
 
 // =============================================================================
+// #1137 — Align events with the Partial claim state
+//
+// #1138 already checks the claim mechanics and per-event field values. This
+// section pins the property an indexer actually depends on: the emitted event
+// data ALONE (never reading contract storage) reconstructs the committed action
+// exactly once across a partial claim. A helper replays `StreamClaimed` events
+// the way the backend does and asserts the running payout and the cumulative
+// claimed balance agree event-by-event, that a rolled-back claim contributes no
+// event, and that `StreamCompleted` is never counted as payout.
+// =============================================================================
+
+/// Reconstruct `(claimed_count, total_payout)` from `StreamClaimed` events only,
+/// exactly as the indexer does, and assert the exact-once invariant: every
+/// event's `claimed_amount` equals the running sum of payouts seen so far and
+/// strictly advances, so no payout is missed or double-counted. Non-`Claimed`
+/// events (e.g. `Completed`) are ignored, proving they carry no payout.
+fn reconstruct_from_events(env: &Env, events: &std::vec::Vec<(Symbol, Val)>) -> (usize, i128) {
+    let mut count = 0_usize;
+    let mut running_payout: i128 = 0;
+    let mut prev_balance: i128 = 0;
+    for (kind, data) in events.iter() {
+        if *kind != symbol_short!("Claimed") {
+            continue;
+        }
+        let event: StreamClaimed = data.clone().into_val(env);
+        running_payout += event.amount;
+        assert_eq!(
+            event.claimed_amount, running_payout,
+            "StreamClaimed.claimed_amount must equal the running sum of payouts so the indexer reconstructs each claim exactly once"
+        );
+        assert!(
+            event.claimed_amount > prev_balance,
+            "the claimed balance must advance on every committed claim"
+        );
+        assert_eq!(event.actor, event.recipient, "the claimer is the paid recipient");
+        prev_balance = event.claimed_amount;
+        count += 1;
+    }
+    (count, running_payout)
+}
+
+/// A one-unit claim, a partial claim, a failed payout, and the completing claim
+/// together must be reconstructable from events alone: three `StreamClaimed`
+/// records, a monotonic balance ending at `total_amount`, the failed attempt
+/// contributing nothing, and the single `StreamCompleted` not counted as payout.
+#[test]
+fn test_1137_events_reconstruct_partial_claim_state_exactly_once() {
+    let env = Env::default();
+    let f = reg_fixture(&env, 1_000, 1_000, 2_000);
+
+    // 1. One-unit claim then the remaining vested amount at t = 1_500.
+    f.set_time(1_500);
+    assert_eq!(f.client.claim(&f.stream_id, &f.recipient, &1), 1);
+    assert_eq!(f.client.claim(&f.stream_id, &f.recipient, &499), 499);
+
+    let (count, payout) = reconstruct_from_events(f.env, &f.contract_events());
+    assert_eq!(count, 2, "two committed claims emit two StreamClaimed events");
+    assert_eq!(payout, 500);
+    assert_eq!(payout, f.token.balance(&f.recipient), "events match the paid balance");
+    assert_eq!(f.count_events(symbol_short!("Completed")), 0, "not complete yet");
+
+    // 2. A claim whose payout transfer fails emits no event and leaves the
+    //    reconstruction unchanged (exactly once still holds).
+    env.mock_all_auths();
+    let sink = Address::generate(&env);
+    env.as_contract(&f.contract_id, || {
+        f.token.transfer(&f.contract_id, &sink, &500);
+    });
+    f.set_time(2_000);
+    assert_eq!(f.client.claimable(&f.stream_id, &2_000), 500);
+    assert!(f
+        .client
+        .try_claim(&f.stream_id, &f.recipient, &500)
+        .is_err());
+    let (count_after_fail, payout_after_fail) = reconstruct_from_events(f.env, &f.contract_events());
+    assert_eq!(
+        (count_after_fail, payout_after_fail),
+        (count, payout),
+        "a rolled-back claim must not appear in the reconstructed state"
+    );
+
+    // 3. Refill the escrow and complete the stream.
+    env.mock_all_auths();
+    token::StellarAssetClient::new(&env, &f.token.address).mint(&f.contract_id, &500);
+    assert_eq!(f.client.claim(&f.stream_id, &f.recipient, &500), 500);
+
+    let (count_final, payout_final) = reconstruct_from_events(f.env, &f.contract_events());
+    assert_eq!(count_final, 3, "three committed claims, the failure excluded");
+    assert_eq!(payout_final, 1_000, "full stream reconstructed from events");
+    assert_eq!(payout_final, f.token.balance(&f.recipient));
+    assert_eq!(payout_final, f.stream().claimed_amount);
+    assert_eq!(f.count_events(symbol_short!("Completed")), 1);
+
+    // The completion signal must never be treated as an extra payout: an indexer
+    // that wrongly summed `StreamCompleted.total_amount` alongside the claims
+    // would report 2_000 for a 1_000 stream.
+    let completed: StreamCompleted = f.last_event(symbol_short!("Completed")).into_val(f.env);
+    assert_eq!(completed.total_amount, 1_000);
+    assert_ne!(
+        payout_final + completed.total_amount,
+        f.token.balance(&f.recipient),
+        "StreamCompleted carries no payout; counting it would double the balance"
+    );
+}
+
+// =============================================================================
 // #1124 — Specify edge behavior for Stream creation escrow
 //
 // Covers the escrow amount boundaries (`i128::MIN` … 1 … `i128::MAX`) and the

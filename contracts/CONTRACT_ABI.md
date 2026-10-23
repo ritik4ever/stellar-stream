@@ -149,6 +149,34 @@ No other events are emitted by a successful `claim()` call (unless the
 call is first rejected by the rate-limiter, in which case `ClaimThrottled` is
 emitted and both `StreamClaimed` and `StreamCompleted` are suppressed).
 
+#### `StreamClaimed` as the authoritative partial-claim record
+
+`StreamClaimed` is a self-describing record of a single committed claim. Its
+event-specific fields are:
+
+| Field | Meaning |
+| --- | --- |
+| `amount` | The recipient payout transferred to the recipient by **this** call. |
+| `claimed_amount` | The cumulative claimed balance **after** this call succeeds. |
+
+A partial claim is a "one-unit claim followed by the remaining claim": the
+recipient first pulls out a small amount, then claims the rest. Each successful
+call emits exactly one `StreamClaimed`, so an indexer that never reads contract
+storage reconstructs the committed payout by summing the `amount` fields and reads
+the resulting balance from the latest `claimed_amount` — the two agree event by
+event, so nothing is missed or double-counted. `StreamCompleted` carries only
+`total_amount` and must never be used as a payout amount. Because `claim()`
+publishes `StreamClaimed` only after the token transfer and the accounting update
+both succeed, a claim whose payout fails after the recipient has authorized
+reverts the whole transaction: no `StreamClaimed` is emitted and `claimed_amount`
+is not advanced, so the indexer records exactly the payouts that actually happened.
+
+This event-only reconstruction is tested by
+`test_1137_events_reconstruct_partial_claim_state_exactly_once` in
+`contracts/src/test.rs`; the underlying claim mechanics and the failed-payout
+rollback are covered by `test_1138_one_unit_claim_then_remaining_claim` and
+`test_1138_transfer_failure_after_authorization_rolls_back`.
+
 ### Other entry points (one event each)
 
 | Entry point | Event emitted |
