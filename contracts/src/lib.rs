@@ -1525,3 +1525,6 @@ mod test;
 
 #[cfg(test)]
 mod claimable_events_test;
+
+#[cfg(test)]
+mod test_creation_escrow;

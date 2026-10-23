@@ -7885,7 +7885,7 @@ fn test_1138_transfer_failure_after_authorization_rolls_back() {
     f.set_time(1_500);
     assert_eq!(f.client.claimable(&f.stream_id, &1_500), 499);
     let before = f.stream();
-    let events_before = f.contract_events();
+    let events_before = Vec::from_slice(&env, &f.contract_events());
     f.sign_claim(&f.recipient, 499);
     assert!(f
         .client
@@ -7895,7 +7895,7 @@ fn test_1138_transfer_failure_after_authorization_rolls_back() {
     // Rollback: stream state, balances and events are exactly as before.
     let stream = f.stream();
     assert_eq!(stream, before);
-    assert_eq!(f.contract_events(), events_before);
+    assert_eq!(Vec::from_slice(&env, &f.contract_events()), events_before);
     assert_eq!(f.token.balance(&f.sender), 0);
     assert_eq!(f.token.balance(&sink), 999);
     assert_eq!(stream.claimed_amount, 1);
@@ -8357,7 +8357,7 @@ fn test_1136_partial_claim_authority_is_checked_again_for_remainder() {
     f.sign_claim(&f.recipient, 1);
     assert_eq!(f.client.claim(&f.stream_id, &f.recipient, &1), 1);
     let before = f.stream();
-    let events_before = f.contract_events();
+    let events_before = Vec::from_slice(&env, &f.contract_events());
     let attacker = Address::generate(&env);
 
     // Missing authorization, sender authorization, and a third party cannot
@@ -8372,7 +8372,7 @@ fn test_1136_partial_claim_authority_is_checked_again_for_remainder() {
             .try_claim(&f.stream_id, &f.recipient, &499)
             .is_err());
         assert_eq!(f.stream(), before);
-        assert_eq!(f.contract_events(), events_before);
+        assert_eq!(Vec::from_slice(&env, &f.contract_events()), events_before);
         assert_eq!(f.token.balance(&f.recipient), 1);
         assert_eq!(f.token.balance(&f.contract_id), 999);
         assert_eq!(f.token.balance(&f.sender), 0);
@@ -8386,7 +8386,7 @@ fn test_1136_partial_claim_authority_is_checked_again_for_remainder() {
         .try_claim(&f.stream_id, &f.recipient, &499)
         .is_err());
     assert_eq!(f.stream(), before);
-    assert_eq!(f.contract_events(), events_before);
+    assert_eq!(Vec::from_slice(&env, &f.contract_events()), events_before);
     assert_eq!(f.token.balance(&f.recipient), 1);
     assert_eq!(f.token.balance(&f.contract_id), 999);
 
@@ -8402,7 +8402,7 @@ fn test_1136_partial_claim_authority_is_checked_again_for_remainder() {
     }]);
     assert!(f.client.try_claim(&f.stream_id, &attacker, &499).is_err());
     assert_eq!(f.stream(), before);
-    assert_eq!(f.contract_events(), events_before);
+    assert_eq!(Vec::from_slice(&env, &f.contract_events()), events_before);
     assert_eq!(f.token.balance(&attacker), 0);
     assert_eq!(f.token.balance(&f.recipient), 1);
     assert_eq!(f.token.balance(&f.contract_id), 999);

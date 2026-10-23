@@ -47,7 +47,9 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        # The contract pins an older nightly; build the audit CLI with the
+        # stable compiler installed above, without changing contract artifacts.
+        run: cargo +stable install cargo-audit --locked --version 0.22.2
 
       - name: Run cargo audit (contracts)
         working-directory: contracts
