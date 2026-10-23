@@ -145,6 +145,17 @@ describe('validateEnv', () => {
       expect(loggerErrorSpy).toHaveBeenCalledWith(
         'SERVER_PRIVATE_KEY validation failed',
       );
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: 'blocked',
+          outcomeCode: 2,
+          envVar: 'SERVER_PRIVATE_KEY',
+          network: 'testnet',
+          durationMs: expect.any(Number),
+        }),
+        'environment validation outcome',
+      );
+      assertNoLoggerOutputContains('G' + 'A'.repeat(55));
     });
 
     it('should exit with code 1 when RPC_URL is invalid without logging credentials', () => {
@@ -162,10 +173,19 @@ describe('validateEnv', () => {
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(loggerErrorSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          rpcUrl: '[REDACTED_INVALID_URL]',
+          outcome: 'blocked',
+          outcomeCode: 2,
+          envVar: 'RPC_URL',
+          network: 'testnet',
+          durationMs: expect.any(Number),
         }),
+        'environment validation outcome',
+      );
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        { envVar: 'RPC_URL' },
         'RPC_URL validation failed',
       );
+      assertNoLoggerOutputContains(badUrl);
       assertNoLoggerOutputContains('rpc-secret-token');
     });
 
@@ -274,6 +294,16 @@ describe('validateEnv', () => {
       // Implementation logs: "Soroban disabled (SOROBAN_DISABLED=true) — local development mode"
       expect(loggerInfoSpy).toHaveBeenCalledWith(
         expect.stringContaining('Soroban disabled'),
+      );
+      expect(loggerInfoSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: 'success',
+          outcomeCode: 0,
+          detail: 'Soroban is intentionally disabled.',
+          network: 'testnet',
+          durationMs: expect.any(Number),
+        }),
+        'deployment configuration outcome',
       );
     });
 

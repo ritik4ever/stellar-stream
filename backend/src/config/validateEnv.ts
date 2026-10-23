@@ -349,6 +349,8 @@ export function redactUrlForConfigLog(value: string): string {
 }
 
 export function validateEnv(): ValidatedConfig {
+  const validationStartedAt = performance.now();
+
   // Resolve the selected Stellar network first, before the legacy mapping below
   // overwrites process.env.STELLAR_NETWORK with the passphrase, and fail fast on
   // an unknown value or a testnet/mainnet endpoint mismatch (issue #1205).
@@ -359,6 +361,9 @@ export function validateEnv(): ValidatedConfig {
   // as the validated config. In particular, the previous static defaults sent
   // mainnet deployments to testnet when RPC_URL was omitted.
   const configuredRpcUrl = process.env.SOROBAN_RPC_URL || process.env.RPC_URL;
+  const configuredRpcEnvVar = process.env.SOROBAN_RPC_URL
+    ? 'SOROBAN_RPC_URL'
+    : 'RPC_URL';
   process.env.RPC_URL =
     configuredRpcUrl || NETWORK_PROFILES[network.name].rpcUrl;
   process.env.SOROBAN_RPC_URL = process.env.RPC_URL;
@@ -421,6 +426,7 @@ export function validateEnv(): ValidatedConfig {
           outcomeCode: 2,
           detail: `Missing required Soroban configuration: ${missingConfig.join(', ')}`,
           network: network.name,
+          durationMs: Math.round(performance.now() - validationStartedAt),
         },
         'deployment configuration outcome',
       );
@@ -443,6 +449,17 @@ export function validateEnv(): ValidatedConfig {
       env.CONTRACT_ID,
     );
     if (!contractIdValidation.success) {
+      logger.error(
+        {
+          outcome: 'blocked',
+          outcomeCode: 2,
+          envVar: 'CONTRACT_ID',
+          detail: 'CONTRACT_ID has an invalid format.',
+          network: network.name,
+          durationMs: Math.round(performance.now() - validationStartedAt),
+        },
+        'environment validation outcome',
+      );
       logger.error('CONTRACT_ID validation failed');
       contractIdValidation.error.issues.forEach((issue: z.ZodIssue) => {
         logger.error({ issue: issue.message }, 'CONTRACT_ID validation issue');
@@ -456,6 +473,17 @@ export function validateEnv(): ValidatedConfig {
       env.SERVER_PRIVATE_KEY,
     );
     if (!keyValidation.success) {
+      logger.error(
+        {
+          outcome: 'blocked',
+          outcomeCode: 2,
+          envVar: 'SERVER_PRIVATE_KEY',
+          detail: 'SERVER_PRIVATE_KEY has an invalid format.',
+          network: network.name,
+          durationMs: Math.round(performance.now() - validationStartedAt),
+        },
+        'environment validation outcome',
+      );
       logger.error('SERVER_PRIVATE_KEY validation failed');
       keyValidation.error.issues.forEach((issue: z.ZodIssue) => {
         logger.error(
@@ -471,8 +499,19 @@ export function validateEnv(): ValidatedConfig {
     const rpcValidation = urlSchema.safeParse(env.RPC_URL);
     if (!rpcValidation.success) {
       logger.error(
-        { rpcUrl: redactUrlForConfigLog(env.RPC_URL) },
-        'RPC_URL validation failed',
+        {
+          outcome: 'blocked',
+          outcomeCode: 2,
+          envVar: configuredRpcEnvVar,
+          detail: `${configuredRpcEnvVar} has an invalid URL format.`,
+          network: network.name,
+          durationMs: Math.round(performance.now() - validationStartedAt),
+        },
+        'environment validation outcome',
+      );
+      logger.error(
+        { envVar: configuredRpcEnvVar },
+        `${configuredRpcEnvVar} validation failed`,
       );
       rpcValidation.error.issues.forEach((issue: z.ZodIssue) => {
         logger.error({ issue: issue.message }, 'RPC_URL validation issue');
@@ -487,6 +526,17 @@ export function validateEnv(): ValidatedConfig {
         process.env.STELLAR_CONTRACT_ID,
       );
       if (!contractIdValidation.success) {
+        logger.error(
+          {
+            outcome: 'blocked',
+            outcomeCode: 2,
+            envVar: 'STELLAR_CONTRACT_ID',
+            detail: 'STELLAR_CONTRACT_ID has an invalid format.',
+            network: network.name,
+            durationMs: Math.round(performance.now() - validationStartedAt),
+          },
+          'environment validation outcome',
+        );
         logger.error('❌ STELLAR_CONTRACT_ID validation failed:');
         contractIdValidation.error.issues.forEach((issue: z.ZodIssue) => {
           logger.error(
@@ -505,6 +555,7 @@ export function validateEnv(): ValidatedConfig {
         outcomeCode: 0,
         detail: 'Required Soroban configuration is present and valid.',
         network: network.name,
+        durationMs: Math.round(performance.now() - validationStartedAt),
       },
       'deployment configuration outcome',
     );
@@ -523,6 +574,7 @@ export function validateEnv(): ValidatedConfig {
         outcomeCode: 0,
         detail: 'Soroban is intentionally disabled.',
         network: network.name,
+        durationMs: Math.round(performance.now() - validationStartedAt),
       },
       'deployment configuration outcome',
     );
