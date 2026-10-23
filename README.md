@@ -517,20 +517,20 @@ When rotating sensitive operational credentials in production, follow these proc
 #### Admin API key boundary contract
 
 Admin endpoints (`X-Admin-Key` header on routes using `adminAuth`, and the
-`POST /api/admin/auth` token exchange) return a stable `code` for every
+`POST /api/admin/auth` / `POST /api/auth/admin` token exchange accepting `X-Admin-Key` or `body.apiKey`) return a stable `code` for every
 boundary input:
 
 | Input | Status | `code` |
 |---|---|---|
-| `X-Admin-Key` header absent | `401` | `ADMIN_KEY_MISSING` |
-| Header present but empty / whitespace-only | `401` | `ADMIN_KEY_MALFORMED` |
-| Header present but repeated (Express delivers `string[]`) | `401` | `ADMIN_KEY_MALFORMED` |
-| `ADMIN_API_KEY` env unset | `401` | `ADMIN_KEY_NOT_CONFIGURED` |
-| Header present, does not match configured key | `401` | `ADMIN_KEY_INVALID` |
-| Header present, matches configured key | `2xx` | - |
+| `X-Admin-Key` header (and `body.apiKey` on `/api/admin/auth`) absent | `401` | `ADMIN_KEY_MISSING` |
+| Key present but empty, whitespace-only, non-string, or containing internal whitespace/comma/control chars | `401` | `ADMIN_KEY_MALFORMED` |
+| Header present but repeated (`string[]` or duplicate `X-Admin-Key` headers) or conflicting with `body.apiKey` | `401` | `ADMIN_KEY_MALFORMED` |
+| `ADMIN_API_KEY` env unset or blank | `401` | `ADMIN_KEY_NOT_CONFIGURED` |
+| Key present and well-formed, does not match configured key (including rotated-out keys) | `401` | `ADMIN_KEY_INVALID` |
+| Key present, matches configured key | `2xx` | - |
 
 All error bodies follow the standard `sendApiError` shape
-(`{ error, statusCode, requestId, correlationId, code }`).
+(`{ error, statusCode, requestId, correlationId, code }`). Authorized requests attach the admin caller identity (`{ role: "admin", accountId: "admin", isAdmin: true }`) to `req.user`, while denied requests leave `req.user` unset and perform no state mutations.
 
 **Concurrent rotation**: `ADMIN_API_KEY` is read from `process.env` on every
 request, never cached at startup. Rotation therefore requires a process

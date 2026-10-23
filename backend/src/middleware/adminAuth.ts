@@ -1,6 +1,180 @@
 import { Request, Response, NextFunction } from "express";
 import { sendApiError } from "../apiErrors";
 
+export interface AdminAuthorizedCaller {
+  role: "admin";
+  accountId: "admin";
+  isAdmin: true;
+}
+
+export const ADMIN_CALLER: Readonly<AdminAuthorizedCaller> = Object.freeze({
+  role: "admin",
+  accountId: "admin",
+  isAdmin: true,
+});
+
+const MALFORMED_KEY_PATTERN = /[\s,\x00-\x1f\x7f]/;
+
+function hasDuplicateHeader(req: Request, headerName: string): boolean {
+  const raw = req.header(headerName);
+  if (Array.isArray(raw)) {
+    return true;
+  }
+
+  const rawHeaders = (req as { rawHeaders?: unknown }).rawHeaders;
+  if (!Array.isArray(rawHeaders)) {
+    return false;
+  }
+
+  const target = headerName.toLowerCase();
+  let count = 0;
+  for (let i = 0; i < rawHeaders.length; i += 2) {
+    if (typeof rawHeaders[i] === "string" && rawHeaders[i].toLowerCase() === target) {
+      count += 1;
+      if (count > 1) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function isMalformedKeyFormat(key: string): boolean {
+  return MALFORMED_KEY_PATTERN.test(key);
+}
+
+/**
+ * Validates the Admin API key from `X-Admin-Key` (and optionally `req.body.apiKey`
+ * for the admin token-exchange endpoint) and records the authorized admin caller
+ * on `req.user` when valid.
+ */
+export function authorizeAdminApiKey(
+  req: Request,
+  res: Response,
+  options?: { allowBodyKey?: boolean },
+): boolean {
+  delete (req as { user?: unknown }).user;
+
+  const configuredRaw = process.env.ADMIN_API_KEY;
+  const configured = typeof configuredRaw === "string" ? configuredRaw.trim() : "";
+
+  if (configured.length === 0) {
+    sendApiError(req, res, 401, "Admin API key is not configured on this server.", {
+      code: "ADMIN_KEY_NOT_CONFIGURED",
+    });
+    return false;
+  }
+
+  // Reject repeated X-Admin-Key headers whether surfaced as string[] by mocks
+  // or folded from multiple entries in Node's req.rawHeaders.
+  if (hasDuplicateHeader(req, "X-Admin-Key")) {
+    sendApiError(req, res, 401, "Ambiguous X-Admin-Key header (multiple values).", {
+      code: "ADMIN_KEY_MALFORMED",
+    });
+    return false;
+  }
+
+  const rawHeader = req.header("X-Admin-Key");
+  const hasHeader = rawHeader !== undefined;
+
+  const allowBodyKey = options?.allowBodyKey === true;
+  const bodyObj =
+    allowBodyKey &&
+    req.body !== null &&
+    typeof req.body === "object" &&
+    !Array.isArray(req.body)
+      ? (req.body as Record<string, unknown>)
+      : undefined;
+  const hasBodyKey =
+    bodyObj !== undefined &&
+    Object.prototype.hasOwnProperty.call(bodyObj, "apiKey") &&
+    bodyObj.apiKey !== undefined;
+
+  if (!hasHeader && !hasBodyKey) {
+    sendApiError(
+      req,
+      res,
+      401,
+      allowBodyKey ? "Missing Admin API key." : "Missing X-Admin-Key header.",
+      {
+        code: "ADMIN_KEY_MISSING",
+      },
+    );
+    return false;
+  }
+
+  let trimmedHeader: string | undefined;
+  if (hasHeader) {
+    if (typeof rawHeader !== "string") {
+      sendApiError(req, res, 401, "Malformed X-Admin-Key header.", {
+        code: "ADMIN_KEY_MALFORMED",
+      });
+      return false;
+    }
+
+    trimmedHeader = rawHeader.trim();
+    if (trimmedHeader.length === 0) {
+      sendApiError(req, res, 401, "Empty X-Admin-Key header.", {
+        code: "ADMIN_KEY_MALFORMED",
+      });
+      return false;
+    }
+
+    if (isMalformedKeyFormat(trimmedHeader)) {
+      sendApiError(req, res, 401, "Malformed X-Admin-Key header.", {
+        code: "ADMIN_KEY_MALFORMED",
+      });
+      return false;
+    }
+  }
+
+  let trimmedBody: string | undefined;
+  if (hasBodyKey) {
+    const rawBodyKey = bodyObj!.apiKey;
+    if (typeof rawBodyKey !== "string") {
+      sendApiError(req, res, 401, "Malformed Admin API key.", {
+        code: "ADMIN_KEY_MALFORMED",
+      });
+      return false;
+    }
+
+    trimmedBody = rawBodyKey.trim();
+    if (trimmedBody.length === 0) {
+      sendApiError(req, res, 401, "Empty Admin API key.", {
+        code: "ADMIN_KEY_MALFORMED",
+      });
+      return false;
+    }
+
+    if (isMalformedKeyFormat(trimmedBody)) {
+      sendApiError(req, res, 401, "Malformed Admin API key.", {
+        code: "ADMIN_KEY_MALFORMED",
+      });
+      return false;
+    }
+  }
+
+  if (trimmedHeader !== undefined && trimmedBody !== undefined && trimmedHeader !== trimmedBody) {
+    sendApiError(req, res, 401, "Conflicting Admin API key in header and body.", {
+      code: "ADMIN_KEY_MALFORMED",
+    });
+    return false;
+  }
+
+  const key = (trimmedHeader ?? trimmedBody)!;
+
+  if (key !== configured) {
+    sendApiError(req, res, 401, "Invalid Admin API key.", {
+      code: "ADMIN_KEY_INVALID",
+    });
+    return false;
+  }
+
+  (req as { user?: AdminAuthorizedCaller }).user = { ...ADMIN_CALLER };
+  return true;
+}
+
 /**
  * Admin API key authentication middleware.
  *
@@ -10,7 +184,7 @@ import { sendApiError } from "../apiErrors";
  *   - Header empty / whitespace / not string -> 401 ADMIN_KEY_MALFORMED
  *   - `ADMIN_API_KEY` env unset              -> 401 ADMIN_KEY_NOT_CONFIGURED
  *   - Header present, does not match env     -> 401 ADMIN_KEY_INVALID
- *   - Header present, matches env            -> next()
+ *   - Header present, matches env            -> sets req.user and calls next()
  *
  * The env var is read on every request, not cached at startup. Rotating the
  * key therefore requires a process restart; any request already inside the
@@ -18,45 +192,7 @@ import { sendApiError } from "../apiErrors";
  * `process.env` when it entered. No key is retained past restart.
  */
 export function adminAuth(req: Request, res: Response, next: NextFunction) {
-  const configured = process.env.ADMIN_API_KEY;
-
-  if (!configured || configured.length === 0) {
-    sendApiError(req, res, 401, "Admin API key is not configured on this server.", {
-      code: "ADMIN_KEY_NOT_CONFIGURED",
-    });
-    return;
-  }
-
-  const rawHeader = req.header("X-Admin-Key");
-
-  // Express joins duplicate headers into an array; a repeated X-Admin-Key is
-  // ambiguous and must be rejected rather than coerced.
-  if (Array.isArray(rawHeader)) {
-    sendApiError(req, res, 401, "Ambiguous X-Admin-Key header (multiple values).", {
-      code: "ADMIN_KEY_MALFORMED",
-    });
-    return;
-  }
-
-  if (rawHeader === undefined) {
-    sendApiError(req, res, 401, "Missing X-Admin-Key header.", {
-      code: "ADMIN_KEY_MISSING",
-    });
-    return;
-  }
-
-  const key = rawHeader.trim();
-  if (key.length === 0) {
-    sendApiError(req, res, 401, "Empty X-Admin-Key header.", {
-      code: "ADMIN_KEY_MALFORMED",
-    });
-    return;
-  }
-
-  if (key !== configured) {
-    sendApiError(req, res, 401, "Invalid Admin API key.", {
-      code: "ADMIN_KEY_INVALID",
-    });
+  if (!authorizeAdminApiKey(req, res)) {
     return;
   }
 

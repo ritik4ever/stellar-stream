@@ -32,7 +32,7 @@ import {
   startIndexer,
   getCircuitBreakerStatus,
 } from "./services/indexer";
-import { adminAuth } from "./middleware/adminAuth";
+import { ADMIN_CALLER, adminAuth, authorizeAdminApiKey } from "./middleware/adminAuth";
 import { deleteStreamById, reconcileStream } from "./services/streamStore";
 import { getCache } from "./services/cache";
 import { getStreamStats } from "./services/stats";
@@ -661,30 +661,10 @@ app.delete("/api/admin/assets/:code", adminJwtAuth, (req: Request, res: Response
 });
 
 app.post(["/api/admin/auth", "/api/auth/admin"], (req: Request, res: Response) => {
-  const configured = process.env.ADMIN_API_KEY;
-  if (!configured || configured.length === 0) {
-    sendApiError(req, res, 401, "Admin API key is not configured on this server.", {
-      code: "ADMIN_KEY_NOT_CONFIGURED",
-    });
+  if (!authorizeAdminApiKey(req, res, { allowBodyKey: true })) {
     return;
   }
-  const bodyKey = typeof req.body?.apiKey === "string" ? req.body.apiKey : undefined;
-  const headerKeyRaw = req.header("X-Admin-Key");
-  const headerKey = Array.isArray(headerKeyRaw) ? undefined : headerKeyRaw;
-  const apiKey = (bodyKey ?? headerKey ?? "").trim();
-  if (apiKey.length === 0) {
-    sendApiError(req, res, 401, "Missing or empty Admin API key.", {
-      code: "ADMIN_KEY_MISSING",
-    });
-    return;
-  }
-  if (apiKey !== configured) {
-    sendApiError(req, res, 401, "Invalid Admin API key.", {
-      code: "ADMIN_KEY_INVALID",
-    });
-    return;
-  }
-  const token = jwt.sign({ role: "admin", accountId: "admin", isAdmin: true }, getJwtSecret(), { expiresIn: "24h" });
+  const token = jwt.sign({ ...ADMIN_CALLER }, getJwtSecret(), { expiresIn: "24h" });
   res.json({ token });
 });
 
