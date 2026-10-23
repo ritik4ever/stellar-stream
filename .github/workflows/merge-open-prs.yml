@@ -9,6 +9,9 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  # Required to merge PRs that create or update workflow files; without it
+  # the GitHub App token is refused with "without `workflows` permission".
+  workflows: write
 
 concurrency:
   group: stellar-wave-merge-${{ github.event.pull_request.number }}

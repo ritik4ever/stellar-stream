@@ -9,10 +9,10 @@ ABI changes or you are setting up the frontend for the first time.
 ## Overview
 
 `soroban contract bindings typescript` reads a deployed contract's ABI from the
-network and generates a fully-typed TypeScript client. StellarStream keeps that
-output in `frontend/src/contracts/generated/` — a folder that is **gitignored**
-and must be regenerated locally or in CI before the frontend can call the contract
-directly.
+network and generates a fully-typed TypeScript client. StellarStream commits that
+output in `frontend/src/contracts/generated/` — regenerate it locally after every
+deploy and commit the result. The bindings-drift CI job regenerates from the
+deployed contract and fails when the committed output is stale.
 
 ```
 contracts/src/lib.rs          ← Rust source of truth
@@ -21,7 +21,7 @@ contracts/src/lib.rs          ← Rust source of truth
   Stellar Testnet              ← CONTRACT_ID lives here
         │  soroban contract bindings typescript
         ▼
-frontend/src/contracts/generated/   ← gitignored, regenerate as needed
+frontend/src/contracts/generated/   ← committed, regenerate + commit after each deploy
         │  import
         ▼
 frontend/src/services/contractClient.ts  ← thin wrapper used by the app
@@ -33,8 +33,8 @@ frontend/src/services/contractClient.ts  ← thin wrapper used by the app
 
 | Tool | Version | Notes |
 |---|---|---|
-| `soroban-cli` | latest | `cargo install --locked soroban-cli` |
-| Rust + `wasm32-unknown-unknown` | stable | needed to build the contract |
+| `soroban-cli` | 21.0.0 (`cargo install --locked soroban-cli --version 21.0.0`) | must match the `soroban-sdk` major in `contracts/Cargo.toml` |
+| Rust + `wasm32v1-none` | `nightly-2024-12-01` per `contracts/rust-toolchain.toml` | needed to build the contract; CI installs both `wasm32v1-none` and `wasm32-unknown-unknown` targets |
 | Node.js | 18+ | for the frontend |
 | A deployed contract | — | run `npm run deploy:contract` first |
 
@@ -325,27 +325,24 @@ To regenerate bindings in a CI pipeline, add a step after deployment:
   run: npm run gen:bindings
 ```
 
-The generated files do not need to be committed they can be regenerated from
-the deployed contract ID on every CI run.
+The generated files are committed. They are a point-in-time snapshot of the
+deployed contract ABI: regenerate from the deployed contract ID and commit the
+update on every deploy so the drift check
+(`.github/workflows/bindings-drift.yml`) stays green.
 
 ---
 
-## Gitignore rules
+## Git tracking
 
-The following lines should be present in `.gitignore`:
-
-```
-# Generated Soroban contract bindings — regenerate with: npm run gen:bindings
-frontend/src/contracts/generated/*
-!frontend/src/contracts/generated/README.md
-```
-
-This keeps the folder tracked so contributors know where to look while
-excluding the generated output which changes with every deployment.
+`frontend/src/contracts/generated/` is committed to the repository (only the
+`README.md` placeholder is exempt from regeneration wipes — the generation
+script preserves it). After regenerating, commit the updated bindings; the
+bindings-drift CI job fails when the committed output differs from a fresh
+regeneration against the deployed contract.
 
 ## Step-by-Step: Generating Bindings for the First Time
 
-If you've just cloned this repo, `frontend/src/contracts/generated/` won't exist yet — it's gitignored and must be generated locally.
+If you've just cloned this repo, `frontend/src/contracts/generated/` only contains the `README.md` placeholder — the typed client must be generated locally.
 
 1. **Install the Stellar CLI** (if you don't have it):
 ```bash
@@ -359,7 +356,7 @@ If you've just cloned this repo, `frontend/src/contracts/generated/` won't exist
 ```bash
    npm run gen:bindings
 ```
-   This wraps `stellar contract bindings typescript --network testnet --id <CONTRACT_ID> --output-dir frontend/src/contracts/generated --overwrite` (see the script definition in `package.json` for exact flags).
+   This wraps `soroban contract bindings typescript --contract-id <CONTRACT_ID> --rpc-url <RPC_URL> --network-passphrase "<PASSPHRASE>" --output-dir frontend/src/contracts/generated` (see `scripts/generate-contract-bindings.sh` for exact flags).
 
 4. **Verify the output.** After it completes, `frontend/src/contracts/generated/` should contain a typed client package (an `index.ts` or similar barrel file, plus type definitions matching the contract's methods).
 
@@ -376,7 +373,7 @@ If this is your very first time running it, you should end up with fully typed f
 Bindings are a point-in-time snapshot of the contract's interface. Whenever the contract is redeployed — even for a minor change — the bindings can silently go stale and reference methods/types that no longer match on-chain reality.
 
 1. **Redeploy or upgrade the contract** and get the new contract ID (or confirm the existing one, if you're upgrading via Soroban's upgrade mechanism rather than a fresh deploy).
-2. **Delete the old generated bindings** to avoid stale leftovers mixing with new output:
+2. **Delete the old generated bindings** to avoid stale leftovers mixing with new output (the generation script already wipes the output directory while preserving the tracked `README.md`, so this is only needed if you are regenerating manually):
 ```bash
    rm -rf frontend/src/contracts/generated
 ```
@@ -387,7 +384,7 @@ Bindings are a point-in-time snapshot of the contract's interface. Whenever the 
 4. **Diff the generated output** against what was previously committed/used in code — if a method signature changed (new required argument, renamed field, different return type), TypeScript will surface compile errors in any frontend code calling it. This is expected and is the whole point of typed bindings: fix the call sites, don't suppress the error.
 5. **Rebuild and smoke-test** the frontend against the upgraded contract before merging.
 
-> **Tip:** treat "regenerate bindings" as a required step in your contract-deploy checklist, not an optional one — this project doesn't yet automate it in CI (see the README's roadmap), so it's a manual step every contributor must remember.
+> **Tip:** treat "regenerate bindings" as a required step in your contract-deploy checklist — the bindings-drift CI job enforces it by regenerating from the deployed contract and failing on any diff.
 
 ## Troubleshooting Common Errors
 
@@ -404,7 +401,7 @@ Bindings are a point-in-time snapshot of the contract's interface. Whenever the 
 - **Fix:** ensure the `--network` flag used during generation matches the network your frontend's client configuration points to (check wherever `contractClient.ts` or similar sets up the RPC URL / network passphrase). These three things must agree: generation network, RPC URL at runtime, and network passphrase at runtime.
 
 ### Generated file exists but frontend won't compile / "Cannot find module"
-- **Cause:** `frontend/src/contracts/generated/` is gitignored — if you skipped Step 1-3 above (first-time generation) after a fresh clone, the import will fail because the folder is empty or missing.
+- **Cause:** `frontend/src/contracts/generated/` only contains the `README.md` placeholder until bindings are generated — if you skipped Step 1-3 above (first-time generation) after a fresh clone, the import will fail because the typed client is missing.
 - **Fix:** run `npm run gen:bindings` before running the frontend dev server for the first time on any fresh clone.
 
 ### Bindings generated successfully, but calling a method throws at runtime with an unrelated-looking error
@@ -439,4 +436,4 @@ const result = await tx.signAndSend();
 Key points for frontend integration:
 - The generated client gives you compile-time type safety — if the contract's interface changes and you forget to regenerate, TypeScript will not catch it (stale types still "look" valid), which is why regenerating after every deploy matters (see above).
 - Prefer importing from the barrel file (`index.ts`) at the root of the generated folder rather than reaching into individual generated files directly, so future regenerations don't break your imports if internal file structure changes.
-- Since `frontend/src/contracts/generated/` is gitignored, CI and new contributors must run `npm run gen:bindings` before the frontend will build — make sure this is documented in your local setup steps (see `README.md`).
+- Since `frontend/src/contracts/generated/` is committed, regenerating after every deploy and committing the result keeps CI and new contributors in sync — the drift check fails otherwise.

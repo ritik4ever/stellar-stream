@@ -12,9 +12,12 @@ backend/data/
 .current_bench.tmp
 .bench_results.tmp
 
-# Generated Soroban contract bindings are committed to the repository
+# Generated Soroban contract bindings are committed to the repository.
 # Regenerate with: CONTRACT_ID=$(cat contracts/contract_id.txt) npm run gen:bindings
+# The drift check (.github/workflows/bindings-drift.yml) regenerates and
+# fails when the result differs from what is committed.
 # See docs/CONTRACT_BINDINGS.md for the full workflow.
 
-# Deployed contract ID (changes per deployment, not committed)
+# Deployed contract ID placeholder (tracked so fresh checkouts and CI have a
+# fallback; a real deployment overwrites it locally).
 contracts/contract_id.txt

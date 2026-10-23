@@ -16,9 +16,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Rust
-        uses: actions/rust-toolchain@stable
+        # No explicit toolchain input: the pin in contracts/rust-toolchain.toml
+        # (nightly-2024-12-01) is the source of truth. Keep in sync with
+        # contract-ci.yml; see scripts/contract-ci-validate.sh.
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
           targets: wasm32-unknown-unknown
 
       - name: Install Soroban CLI
@@ -52,14 +54,21 @@ jobs:
 
       - name: Initialize Contract
         run: |
-          # Call initialize(admin: Address)
+          # initialize(admin, native_token, allowed_tokens) — see
+          # StellarStreamContract::initialize in contracts/src/lib.rs.
+          # Use the testnet native-XLM SAC as both the native token and the
+          # sole allowlisted token for this smoke test.
+          NATIVE_XLM="CDLZFC3SYJYDZT7K67VZ75YJFCVQELQQSTR2XTS2YPN6YGL67VTWXBCM"
+          echo "NATIVE_XLM=$NATIVE_XLM" >> $GITHUB_ENV
           soroban contract invoke \
             --id $CONTRACT_ID \
             --source-account deployer \
             --network testnet \
             -- \
             initialize \
-            --admin $DEPLOYER_PUBLIC
+            --admin $DEPLOYER_PUBLIC \
+            --native_token $NATIVE_XLM \
+            --allowed_tokens "[\"$NATIVE_XLM\"]"
 
       - name: Smoke Test - create_stream
         run: |
@@ -75,7 +84,9 @@ jobs:
           START_TIME=$((START_TIME + 3600))
           END_TIME=$((START_TIME + 3600))
           
-          # Call create_stream(sender, recipient, token, total_amount, start_time, end_time, metadata)
+          # Call create_stream(sender, recipient, token, total_amount, start_time,
+          # end_time, min_claim_interval_seconds, metadata) — see
+          # StellarStreamContract::create_stream in contracts/src/lib.rs.
           # Using deployer as both sender and recipient for simplicity in smoke test
           soroban contract invoke \
             --id $CONTRACT_ID \
@@ -88,7 +99,8 @@ jobs:
             --token $NATIVE_XLM \
             --total_amount 10000000 \
             --start_time $START_TIME \
-            --end_time $END_TIME
+            --end_time $END_TIME \
+            --min_claim_interval_seconds 0
 
       - name: Upload Contract ID
         uses: actions/upload-artifact@v4
