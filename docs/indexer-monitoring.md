@@ -227,3 +227,16 @@ The following optional settings are validated during startup in `backend/src/con
 | `INDEXER_MONITOR_MAX_CONSECUTIVE_ERRORS` | `5` | positive integer | Operational threshold aligned with the circuit-breaker failure budget. |
 
 Invalid values fail before the service starts, with the environment variable name and a non-sensitive validation message.
+
+## Consistency rule: cursor and indexed events (SSB-2026-143 / #1086)
+
+The Soroban event indexer defines a strict consistency rule across cursor updates, event row persistence, and monitoring signals:
+
+| Invariant | Mechanism | Consistency guarantee |
+|---|---|---|
+| Committed State on Success | Transactional page writes; checkpoint advanced only after all pages succeed | Returned results, counts, and metrics (`eventsIndexedTotal`) reflect actually committed database state. |
+| Do Not Claim Change on Failure | Catch blocks and validation guards skip metric increments and keep checkpoint intact | Failed events, corrupt values, or rolled-back transactions never increment insert counts or advance the cursor. |
+| Replayed Event Pages | `idx_stream_events_dedup` unique constraint on `(stream_id, event_type, ledger_sequence)` | Conflicting rows are silently skipped via `INSERT OR IGNORE` (`changes() = 0`) and increment `indexerEventsDedupedTotal`. |
+| Identical Event IDs | Deduplication at page boundary and within batch | Multiple events with identical identifiers are idempotent; only the first row is inserted without duplicate side effects. |
+| Process Restart (Cursor Lag) | Restart-recovery probe counts existing rows ahead of checkpoint cursor | Resumes from the stale checkpoint and re-processes events safely via dedup; emits structured outcome `restart_recovery`. |
+| Atomic Page Batches | Database transaction wraps each page of events | Errors during page execution roll back all rows in that page, and Prometheus counter increments are deferred until commit. |

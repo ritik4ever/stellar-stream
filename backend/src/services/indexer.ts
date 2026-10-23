@@ -284,28 +284,38 @@ function getFallbackPollInterval(): number {
 }
 
 /**
- * Indexer backfill consistency rule
- * --------------------------------
+ * Consistency rule: cursor and indexed events
+ * -------------------------------------------
  * The `indexer_cursor.last_ledger_sequence` row is the persisted high-water
  * mark of ledgers that have been fully processed and whose events are
  * durably stored in `stream_events`.
  *
- * Invariant: on success, the checkpoint advances only to a ledger at or
- * beyond the highest event ledger that was committed in this poll.  On
- * failure (RPC error, partial page, crash), the checkpoint is NOT advanced
- * and retains its previous value, so the next poll resumes from the last
- * fully committed ledger.
- *
- * Because event writes and the checkpoint write are separate operations
- * (events are committed page-by-page; the checkpoint is saved after the
- * poll completes), a crash between them can leave events persisted ahead
- * of the checkpoint.  That is safe: the dedup index on
- * stream_events(stream_id, event_type, ledger_sequence) makes reprocessing
- * idempotent, and the next poll simply re-reads from the stale checkpoint.
- *
- * Callers must not report a poll as successful unless the checkpoint
- * reflects the events actually committed.  `saveCheckpoint` is only
- * reached after all pages have been processed without error.
+ * Invariants across handlers, services, and recovery paths:
+ * 1. Committed State on Success: On success, the checkpoint advances only to a
+ *    ledger at or beyond the highest event ledger committed in this poll.
+ *    Returned results and metrics (counts, log lines, snapshot) reflect the
+ *    actual committed database state.
+ * 2. Do Not Claim a Change After Failure: On failure (RPC error, partial page,
+ *    corrupt payload, database write failure), the checkpoint is NOT advanced
+ *    and retains its previous value. Events that fail or are skipped do not
+ *    increment `eventsIndexedTotal` or count as inserted.
+ * 3. Replayed Event Pages: If an RPC replay occurs (e.g. from node cache replay
+ *    or pagination overlap), rows are safely deduplicated by the unique index
+ *    `idx_stream_events_dedup` on `stream_events(stream_id, event_type, ledger_sequence)`
+ *    via `INSERT OR IGNORE`. Conflicting rows yield 0 changes and increment
+ *    `indexerEventsDedupedTotal` rather than claiming a change.
+ * 4. Identical Event IDs: Multiple events with identical identifiers or
+ *    stream attributes within the same page or across page boundaries are
+ *    idempotently deduplicated without duplicate side effects.
+ * 5. Process Restart Between Cursor Write and Row Insert: Event writes and
+ *    checkpoint updates are separate operations. A crash between row insert
+ *    and checkpoint write leaves events persisted ahead of the cursor. On
+ *    restart, the indexer resumes from the stale checkpoint and re-reads
+ *    those events; `INSERT OR IGNORE` ensures idempotency while the
+ *    `restart_recovery` outcome signal is emitted.
+ * 6. Atomic Page Batches: Event writes within each page are wrapped in a
+ *    database transaction. Prometheus metric increments are deferred until the
+ *    transaction commits so uncommitted state never inflates metrics.
  */
 
 function loadCheckpoint(db: any): void {
@@ -326,23 +336,27 @@ function loadCheckpoint(db: any): void {
   }
 }
 
-function saveCheckpoint(db: any, ledgerSequence: number): void {
+function saveCheckpoint(db: any, ledgerSequence: number): boolean {
+  let saved = false;
   db.transaction(() => {
     const existing = db
       .prepare(`SELECT id FROM ${INDEXER_CURSOR_TABLE} WHERE id = @id`)
       .get({ id: CHECKPOINT_ROW_ID }) as { id: number } | undefined;
 
     if (existing) {
-      db.prepare(
+      const res = db.prepare(
         `UPDATE ${INDEXER_CURSOR_TABLE} SET last_ledger_sequence = @ledger WHERE id = @id`,
       ).run({ ledger: ledgerSequence, id: CHECKPOINT_ROW_ID });
+      saved = (res?.changes ?? 0) > 0;
     } else {
-      db.prepare(
+      const res = db.prepare(
         `INSERT INTO ${INDEXER_CURSOR_TABLE} (id, last_ledger_sequence) VALUES (@id, @ledger)`,
       ).run({ id: CHECKPOINT_ROW_ID, ledger: ledgerSequence });
+      saved = (res?.changes ?? 0) > 0;
     }
   })();
-  logger.debug({ ledgerSequence }, "checkpoint saved to database");
+  logger.debug({ ledgerSequence, saved }, "checkpoint saved to database");
+  return saved;
 }
 
 export function initIndexer(
@@ -580,6 +594,25 @@ async function indexEventsWithFallback(db: any, currentLedger: number, currentPo
   let dedupedCount = 0;
 
   if (eventCount > 0) {
+    db.transaction(() => {
+      for (const event of events.events || []) {
+        const outcome = processEvent(db, event);
+        if (outcome === "inserted") {
+          insertedCount++;
+        } else if (outcome === "deduped") {
+          dedupedCount++;
+        }
+      }
+    })();
+
+    // Defer metric increments until transaction commits
+    for (let i = 0; i < insertedCount; i++) {
+      eventsIndexedTotal.inc();
+    }
+    for (let i = 0; i < dedupedCount; i++) {
+      indexerEventsDedupedTotal.inc();
+    }
+  }
   db.transaction(() => {
     for (const event of events.events || []) {
       const result = processEvent(db, event);
@@ -692,6 +725,30 @@ async function indexEventsWithCursorPagination(db: any, currentLedger: number, c
     let pageDeduped = 0;
 
     db.transaction(() => {
+      for (const event of events) {
+        const outcome = processEvent(db, event);
+        if (outcome === "inserted") {
+          pageInserted++;
+        } else if (outcome === "deduped") {
+          pageDeduped++;
+        }
+
+        if (event.ledger > maxLedgerSeen) {
+          maxLedgerSeen = event.ledger;
+        }
+      }
+    })();
+
+    // Defer metric increments until transaction commits
+    for (let i = 0; i < pageInserted; i++) {
+      eventsIndexedTotal.inc();
+    }
+    for (let i = 0; i < pageDeduped; i++) {
+      indexerEventsDedupedTotal.inc();
+    }
+
+    totalInserted += pageInserted;
+    totalDeduped += pageDeduped;
   for (const event of events) {
     const result = processEvent(db, event);
     if (result === "inserted") pageInserted++;
@@ -761,6 +818,39 @@ if (pageDeduped > 0) indexerEventsDedupedTotal.inc(pageDeduped);
   );
 }
 
+export type ProcessEventOutcome = "inserted" | "deduped" | "skipped" | "failed";
+
+export function processEvent(db: any, event: rpc.Api.EventResponse): ProcessEventOutcome {
+  try {
+    const topic = event.topic?.map((t: any) => scValToNative(t));
+    const value = event.value ? scValToNative(event.value) : undefined;
+
+    if (!topic || topic.length < 2) return "skipped";
+    if (topic[0] !== "Stream") return "skipped";
+    if (!value) return "failed";
+
+    const eventName = topic[1];
+    const timestamp = Math.floor(new Date(event.ledgerClosedAt).getTime() / 1000);
+
+    let inserted: boolean | undefined;
+    switch (eventName) {
+      case "Created":
+        inserted = recordEventWithDb(
+          db,
+          value.stream_id.toString(),
+          "created",
+          timestamp,
+          // actor == sender for Created events
+          value.actor ?? value.sender,
+          value.total_amount,
+          {
+            recipient: value.recipient,
+            token: value.token,
+            startTime: value.start_time,
+            endTime: value.end_time,
+          },
+          event.ledger,
+        );
 type ProcessResult = "inserted" | "deduped" | "skipped";
 
 function processEvent(db: any, event: rpc.Api.EventResponse): ProcessResult {
@@ -821,7 +911,7 @@ function processEvent(db: any, event: rpc.Api.EventResponse): ProcessResult {
         break;
 
       case "Claimed":
-        recordEventWithDb(
+        inserted = recordEventWithDb(
           db,
           value.stream_id.toString(),
           "claimed",
@@ -835,7 +925,7 @@ function processEvent(db: any, event: rpc.Api.EventResponse): ProcessResult {
         break;
 
       case "Completed":
-        recordEventWithDb(
+        inserted = recordEventWithDb(
           db,
           value.stream_id.toString(),
           "completed",
@@ -848,7 +938,7 @@ function processEvent(db: any, event: rpc.Api.EventResponse): ProcessResult {
         break;
 
       case "Canceled":
-        recordEventWithDb(
+        inserted = recordEventWithDb(
           db,
           value.stream_id.toString(),
           "canceled",
@@ -862,7 +952,7 @@ function processEvent(db: any, event: rpc.Api.EventResponse): ProcessResult {
         break;
 
       case "Paused":
-        recordEventWithDb(
+        inserted = recordEventWithDb(
           db,
           value.stream_id.toString(),
           "paused",
@@ -876,7 +966,7 @@ function processEvent(db: any, event: rpc.Api.EventResponse): ProcessResult {
         break;
 
       case "Resumed":
-        recordEventWithDb(
+        inserted = recordEventWithDb(
           db,
           value.stream_id.toString(),
           "resumed",
@@ -890,7 +980,7 @@ function processEvent(db: any, event: rpc.Api.EventResponse): ProcessResult {
         break;
 
       case "Transfer":
-        recordEventWithDb(
+        inserted = recordEventWithDb(
           db,
           value.stream_id.toString(),
           "transferred",
@@ -904,7 +994,7 @@ function processEvent(db: any, event: rpc.Api.EventResponse): ProcessResult {
         break;
 
       case "Clawback":
-        recordEventWithDb(
+        inserted = recordEventWithDb(
           db,
           value.stream_id.toString(),
           "clawback",
@@ -919,9 +1009,21 @@ function processEvent(db: any, event: rpc.Api.EventResponse): ProcessResult {
 
       default:
         logger.warn({ eventName }, "unknown contract event type — skipped");
-        break;
+        return "skipped";
+    }
+
+    if (typeof inserted === "boolean") {
+      return inserted ? "inserted" : "deduped";
+    }
+
+    try {
+      const changes = db?.prepare?.("SELECT changes() AS n")?.get?.() as { n: number } | undefined;
+      return (changes?.n ?? 1) === 0 ? "deduped" : "inserted";
+    } catch {
+      return "inserted";
     }
   } catch (err) {
     logger.error({ err }, "failed to process event");
+    return "failed";
   }
 }

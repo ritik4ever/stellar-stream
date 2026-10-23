@@ -516,10 +516,55 @@ describe("Soroban event indexer workflow: process restart between cursor write a
     expect(stored).toHaveLength(1);
     expect(stored[0].stream_id).toBe("7");
 
+    // Consistency rule: metrics reflect committed state only, and do not claim
+    // a change for the failed event.
+    expect(mockEventsIndexedTotal.inc).toHaveBeenCalledTimes(1);
+
     // Outcome signal: only the valid event was processed, so not restart_recovery.
     const snapshot = getIndexerMonitoringSnapshot();
     expect(snapshot.lastPollOutcome).toBeOneOf(["events_processed", "restart_recovery"]);
     expect(snapshot.lastPollDurationMs).toBeGreaterThanOrEqual(0);
     expect(snapshot.pollCycleId).toBeGreaterThan(0);
   });
+
+  it("does not claim a change or increment indexed metrics for skipped non-stream events or unknown event types", async () => {
+    const cid = nextContractId();
+    setupDb(1100);
+
+    mockGetLatestLedger.mockResolvedValue({ sequence: 1150 });
+
+    const nonStreamEvent = {
+      id: "evt-nonstream-001",
+      topic: ["OtherContract", "Created"],
+      value: { stream_id: BigInt(888) },
+      ledgerClosedAt: new Date(1_700_000_000_000).toISOString(),
+      ledger: 1110,
+    };
+    const unknownTypeEvent = {
+      id: "evt-unknown-001",
+      topic: ["Stream", "SomeFutureAction"],
+      value: { stream_id: BigInt(888) },
+      ledgerClosedAt: new Date(1_700_000_000_000).toISOString(),
+      ledger: 1120,
+    };
+
+    mockGetEvents.mockResolvedValueOnce({
+      events: [nonStreamEvent as any, unknownTypeEvent as any],
+      cursor: undefined,
+    });
+
+    await runOnePoll(cid);
+
+    expect(readCursor()).toBe(1150);
+    // No rows inserted in database
+    expect(getStoredEvents()).toHaveLength(0);
+
+    // Zero changes claimed: eventsIndexedTotal not incremented
+    expect(mockEventsIndexedTotal.inc).not.toHaveBeenCalled();
+
+    // Outcome reflects empty range because no events were inserted or deduped
+    const snapshot = getIndexerMonitoringSnapshot();
+    expect(snapshot.lastPollOutcome).toBe("empty_range");
+  });
 });
+

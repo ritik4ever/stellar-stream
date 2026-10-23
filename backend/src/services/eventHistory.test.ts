@@ -44,32 +44,39 @@ describe("eventHistory", () => {
   });
 
   describe("recordEventWithDb basic operations", () => {
-    it("inserts an event normally", () => {
-      recordEventWithDb(db, "1", "created", 1000, "GSENDER", 100, undefined, 42);
+    it("inserts an event normally and returns true", () => {
+      const inserted = recordEventWithDb(db, "1", "created", 1000, "GSENDER", 100, undefined, 42);
+      expect(inserted).toBe(true);
       const rows = db.prepare("SELECT * FROM stream_events").all();
       expect(rows).toHaveLength(1);
     });
 
-    it("silently ignores a duplicate (stream_id, event_type, ledger_sequence)", () => {
-      recordEventWithDb(db, "1", "created", 1000, "GSENDER", 100, undefined, 42);
-      recordEventWithDb(db, "1", "created", 1000, "GSENDER", 100, undefined, 42);
+    it("silently ignores a duplicate (stream_id, event_type, ledger_sequence) and returns false", () => {
+      const first = recordEventWithDb(db, "1", "created", 1000, "GSENDER", 100, undefined, 42);
+      const second = recordEventWithDb(db, "1", "created", 1000, "GSENDER", 100, undefined, 42);
 
+      expect(first).toBe(true);
+      expect(second).toBe(false);
       const rows = db.prepare("SELECT * FROM stream_events").all();
       expect(rows).toHaveLength(1);
     });
 
-    it("allows same event_type on different ledger sequences", () => {
-      recordEventWithDb(db, "1", "claimed", 1000, "GRECIPIENT", 50, undefined, 10);
-      recordEventWithDb(db, "1", "claimed", 2000, "GRECIPIENT", 50, undefined, 20);
+    it("allows same event_type on different ledger sequences and returns true for each insert", () => {
+      const first = recordEventWithDb(db, "1", "claimed", 1000, "GRECIPIENT", 50, undefined, 10);
+      const second = recordEventWithDb(db, "1", "claimed", 2000, "GRECIPIENT", 50, undefined, 20);
 
+      expect(first).toBe(true);
+      expect(second).toBe(true);
       const rows = db.prepare("SELECT * FROM stream_events").all();
       expect(rows).toHaveLength(2);
     });
 
     it("allows events without ledger_sequence to coexist (reconciliation path)", () => {
-      recordEventWithDb(db, "1", "created", 1000, "GSENDER", 100);
-      recordEventWithDb(db, "1", "created", 1000, "GSENDER", 100);
+      const first = recordEventWithDb(db, "1", "created", 1000, "GSENDER", 100);
+      const second = recordEventWithDb(db, "1", "created", 1000, "GSENDER", 100);
 
+      expect(first).toBe(true);
+      expect(second).toBe(true);
       // NULL is not equal to NULL in SQLite unique index, so both rows are inserted
       const rows = db.prepare("SELECT * FROM stream_events").all();
       expect(rows).toHaveLength(2);

@@ -47,6 +47,7 @@ export function recordEvent(
   amount?: number,
   metadata?: Record<string, any>,
   ledgerSequence?: number,
+): boolean {
 ): RecordEventResult {
   const db = getDb();
   return recordEventWithDb(db, streamId, eventType, timestamp, actor, amount, metadata, ledgerSequence);
@@ -57,6 +58,13 @@ export function recordEvent(
  * Uses INSERT OR IGNORE, so a duplicate (stream_id, event_type, ledger_sequence)
  * row is skipped.
  *
+ * Consistency rule:
+ * - When called with a transaction handle, the event is committed or rolled
+ *   back together with the stream row write. Callers must not report success
+ *   until the enclosing transaction commits.
+ * - Returned results reflect committed state on success and do not claim a
+ *   change after failure: returns `true` if a row was actually inserted into
+ *   `stream_events`, or `false` if ignored due to conflict or deduplication.
  * Returns "inserted" if a new row was written, or "deduped" if an identical
  * row already existed. Callers can use this to tell a replay apart from a
  * fresh insert without relying on SELECT changes().
@@ -70,6 +78,8 @@ export function recordEventWithDb(
   amount?: number,
   metadata?: Record<string, any>,
   ledgerSequence?: number,
+): boolean {
+  const result = db.prepare(
 ): RecordEventResult {
   const info = db.prepare(
     `INSERT OR IGNORE INTO stream_events (stream_id, event_type, ledger_sequence, timestamp, actor, amount, metadata)
@@ -85,6 +95,7 @@ export function recordEventWithDb(
       ? JSON.stringify(metadata, (_, v) => (typeof v === "bigint" ? v.toString() : v))
       : null,
   });
+  return (result?.changes ?? 0) > 0;
 
   return info.changes > 0 ? "inserted" : "deduped";
 }
