@@ -21,18 +21,19 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        # Keep the locked legacy-peer install mode consistent across frontend jobs.
+        run: npm ci --legacy-peer-deps
 
       - name: Build frontend
         run: npm run build
 
       - name: Install serve and Lighthouse CI
-        run: npm install --no-save serve @lhci/cli@0.14.x
+        run: npm install --no-save --legacy-peer-deps serve @lhci/cli@0.14.x
 
       - name: Run Lighthouse CI
         run: |

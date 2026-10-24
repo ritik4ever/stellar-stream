@@ -22,6 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 20}
+      # The real RPC preflight loads dotenv; native backend addons are not used.
+      - run: npm ci --ignore-scripts --legacy-peer-deps
+        working-directory: backend
       - run: bash scripts/compose-up.test.sh
   e2e-run-script:
     name: E2E Run Script

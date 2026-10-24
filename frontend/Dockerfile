@@ -10,8 +10,9 @@ WORKDIR /app
 # Copy manifests first to maximise layer cache reuse
 COPY package*.json ./
 
-# Install dependencies (frontend package.json may be sparse; handle gracefully)
-RUN npm install --ignore-scripts 2>/dev/null || true
+# Use the committed lockfile and the same peer mode as the frontend CI job.
+# An install failure must stop the image build.
+RUN npm ci --ignore-scripts --legacy-peer-deps
 
 # Copy all source files
 COPY . .

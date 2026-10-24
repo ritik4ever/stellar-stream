@@ -20,13 +20,14 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm ci
+        # Match the peer-resolution mode used by the existing frontend build.
+        run: npm ci --legacy-peer-deps
 
       - name: Install Playwright Chromium browser
         working-directory: frontend
@@ -41,6 +42,7 @@ jobs:
           EOF
 
       - name: Start Docker Compose stack
+        id: stack
         run: |
           docker compose -f docker-compose.yml down --volumes --remove-orphans || true
           docker compose -f docker-compose.yml up -d --build
@@ -90,5 +92,5 @@ jobs:
           exit 1
 
       - name: Tear down Docker Compose stack
-        if: always()
+        if: always() && steps.stack.outcome != 'skipped' && steps.stack.outcome != ''
         run: docker compose -f docker-compose.yml down --volumes --remove-orphans
