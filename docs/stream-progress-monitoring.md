@@ -23,6 +23,22 @@ Stream progress calculation (`calculateProgress(stream, at)`) evaluates vesting 
 
 ---
 
+## 1.1 Consistency Rule: Vested Plus Remaining Equals Total (SSB-2026-128)
+
+Across all lifecycle boundaries (before start, at start, active vesting, completed, paused, canceled) and under system clock movements (including transient clock skew or severe backwards clock jumps), stream progress math satisfies an exact conservation consistency rule:
+
+$A_{vested} + A_{remaining} = A_{total}$
+
+1. **Exact balance**: `vestedAmount` and `remainingAmount` are rounded and clamped such that `vestedAmount + remainingAmount === totalAmount` for any query timestamp `at` and across all HTTP endpoints returning stream progress.
+2. **Lifecycle preservation**:
+   - **Before start / normal empty**: `vestedAmount = 0`, `remainingAmount = totalAmount`.
+   - **At start**: `vestedAmount = 0`, `remainingAmount = totalAmount`.
+   - **At end / past end / completed**: `vestedAmount = totalAmount`, `remainingAmount = 0`.
+   - **System clock backwards**: `vestedAmount` is safely floored at `0` (or frozen at cancellation/pause boundaries) and `remainingAmount` matches `totalAmount - vestedAmount`.
+3. **Committed state guarantee**: Mutation handlers (`cancelStream`, `pauseStream`, `resumeStream`, `markStreamComplete`) and read operations reflect committed state on success, while any write or validation failure aborts the transaction and returns a stable error response without claiming an uncommitted state change.
+
+---
+
 ## 2. Distinguishing Normal Empty Case from Clock Regression Failure
 
 Before stream start (`at < stream.startAt`), zero vested amount and zero percentage complete is expected and healthy. Operators and automated alerting systems must distinguish this normal empty case from clock regression failures:

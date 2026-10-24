@@ -602,6 +602,53 @@ describe("calculateProgress", () => {
       expect(metrics).toContain("stream_progress_clock_skew_total");
     });
   });
+
+  describe("Consistency rule: vested plus remaining equals total (SSB-2026-128)", () => {
+    it("ensures vestedAmount + remainingAmount equals totalAmount across lifecycle boundaries", () => {
+      const stream = createBaseStream({
+        id: "stream-consistency-1",
+        totalAmount: 1000,
+        durationSeconds: 3600,
+        startAt: 1000000,
+        createdAt: 999000,
+      });
+
+      const testTimes = [
+        998000,
+        999500,
+        1000000,
+        1000600,
+        1001800,
+        1003600,
+        1005000,
+      ];
+
+      for (const t of testTimes) {
+        const progress = calculateProgress(stream, t);
+        expect(progress.vestedAmount + progress.remainingAmount).toBe(stream.totalAmount);
+      }
+    });
+
+    it("preserves consistency rule for fractional amounts and zero duration", () => {
+      const fractionalStream = createBaseStream({
+        id: "stream-frac",
+        totalAmount: 1000.5,
+        durationSeconds: 3600,
+        startAt: 1000000,
+      });
+
+      const pFrac = calculateProgress(fractionalStream, 1001200);
+      expect(pFrac.vestedAmount + pFrac.remainingAmount).toBe(fractionalStream.totalAmount);
+
+      const zeroDurationStream = createBaseStream({
+        id: "stream-zero",
+        totalAmount: 500,
+        durationSeconds: 0,
+        startAt: 1000000,
+      });
+
+      const pZero = calculateProgress(zeroDurationStream, 1000000);
+      expect(pZero.vestedAmount + pZero.remainingAmount).toBe(zeroDurationStream.totalAmount);
+    });
+  });
 });
-
-
