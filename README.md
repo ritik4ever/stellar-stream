@@ -466,13 +466,15 @@ Copy `backend/.env.example` to `backend/.env` and `frontend/.env.example` to `fr
 ### Variable Interactions & Precedence
 
 1. **`SOROBAN_DISABLED` vs. `CONTRACT_ID` & `SERVER_PRIVATE_KEY`**:
-   - When `SOROBAN_DISABLED=true`, the backend operates in **local mock mode**. `CONTRACT_ID` and `SERVER_PRIVATE_KEY` are not required, and on-chain Soroban event indexing is disabled.
-   - When `SOROBAN_DISABLED` is not set or set to `false` (default), **both `CONTRACT_ID` and `SERVER_PRIVATE_KEY` MUST be provided** and pass format validation (`C...` contract ID and `S...` secret key). If either is missing or invalid, process startup fails immediately.
-   - ⚠️ `SOROBAN_DISABLED=true` is strictly for local development without a running Stellar network node. Never enable `SOROBAN_DISABLED` in staging or production environments.
+   - `SOROBAN_DISABLED` accepts case/whitespace-insensitive `"true"` or `"false"` (or may be omitted, defaulting to `"false"`). Any other non-empty string fails startup validation immediately (`exit 1`, `outcome: "blocked"`, `outcomeCode: 2`) without echoing the raw value.
+   - When `SOROBAN_DISABLED=true` (allowed only in non-production `testnet` runs), the backend operates in **local mock mode** (`sorobanEnabled: false`, `contractId: null`, `serverPrivateKey: null`). If `CONTRACT_ID` (or `STELLAR_CONTRACT_ID`) and/or `SERVER_PRIVATE_KEY` are also present in the environment, startup logs a warning that those credentials are ignored in disabled mode, strips them from the returned config, and never logs secret values.
+   - When `SOROBAN_DISABLED` is not set or set to `false` (default), **both `CONTRACT_ID` (or `STELLAR_CONTRACT_ID`) and `SERVER_PRIVATE_KEY` MUST be provided** and pass strict Stellar Base32 format validation (`^C[A-Z2-7]{55}$` for contract ID and `^S[A-Z2-7]{55}$` for secret key). If either is missing, whitespace-only, or malformed, process startup fails immediately (`exit 1`, `outcome: "blocked"`, `outcomeCode: 2`) without disclosing secret values.
+   - ⚠️ `SOROBAN_DISABLED=true` is strictly for local development without a running Stellar network node. Setting `SOROBAN_DISABLED=true` with `NODE_ENV=production` or `STELLAR_NETWORK=mainnet` fails startup validation (`exit 1`, `outcomeCode: 2`).
 
-2. **Backwards-Compatibility Aliases**:
-   - `STELLAR_CONTRACT_ID` falls back to `CONTRACT_ID` if unset.
-   - `SOROBAN_RPC_URL` falls back to `RPC_URL` if unset.
+2. **Backwards-Compatibility Aliases & RPC URL Validation**:
+   - `STELLAR_CONTRACT_ID` and `CONTRACT_ID` act as mutual fallbacks when only one is set; if both are set to different values while Soroban is enabled, validation fails fast (`exit 1`, `outcomeCode: 2`).
+   - `SOROBAN_RPC_URL` falls back to `RPC_URL` if unset; if both are explicitly set to different URLs, validation fails fast (`exit 1`, `outcomeCode: 2`).
+   - `RPC_URL` and `SOROBAN_RPC_URL` must be valid `http://` or `https://` URLs (validated in both enabled and disabled Soroban modes). Malformed URLs or URLs containing userinfo credentials, query tokens, or Stellar secret keys are redacted (`[REDACTED]` / `[REDACTED_INVALID_URL]`) in validation logs.
    - `STELLAR_NETWORK` falls back to `NETWORK_PASSPHRASE` if unset.
 
 3. **`WEBHOOK_DESTINATION_URL` vs. `WEBHOOK_SIGNING_SECRET`**:
