@@ -140,10 +140,10 @@ export function requeueDeadLetter(id: number, context: WebhookSignalContext = {}
       const deadLetter = db
         .prepare(`SELECT * FROM webhook_dead_letters WHERE id = ?`)
         .get(id) as any;
-      if (!deadLetter) return false;
+      if (!deadLetter) return null;
 
       const now = Math.floor(Date.now() / 1000);
-      db.prepare(`
+      const insertResult = db.prepare(`
 INSERT INTO webhook_deliveries (stream_id, event, payload, attempt, max_attempts, status, next_retry_at, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `).run(
@@ -158,7 +158,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       );
 
       db.prepare(`DELETE FROM webhook_dead_letters WHERE id = ?`).run(id);
-      return true;
+      return Number(insertResult.lastInsertRowid);
     })();
 
     const latencyMs = Date.now() - startedAt;
@@ -167,19 +167,21 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       return false;
     }
 
-    emitSignal("requeued_dead_letter", signalContext, { latencyMs });
+    emitSignal("requeued_dead_letter", signalContext, { latencyMs, deliveryId: requeued });
     return true;
   } catch (error: any) {
     // Worker restart during dead-letter transition can surface as a transaction failure.
     // Emit a structured outcome with latency so operators can distinguish this from a normal empty case.
     const latencyMs = Date.now() - startedAt;
+    const failureReason = error?.message || error?.name || "requeue_failed";
     logger.error(
-      { err: error, streamId: signalContext.streamId, requestId: signalContext.requestId, deadLetterId: id },
+      { err: error, streamId: signalContext.streamId, requestId: signalContext.requestId, deadLetterId: id, failureReason },
       "failed to requeue webhook dead letter"
     );
     emitSignal("requeue_failed", signalContext, {
       latencyMs,
       errorName: error?.name,
+      failureReason,
       // Indicates the transition may have been interrupted by a worker restart.
       workerRestartSuspected: true,
     });

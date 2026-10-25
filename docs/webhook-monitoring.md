@@ -96,6 +96,19 @@ Rollback step:
 - **Explicit Retry Path on Temporary 5xx and Timeouts**: When an endpoint times out or returns a temporary 5xx (`500`, `502`, `503`, `504`), the worker retains the active delivery row in `pending` status and schedules a retry using configured backoff intervals (`5s`, `15s`, `60s`, `300s`, `900s`). Every retry re-sends the identical `Idempotency-Key` (`stellar-stream-<delivery id>`) header and exact canonical JSON body so endpoints can safely deduplicate received requests.
 - **Explicit Dead-Letter Rollback Path**: When attempts reach `max_attempts` without a `2xx` response, the delivery is removed from `webhook_deliveries` and moved to `webhook_dead_letters` in a single transaction. No duplicate entries or dangling delivery rows remain. If a worker restart interrupts the transition, structured signals (`dead_letter_transition_interrupted`) surface the state for operator reconciliation.
 
+### Consistency rule: Delivery ID and failure reason across dead-letter lifecycle (SSB-2026-158)
+
+Across webhook worker transitions, database transactions, operator recovery workflows, and API endpoints, dead letter operations adhere to a strict consistency rule:
+
+1. **Committed State Reflection on Success**:
+   - When a delivery exhausts its last permitted retry (`attempt + 1 >= max_attempts`), it is moved to `webhook_dead_letters` and removed from `webhook_deliveries` within a single atomic database transaction (`db.transaction`).
+   - The structured log and monitoring signals reflect the committed transition with the exact original `deliveryId`, `streamId`, and the terminal `failureReason` (e.g. `HTTP 5xx`, timeout, or network error).
+   - When a dead letter is requeued (`requeueDeadLetter`), it is restored into `webhook_deliveries` with a fresh `deliveryId` and reset `attempt = 0`, while atomically removing the dead letter entry from `webhook_dead_letters`. The requeue signal accurately captures the newly committed `deliveryId`.
+
+2. **No Claimed State Changes on Failure**:
+   - If a worker restart, crash, or transaction error interrupts a dead-letter transition, the entire transaction is rolled back. The active delivery remains pending in `webhook_deliveries` without losing state or leaving dangling orphan records in `webhook_dead_letters`. The system emits a structured `dead_letter_transition_failed` signal without claiming a state change.
+   - If requeueing a dead letter encounters a failure (e.g. dead letter ID not found or database abort), the operation aborts without claiming a requeue or removing the dead letter from storage. Handlers return structured error responses (`404 NOT_FOUND` or `500 INTERNAL_ERROR`) consistent with the committed database state.
+
 - Any `2xx` response marks the delivery `success`. A successful delivery does not increase `attempt`, and `next_retry_at` is cleared because no further retry is scheduled.
 - Any non-`2xx` HTTP response, including a temporary `5xx`, and any transport error or timeout count as one failed attempt. The delivery remains pending with the configured backoff until it succeeds or exhausts `max_attempts`, after which it is moved to dead-letter storage. A timeout is ambiguous: the receiver may have processed the request even though this service did not receive its response.
 - Retries of the same queue row send the same `Idempotency-Key` (`stellar-stream-<delivery id>`) and the same request body. Receivers should retain processed keys and return the original success for a repeated key to avoid applying a timed-out request twice. A manually requeued dead letter is a new queue row and therefore has a new key.
