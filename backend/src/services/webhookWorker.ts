@@ -1,6 +1,10 @@
 import axios from "axios";
 import { getDb } from "./db";
-import { getRetryDelaySeconds } from "./webhook";
+import {
+  recordDeliveryFailure,
+  recordDeliverySuccess,
+  type WebhookDeliveryAttemptResult,
+} from "./webhook";
 import { getWebhookHeaders } from "./webhookSignature";
 import { validateWebhookUrl } from "./webhookUrl";
 import { logger } from "../logger";
@@ -34,6 +38,8 @@ function sanitizeWebhookError(error: any): Record<string, unknown> {
 export const processWebhookQueue = async () => {
   if (isProcessing) return;
   isProcessing = true;
+
+  const committedResults: WebhookDeliveryAttemptResult[] = [];
 
   try {
     const url = process.env.WEBHOOK_DESTINATION_URL;
@@ -70,12 +76,12 @@ export const processWebhookQueue = async () => {
     const db = getDb();
     const now = Math.floor(Date.now() / 1000);
 
-    // Fetch pending deliveries that are due
+    // Fetch pending deliveries that are due (aligning NULL or <= now with monitoring queries)
     const pendingDeliveries = db
       .prepare(
         `SELECT * FROM webhook_deliveries 
-         WHERE status = 'pending' AND next_retry_at <= ? 
-         ORDER BY next_retry_at ASC LIMIT 10`
+         WHERE status = 'pending' AND (next_retry_at IS NULL OR next_retry_at <= ?) 
+         ORDER BY next_retry_at ASC, id ASC LIMIT 10`
       )
       .all(now);
 
@@ -92,12 +98,12 @@ export const processWebhookQueue = async () => {
     }
 
     for (const delivery of pendingDeliveries) {
-      const { id, event, payload, attempt, max_attempts } = delivery;
+      const { id, event, payload, attempt } = delivery;
       const parsedPayload = JSON.parse(payload);
       const startTime = Date.now();
 
       let success = false;
-      let errorMsg = null;
+      let errorMsg: string | null = null;
 
       try {
         const body = {
@@ -279,18 +285,41 @@ export const processWebhookQueue = async () => {
             );
           }
         } else {
-          // Use configured retry delays: 5s, 15s, 60s, 300s, 900s
-          const delaySeconds = getRetryDelaySeconds(newAttempt - 1);
-          const nextRetry = updateNow + delaySeconds;
-
-          db.prepare(
-            `UPDATE webhook_deliveries SET attempt = ?, last_attempt_at = ?, next_retry_at = ?, error_message = ? WHERE id = ?`
-          ).run(newAttempt, updateNow, nextRetry, errorMsg, id);
-          logger.info(
-            { deliveryId: id, event, attempt: newAttempt, delaySeconds, nextRetryAt: new Date(nextRetry * 1000).toISOString() },
-            "webhook delivery scheduled for retry",
+          const committed = recordDeliveryFailure(
+            id,
+            url,
+            errorMsg ?? "Unknown error",
+            updateNow,
           );
+          if (committed) {
+            committedResults.push(committed);
+            if (committed.status === "dead_lettered") {
+              logger.error(
+                { deliveryId: id, event, maxAttempts: committed.max_attempts },
+                "webhook delivery moved to dead-letter storage",
+              );
+            } else {
+              logger.info(
+                {
+                  deliveryId: id,
+                  event,
+                  attempt: committed.attempt,
+                  delaySeconds: committed.delay_seconds,
+                  nextRetryAt:
+                    committed.next_retry_at !== null
+                      ? new Date(committed.next_retry_at * 1000).toISOString()
+                      : null,
+                },
+                "webhook delivery scheduled for retry",
+              );
+            }
+          }
         }
+      } catch (dbErr: any) {
+        logger.error(
+          { err: dbErr, deliveryId: id, event },
+          "failed to commit webhook delivery state transition",
+        );
       }
     }
   } catch (err: any) {
@@ -298,6 +327,8 @@ export const processWebhookQueue = async () => {
   } finally {
     isProcessing = false;
   }
+
+  return committedResults;
 };
 
 export const startWebhookWorker = (intervalMs: number = 5000) => {

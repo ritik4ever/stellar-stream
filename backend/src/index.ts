@@ -59,6 +59,7 @@ import {
   getDeadLetters,
   countDeadLetters,
   requeueDeadLetter,
+  requeueDeadLetterWithState,
 } from "./services/webhook";
 import {
   archiveOldStreams,
@@ -2494,14 +2495,26 @@ app.post(
     }
 
     try {
-      const success = requeueDeadLetter(id);
-      if (!success) {
+      const delivery = requeueDeadLetterWithState(id);
+      if (!delivery) {
         sendApiError(req, res, 404, "Dead letter not found", {
           code: "NOT_FOUND",
         });
         return;
       }
-      res.json({ success: true, message: "Webhook re-queued successfully" });
+      res.json({
+        success: true,
+        message: "Webhook re-queued successfully",
+        delivery: {
+          id: delivery.id,
+          stream_id: delivery.stream_id,
+          event: delivery.event,
+          attempt: delivery.attempt,
+          max_attempts: delivery.max_attempts,
+          status: delivery.status,
+          next_retry_at: delivery.next_retry_at,
+        },
+      });
     } catch (error: any) {
       logger.error({ err: error, deadLetterId: id }, "failed to re-queue dead-letter webhook");
       const normalizedError = normalizeUnknownApiError(
