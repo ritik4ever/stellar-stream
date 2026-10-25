@@ -90,6 +90,12 @@ Rollback step:
 
 ## Delivery and retry semantics
 
+### Safe recovery and rollback semantics (SSB-2026-152)
+
+- **Absence of Duplicate Money-Moving Effects**: Outbound webhook delivery operates strictly after stream lifecycle and money movements commit. Webhook retries never re-trigger, simulate, or duplicate on-chain Soroban transactions, token transfers, escrow mutations, or stream events.
+- **Explicit Retry Path on Temporary 5xx and Timeouts**: When an endpoint times out or returns a temporary 5xx (`500`, `502`, `503`, `504`), the worker retains the active delivery row in `pending` status and schedules a retry using configured backoff intervals (`5s`, `15s`, `60s`, `300s`, `900s`). Every retry re-sends the identical `Idempotency-Key` (`stellar-stream-<delivery id>`) header and exact canonical JSON body so endpoints can safely deduplicate received requests.
+- **Explicit Dead-Letter Rollback Path**: When attempts reach `max_attempts` without a `2xx` response, the delivery is removed from `webhook_deliveries` and moved to `webhook_dead_letters` in a single transaction. No duplicate entries or dangling delivery rows remain. If a worker restart interrupts the transition, structured signals (`dead_letter_transition_interrupted`) surface the state for operator reconciliation.
+
 - Any `2xx` response marks the delivery `success`. A successful delivery does not increase `attempt`, and `next_retry_at` is cleared because no further retry is scheduled.
 - Any non-`2xx` HTTP response, including a temporary `5xx`, and any transport error or timeout count as one failed attempt. The delivery remains pending with the configured backoff until it succeeds or exhausts `max_attempts`, after which it is moved to dead-letter storage. A timeout is ambiguous: the receiver may have processed the request even though this service did not receive its response.
 - Retries of the same queue row send the same `Idempotency-Key` (`stellar-stream-<delivery id>`) and the same request body. Receivers should retain processed keys and return the original success for a repeated key to avoid applying a timed-out request twice. A manually requeued dead letter is a new queue row and therefore has a new key.
