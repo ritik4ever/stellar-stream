@@ -20,6 +20,7 @@ async function testEndpoint() {
   }
 
   // Test valid account (even if empty)
+  
   try {
     const response = await axios.get(`${BASE_URL}/senders/${VALID_ACCOUNT}/streams`);
     if (response.status === 200 && response.data.hasOwnProperty('data')) {
