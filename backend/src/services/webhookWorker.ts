@@ -189,14 +189,16 @@ export const processWebhookQueue = async () => {
           // Move to dead-letter storage
           const transitionStart = Date.now();
           try {
-            db.prepare(
-              `INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at)
-               VALUES (?, ?, ?, ?, ?, ?)`
-            ).run(delivery.stream_id, event, url, payload, errorMsg, updateNow);
+            db.transaction(() => {
+              db.prepare(
+                `INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at)
+                 VALUES (?, ?, ?, ?, ?, ?)`
+              ).run(delivery.stream_id, event, url, payload, errorMsg, updateNow);
 
-            db.prepare(
-              `DELETE FROM webhook_deliveries WHERE id = ?`
-            ).run(id);
+              db.prepare(
+                `DELETE FROM webhook_deliveries WHERE id = ?`
+              ).run(id);
+            })();
             const transitionLatencyMs = Math.max(0, Date.now() - transitionStart);
             logger.error(
               {
@@ -205,6 +207,7 @@ export const processWebhookQueue = async () => {
                 streamId: delivery.stream_id,
                 attempt: newAttempt,
                 maxAttempts: max_attempts,
+                failureReason: errorMsg || "max_attempts_exceeded",
                 outcome: "dead_letter",
                 outcomeCode: 3,
                 isNormalEmpty: false,

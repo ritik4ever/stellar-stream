@@ -513,6 +513,41 @@ describe("WebhookWorker", () => {
       // Verify no remaining active deliveries
       expect(db.prepare("SELECT count(*) as count FROM webhook_deliveries").get()).toEqual({ count: 0 });
     });
+
+    it("preserves delivery ID and failure reason deterministically when last permitted retry fails into dead-letter storage (SSB-2026-156)", async () => {
+      const db = getDb();
+      const baseTime = Math.floor(Date.now() / 1000);
+
+      // Queue delivery with max_attempts = 1 (so initial attempt is also the last permitted retry)
+      db.prepare(`
+        INSERT INTO webhook_deliveries (stream_id, event, payload, attempt, max_attempts, status, next_retry_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run("s1", "stream.created", JSON.stringify({ stream_id: "s1" }), 0, 1, "pending", baseTime - 10, baseTime - 10);
+
+      const delivery = db.prepare("SELECT * FROM webhook_deliveries WHERE stream_id = ?").get("s1") as any;
+      const originalDeliveryId = delivery.id;
+
+      // Axios fails on this last permitted retry with HTTP 500
+      (axios.post as any).mockResolvedValueOnce({ status: 500 });
+      await processWebhookQueue();
+
+      // Active delivery must be removed from active deliveries
+      const active = db.prepare("SELECT * FROM webhook_deliveries WHERE id = ?").get(originalDeliveryId);
+      expect(active).toBeUndefined();
+
+      // Exactly 1 dead letter row created
+      expect(countDeadLetters()).toBe(1);
+      const deadLetter = db.prepare("SELECT * FROM webhook_dead_letters WHERE stream_id = ?").get("s1") as any;
+      expect(deadLetter).toBeDefined();
+      expect(deadLetter.event).toBe("stream.created");
+      expect(deadLetter.last_error).toBe("HTTP 500");
+      expect(deadLetter.url).toBe("https://example.com/webhook");
+      expect(deadLetter.payload).toBe(delivery.payload);
+      expect(deadLetter.failed_at).toBeGreaterThanOrEqual(baseTime - 10);
+
+      // Failure reason is deterministic and not silently altered
+      expect(deadLetter.last_error).toBe("HTTP 500");
+    });
   });
 });
 
