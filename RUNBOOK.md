@@ -577,11 +577,17 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
    pm2 logs stellar-stream-backend --lines 200 | grep -i indexer
    ```
 
-Startup also emits a structured `deployment configuration outcome` log before exiting
-for missing required settings. `blocked` (`outcomeCode: 2`) identifies missing variable
-names in `detail` and the selected network in `network`, without logging values. A
-startup `success` (`outcomeCode: 0`) means configuration validated (or Soroban was
-intentionally disabled); it does not prove RPC connectivity.
+Startup emits a structured `deployment configuration outcome` before exiting for
+missing required settings. `blocked` (`outcomeCode: 2`) identifies missing variable
+names in `detail` and the selected network in `network`, without logging values.
+Malformed contract credentials or `RPC_URL`/`SOROBAN_RPC_URL` values additionally
+emit an `environment validation outcome` with `outcome: "blocked"`, `envVar`,
+`network`, and `durationMs`; the credential and URL values are omitted. A startup
+`deployment configuration outcome` with `outcome: "success"` and
+`detail: "Soroban is intentionally disabled."` is the expected empty-credentials
+case for local/API-only mode. Logs created inside a request context include
+`correlation_id`; startup validation runs before requests exist and has no request ID.
+A successful validation does not prove RPC connectivity.
 
 **Remediation:**
 
