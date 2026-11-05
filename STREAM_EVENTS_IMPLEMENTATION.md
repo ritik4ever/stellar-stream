@@ -40,7 +40,7 @@ Modified to record events when:
 ### 5. API Endpoint (`backend/src/index.ts`)
 New endpoint: `GET /api/streams/:id/history`
 - Returns ordered list of lifecycle events for a stream
-- Events sorted by timestamp ascending
+- Events are sorted by timestamp, then by event `id` as a deterministic tie-breaker so same-second `created`/`claimed` events remain stable and consistent across reads
 - No authentication required (read-only)
 
 Indexer initialization:
