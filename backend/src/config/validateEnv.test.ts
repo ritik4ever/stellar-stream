@@ -14,7 +14,6 @@ vi.mock('../logger', () => ({
     debug: vi.fn(),
   },
   redactObject: (v: unknown) => v,
-  redactObject: (v: unknown) => v,
   STELLAR_SECRET_REGEX: /^S[0-9A-Z]{55}$/,
 }));
 
@@ -1063,4 +1062,380 @@ describe('validateEnv', () => {
       );
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Boundary behavior: SOROBAN_DISABLED & contract credentials combinations,
+  // malformed RPC URLs, and secret formats (SSB-2026-171)
+  // ---------------------------------------------------------------------------
+  describe('Boundary behavior: SOROBAN_DISABLED, contract credentials, RPC URL & secret formats (SSB-2026-171)', () => {
+    it('warns and clears contractId when SOROBAN_DISABLED=true and CONTRACT_ID is configured', () => {
+      const contractId = 'C' + 'A'.repeat(55);
+      process.env = {
+        SOROBAN_DISABLED: 'true',
+        CONTRACT_ID: contractId,
+      };
+
+      const config = validateEnv();
+
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(config.sorobanEnabled).toBe(false);
+      expect(config.contractId).toBeNull();
+      expect(config.serverPrivateKey).toBeNull();
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'SOROBAN_DISABLED=true is set and CONTRACT_ID is configured',
+        ),
+      );
+      expect(loggerInfoSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: 'success',
+          outcomeCode: 0,
+          detail: 'Soroban is intentionally disabled.',
+          network: 'testnet',
+        }),
+        'deployment configuration outcome',
+      );
+    });
+
+    it('warns on both credentials, clears contractId and serverPrivateKey, and never logs secret when SOROBAN_DISABLED=true with both credentials set', () => {
+      const contractId =
+        'C1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890';
+      const privateKey =
+        'S1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890';
+      process.env = {
+        SOROBAN_DISABLED: 'true',
+        CONTRACT_ID: contractId,
+        SERVER_PRIVATE_KEY: privateKey,
+      };
+
+      const config = validateEnv();
+
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(config.sorobanEnabled).toBe(false);
+      expect(config.contractId).toBeNull();
+      expect(config.serverPrivateKey).toBeNull();
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'SOROBAN_DISABLED=true is set and CONTRACT_ID is configured',
+        ),
+      );
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'SOROBAN_DISABLED=true is set and SERVER_PRIVATE_KEY is configured',
+        ),
+      );
+      assertNoLoggerOutputContains(privateKey);
+      expect(loggerInfoSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: 'success',
+          outcomeCode: 0,
+        }),
+        'deployment configuration outcome',
+      );
+    });
+
+    it('treats SOROBAN_DISABLED=false (case/whitespace-insensitive) as enabled and requires both credentials', () => {
+      const privateKey = 'S' + 'B'.repeat(55);
+      process.env = {
+        SOROBAN_DISABLED: '  False ',
+        SERVER_PRIVATE_KEY: privateKey,
+      };
+
+      try {
+        validateEnv();
+      } catch (e) {}
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: 'blocked',
+          outcomeCode: 2,
+          detail: expect.stringContaining('CONTRACT_ID'),
+          network: 'testnet',
+        }),
+        'deployment configuration outcome',
+      );
+      assertNoLoggerOutputContains(privateKey);
+    });
+
+    it('accepts SOROBAN_DISABLED=false when valid CONTRACT_ID and SERVER_PRIVATE_KEY are provided', () => {
+      const contractId = 'C' + 'A'.repeat(55);
+      const privateKey = 'S' + 'B'.repeat(55);
+      process.env = {
+        SOROBAN_DISABLED: 'false',
+        CONTRACT_ID: contractId,
+        SERVER_PRIVATE_KEY: privateKey,
+      };
+
+      const config = validateEnv();
+
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(config.sorobanEnabled).toBe(true);
+      expect(config.contractId).toBe(contractId);
+      expect(config.serverPrivateKey).toBe(privateKey);
+      assertNoLoggerOutputContains(privateKey);
+      expect(loggerInfoSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: 'success',
+          outcomeCode: 0,
+          detail: 'Required Soroban configuration is present and valid.',
+          network: 'testnet',
+        }),
+        'deployment configuration outcome',
+      );
+    });
+
+    it('fails fast with outcomeCode 2 and no secret disclosure when SOROBAN_DISABLED has an invalid boolean value even if credentials are present', () => {
+      const contractId = 'C' + 'A'.repeat(55);
+      const privateKey = 'S' + 'B'.repeat(55);
+      process.env = {
+        SOROBAN_DISABLED: 'yes',
+        CONTRACT_ID: contractId,
+        SERVER_PRIVATE_KEY: privateKey,
+      };
+
+      try {
+        validateEnv();
+      } catch (e) {}
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        'SOROBAN_DISABLED validation failed',
+      );
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        'SOROBAN_DISABLED must be "true" or "false"',
+      );
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: 'blocked',
+          outcomeCode: 2,
+          detail: 'Invalid SOROBAN_DISABLED value: must be "true" or "false"',
+          network: 'testnet',
+        }),
+        'deployment configuration outcome',
+      );
+      assertNoLoggerOutputContains(privateKey);
+    });
+
+    it('never discloses a secret accidentally placed into SOROBAN_DISABLED', () => {
+      const accidentalSecret = 'S' + 'Z'.repeat(55);
+      process.env = {
+        SOROBAN_DISABLED: accidentalSecret,
+      };
+
+      try {
+        validateEnv();
+      } catch (e) {}
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      assertNoLoggerOutputContains(accidentalSecret);
+    });
+
+    it('supports STELLAR_CONTRACT_ID alias when CONTRACT_ID is omitted and Soroban is enabled', () => {
+      const contractId = 'C' + 'D'.repeat(55);
+      const privateKey = 'S' + 'E'.repeat(55);
+      process.env = {
+        STELLAR_CONTRACT_ID: contractId,
+        SERVER_PRIVATE_KEY: privateKey,
+      };
+
+      const config = validateEnv();
+
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(config.sorobanEnabled).toBe(true);
+      expect(config.contractId).toBe(contractId);
+      expect(process.env.CONTRACT_ID).toBe(contractId);
+      assertNoLoggerOutputContains(privateKey);
+    });
+
+    it('rejects conflicting CONTRACT_ID and STELLAR_CONTRACT_ID when both are set', () => {
+      const privateKey = 'S' + 'E'.repeat(55);
+      process.env = {
+        CONTRACT_ID: 'C' + 'A'.repeat(55),
+        STELLAR_CONTRACT_ID: 'C' + 'B'.repeat(55),
+        SERVER_PRIVATE_KEY: privateKey,
+      };
+
+      try {
+        validateEnv();
+      } catch (e) {}
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        'CONTRACT_ID validation failed',
+      );
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: 'blocked',
+          outcomeCode: 2,
+          detail: expect.stringContaining(
+            'CONTRACT_ID and STELLAR_CONTRACT_ID do not match',
+          ),
+        }),
+        'deployment configuration outcome',
+      );
+      assertNoLoggerOutputContains(privateKey);
+    });
+
+    it('treats whitespace-only CONTRACT_ID or SERVER_PRIVATE_KEY as missing required credentials', () => {
+      const privateKey = 'S' + 'B'.repeat(55);
+      process.env = {
+        CONTRACT_ID: '   ',
+        SERVER_PRIVATE_KEY: privateKey,
+      };
+
+      try {
+        validateEnv();
+      } catch (e) {}
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: 'blocked',
+          outcomeCode: 2,
+          detail: 'Missing required Soroban configuration: CONTRACT_ID',
+        }),
+        'deployment configuration outcome',
+      );
+      assertNoLoggerOutputContains(privateKey);
+    });
+
+    it('rejects malformed SERVER_PRIVATE_KEY with non-base32 characters without disclosing the secret', () => {
+      const malformedSecrets = [
+        'S' + 'a'.repeat(55), // lowercase
+        'S' + '1'.repeat(55), // digit 1 is invalid in RFC 4648 base32
+        'S' + '0'.repeat(55), // digit 0 is invalid in RFC 4648 base32
+        'S' + '_'.repeat(55), // punctuation
+      ];
+
+      for (const badSecret of malformedSecrets) {
+        exitSpy.mockClear();
+        loggerErrorSpy.mockClear();
+        process.env = {
+          CONTRACT_ID: 'C' + 'A'.repeat(55),
+          SERVER_PRIVATE_KEY: badSecret,
+        };
+
+        expect(() => validateEnv()).toThrow('Environment validation failed');
+        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(loggerErrorSpy).toHaveBeenCalledWith(
+          'SERVER_PRIVATE_KEY validation failed',
+        );
+        expect(loggerErrorSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            outcome: 'blocked',
+            outcomeCode: 2,
+            detail:
+              'Invalid Soroban configuration: SERVER_PRIVATE_KEY format is invalid',
+          }),
+          'deployment configuration outcome',
+        );
+        assertNoLoggerOutputContains(badSecret);
+      }
+    });
+
+    it('rejects malformed CONTRACT_ID (including accidental secret key or non-base32 body) without disclosing values', () => {
+      const accidentalSecretInContractId = 'S' + 'F'.repeat(55);
+      process.env = {
+        CONTRACT_ID: accidentalSecretInContractId,
+        SERVER_PRIVATE_KEY: 'S' + 'A'.repeat(55),
+      };
+
+      expect(() => validateEnv()).toThrow('Environment validation failed');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        'CONTRACT_ID validation failed',
+      );
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: 'blocked',
+          outcomeCode: 2,
+          detail:
+            'Invalid Soroban configuration: CONTRACT_ID format is invalid',
+        }),
+        'deployment configuration outcome',
+      );
+      assertNoLoggerOutputContains(accidentalSecretInContractId);
+    });
+
+    it('rejects malformed RPC_URL even when SOROBAN_DISABLED=true and redacts embedded credentials', () => {
+      const badRpcWithToken =
+        'https://rpc.example:bad/path?api_key=disabled-mode-rpc-secret';
+      process.env = {
+        SOROBAN_DISABLED: 'true',
+        RPC_URL: badRpcWithToken,
+      };
+
+      expect(() => validateEnv()).toThrow('Environment validation failed');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rpcUrl: '[REDACTED_INVALID_URL]',
+        }),
+        'RPC_URL validation failed',
+      );
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: 'blocked',
+          outcomeCode: 2,
+          detail: 'Invalid Soroban configuration: RPC_URL format is invalid',
+        }),
+        'deployment configuration outcome',
+      );
+      assertNoLoggerOutputContains('disabled-mode-rpc-secret');
+    });
+
+    it('rejects non-http(s) RPC_URL protocol and redacts sensitive URL material', () => {
+      const badProtocolUrl =
+        'ftp://user:my-rpc-pass@soroban-testnet.stellar.org/rpc?token=my-ftp-secret';
+      process.env = {
+        CONTRACT_ID: 'C' + 'A'.repeat(55),
+        SERVER_PRIVATE_KEY: 'S' + 'A'.repeat(55),
+        RPC_URL: badProtocolUrl,
+      };
+
+      expect(() => validateEnv()).toThrow('Environment validation failed');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          issue: 'must be a valid http(s) URL',
+        }),
+        'RPC_URL validation issue',
+      );
+      assertNoLoggerOutputContains('my-rpc-pass');
+      assertNoLoggerOutputContains('my-ftp-secret');
+    });
+
+    it('rejects conflicting RPC_URL and SOROBAN_RPC_URL when both are set', () => {
+      process.env = {
+        SOROBAN_DISABLED: 'true',
+        RPC_URL: 'https://soroban-testnet.stellar.org:443',
+        SOROBAN_RPC_URL: 'https://custom-testnet-rpc.example.com:443',
+      };
+
+      expect(() => validateEnv()).toThrow('Environment validation failed');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          issue: 'RPC_URL and SOROBAN_RPC_URL must match when both are set',
+        }),
+        'RPC_URL validation issue',
+      );
+    });
+
+    it('redacts userinfo credentials and Stellar secret seeds in redactUrlForConfigLog', () => {
+      const secretSeed = 'S' + 'G'.repeat(55);
+      const invalidWithUserinfo =
+        'https://user:rawpass123@rpc.example:bad/v1/soroban';
+      const validWithSecretInPath = `https://rpc.example/v1/${secretSeed}?id=${secretSeed}`;
+
+      expect(redactUrlForConfigLog(invalidWithUserinfo)).toBe(
+        '[REDACTED_INVALID_URL]',
+      );
+      const redactedValid = redactUrlForConfigLog(validWithSecretInPath);
+      expect(redactedValid).not.toContain(secretSeed);
+      expect(redactedValid).toContain('[REDACTED]');
+    });
+  });
 });
+
