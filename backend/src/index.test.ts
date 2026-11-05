@@ -11,6 +11,8 @@ const RECIPIENT_1 = Keypair.random().publicKey();
 const RECIPIENT_2 = Keypair.random().publicKey();
 
 const streamStoreMocks = vi.hoisted(() => ({
+  MAX_COMPARE_STREAMS: 5,
+  MIN_COMPARE_STREAMS: 2,
   calculateProgress: vi.fn(),
   cancelStream: vi.fn(),
   createStream: vi.fn(),
@@ -201,6 +203,13 @@ async function invokeListStreamsRoute(
   return { status: statusCode, body: jsonBody };
 }
 
+async function invokeStreamSearchRoute(
+  query: Record<string, unknown> = {},
+): Promise<{ status: number; body: any }> {
+  const response = await request(app).get("/api/streams/search").query(query);
+  return { status: response.status, body: response.body };
+}
+
 async function invokeSenderStreamsRoute(
   accountId: string,
   query: Record<string, unknown> = {},
@@ -388,6 +397,35 @@ describe("GET /api/streams", () => {
     expect(body.page).toBe(2);
     expect(body.limit).toBe(1);
     expect(body.data).toEqual([]);
+  });
+});
+
+describe("GET /api/streams/search", () => {
+  it("matches q case-insensitively and intersects it with asset", async () => {
+    const query = SENDER_A.slice(0, 8).toLowerCase();
+    const { status, body } = await invokeStreamSearchRoute({ q: query, asset: "usdc" });
+
+    expect(status).toBe(200);
+    expect(body.asset).toBe("USDC");
+    expect(body.total).toBeGreaterThan(0);
+    expect(body.data.every((stream: TestStream) => stream.assetCode === "USDC")).toBe(true);
+    expect(body.data.every((stream: TestStream) => stream.sender.toLowerCase().includes(query))).toBe(true);
+  });
+
+  it("rejects unsupported asset filters before lookup without retry or mutation", async () => {
+    streamStoreMocks.listStreams.mockClear();
+    streamStoreMocks.createStream.mockClear();
+    streamStoreMocks.cancelStream.mockClear();
+    eventHistoryMocks.recordEvent.mockClear();
+
+    const { status, body } = await invokeStreamSearchRoute({ q: "stream", asset: "XLM/USDC" });
+
+    expect(status).toBe(400);
+    expect(body.code).toBe("VALIDATION_ERROR");
+    expect(streamStoreMocks.listStreams).not.toHaveBeenCalled();
+    expect(streamStoreMocks.createStream).not.toHaveBeenCalled();
+    expect(streamStoreMocks.cancelStream).not.toHaveBeenCalled();
+    expect(eventHistoryMocks.recordEvent).not.toHaveBeenCalled();
   });
 });
 
