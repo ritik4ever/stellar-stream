@@ -37,7 +37,10 @@ function rowToEvent(row: EventRow): StreamEvent {
   };
 }
 
- export type RecordEventResult = "inserted" | "deduped";
+function getEventHistoryOrderBy(order: 'asc' | 'desc' = 'desc'): string {
+  const direction = order === 'asc' ? 'ASC' : 'DESC';
+  return `timestamp ${direction}, id ${direction}`;
+}
 
 export function recordEvent(
   streamId: string,
@@ -91,10 +94,9 @@ export function recordEventWithDb(
 
 export function getStreamHistory(streamId: string, limit = 20, offset = 0, order: 'asc' | 'desc' = 'desc'): StreamEvent[] {
   const db = getDb();
-  const orderClause = order === 'asc' ? 'ASC' : 'DESC';
   const rows = db
     .prepare(
-      `SELECT * FROM stream_events WHERE stream_id = ? ORDER BY timestamp ${orderClause}, CASE WHEN event_type = 'created' THEN 0 ELSE 1 END ${orderClause}, id ${orderClause} LIMIT ? OFFSET ?`,
+      `SELECT * FROM stream_events WHERE stream_id = ? ORDER BY ${getEventHistoryOrderBy(order)} LIMIT ? OFFSET ?`,
     )
     .all(streamId, limit, offset) as EventRow[];
   return rows.map(rowToEvent);
@@ -110,7 +112,7 @@ export function getAllEvents(limit = 100, offset = 0, cursor?: number): StreamEv
     params.push(cursor);
   }
 
-  query += ` ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?`;
+  query += ` ORDER BY ${getEventHistoryOrderBy()} LIMIT ? OFFSET ?`;
   params.push(limit, offset);
 
   const rows = db.prepare(query).all(...params) as EventRow[];
@@ -153,7 +155,7 @@ export function getGlobalEvents(
   if (conditions.length > 0) {
     query += " WHERE " + conditions.join(" AND ");
   }
-  query += " ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?";
+  query += ` ORDER BY ${getEventHistoryOrderBy()} LIMIT ? OFFSET ?`;
   params.push(limit, offset);
 
   const rows = db.prepare(query).all(...params) as EventRow[];
