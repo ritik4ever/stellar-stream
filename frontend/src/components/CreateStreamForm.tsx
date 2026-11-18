@@ -1138,19 +1138,42 @@ export function CreateStreamForm({
                 {Math.round(feePreview.payload.durationSeconds / 60)} minutes
               </dd>
             </div>
-            <div>
-              <dt>Total amount</dt>
-              <dd>
+            <div className="fee-preview-item">
+              <dt id="review-asset-code-dt">Asset code</dt>
+              <dd
+                className="asset-preview-val"
+                data-testid="preview-asset-code"
+                aria-labelledby="review-asset-code-dt"
+              >
+                {feePreview.payload.assetCode}
+              </dd>
+            </div>
+            <div className="fee-preview-item">
+              <dt id="review-total-amount-dt">Total amount</dt>
+              <dd
+                data-testid="preview-total-amount"
+                aria-labelledby="review-total-amount-dt"
+              >
                 {feePreview.payload.totalAmount} {feePreview.payload.assetCode}
               </dd>
             </div>
-            <div>
-              <dt>Stream rate</dt>
-              <dd>{formatStreamRate(feePreview.payload)}</dd>
+            <div className="fee-preview-item">
+              <dt id="review-stream-rate-dt">Stream rate</dt>
+              <dd
+                data-testid="preview-stream-rate"
+                aria-labelledby="review-stream-rate-dt"
+              >
+                {formatStreamRate(feePreview.payload)}
+              </dd>
             </div>
-            <div>
-              <dt>Network fee estimate</dt>
-              <dd>{feePreview.estimate.feeXlm} XLM</dd>
+            <div className="fee-preview-item">
+              <dt id="review-fee-dt">Network fee estimate</dt>
+              <dd
+                data-testid="preview-fee"
+                aria-labelledby="review-fee-dt"
+              >
+                {feePreview.estimate.feeXlm} XLM
+              </dd>
             </div>
           </dl>
 
