@@ -615,6 +615,40 @@ export function CreateStreamForm({
             spellCheck={false}
           />
           <AccountHint value={values.recipient} />
+          {errors.recipient && errors.recipient.includes("same as sender") && (
+            <span
+              className="recipient-boundary-tag recipient-boundary-tag--self"
+              data-testid="boundary-self-addressed"
+              style={{
+                display: "inline-block",
+                padding: "2px 8px",
+                marginTop: "4px",
+                fontSize: "0.8rem",
+                borderRadius: "4px",
+                background: "rgba(220, 38, 38, 0.12)",
+                color: "#dc2626",
+              }}
+            >
+              Self-addressed boundary
+            </span>
+          )}
+          {errors.recipient && !errors.recipient.includes("same as sender") && values.recipient.trim().length > 0 && (
+            <span
+              className="recipient-boundary-tag recipient-boundary-tag--malformed"
+              data-testid="boundary-malformed-recipient"
+              style={{
+                display: "inline-block",
+                padding: "2px 8px",
+                marginTop: "4px",
+                fontSize: "0.8rem",
+                borderRadius: "4px",
+                background: "rgba(234, 88, 12, 0.12)",
+                color: "#ea580c",
+              }}
+            >
+              Malformed address boundary
+            </span>
+          )}
           {errors.recipient && (
             <span id="recipient-error" className="field-error" role="alert">
               {errors.recipient}
