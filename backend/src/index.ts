@@ -253,7 +253,7 @@ const listStreamsQuerySchema = z.object({
   limit: z.coerce
     .number()
     .int("limit must be an integer")
-    .min(1, "limit must be an integer")
+    .min(1, "limit must be greater than or equal to 1")
     .max(
       PAGINATION_MAX_LIMIT,
       `limit must be less than or equal to ${PAGINATION_MAX_LIMIT}`,
@@ -1110,10 +1110,18 @@ app.get(
     }
     const query = parsedQuery.data;
 
-    const rawStreams = await withAddressCache(
-      `streams:sender:${address}`,
-      () => listStreamsBySender(address, query.sort ?? "createdAt", query.order ?? "desc"),
-    );
+    let rawStreams: StreamRecord[];
+    try {
+      rawStreams = await withAddressCache(
+        `streams:sender:${address}`,
+        () => listStreamsBySender(address, query.sort ?? "createdAt", query.order ?? "desc"),
+      );
+    } catch (_error: unknown) {
+      sendApiError(req, res, 500, "Failed to retrieve streams.", {
+        code: "INTERNAL_ERROR",
+      });
+      return;
+    }
 
     const now = nowInSeconds();
     let data = rawStreams.map((stream) => ({
