@@ -1073,7 +1073,7 @@ export async function archiveOldStreams(): Promise<number> {
 function buildOrderClause(sort: SortField, order: SortOrder): string {
   const column = SORT_COLUMNS[sort];
   const dir = order === "asc" ? "ASC" : "DESC";
-  return `ORDER BY ${column} ${dir}`;
+  return `ORDER BY ${column} ${dir}, id ASC`;
 }
 
 export function listStreams(includeArchived = false, sort: SortField = "createdAt", order: SortOrder = "desc"): StreamRecord[] {
