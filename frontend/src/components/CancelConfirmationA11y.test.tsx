@@ -93,6 +93,9 @@ describe("Cancel confirmation accessibility and keyboard workflow (SSB-2026-068)
 
   it("handles already canceled streams safely by preventing duplicate cancel actions", async () => {
     server.use(
+      http.get("/api/streams", () =>
+        HttpResponse.json({ data: [mockCanceled("stream-1010")] })
+      ),
       http.get("/api/streams/sender/:address", () =>
         HttpResponse.json({ data: [mockCanceled("stream-1010")] })
       )

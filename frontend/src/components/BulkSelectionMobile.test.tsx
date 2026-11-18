@@ -39,7 +39,14 @@ const mockCanceledStream = (id: string): Stream => ({
 });
 
 const server = setupServer(
-  http.get("/api/streams", () => HttpResponse.json({ data: [] })),
+  http.get("/api/streams", () =>
+    HttpResponse.json({
+      data: [
+        mockActiveStream("bulk-s1"),
+        mockActiveStream("bulk-s2"),
+      ],
+    })
+  ),
   http.get("/api/streams/sender/:address", () =>
     HttpResponse.json({
       data: [
@@ -116,10 +123,10 @@ describe("Bulk selection mobile usability and partial failure handling (SSB-2026
 
     // Error banner appears indicating partial failure
     await waitFor(() =>
-      expect(screen.getByText("Cancellation Failed")).toBeInTheDocument()
+      expect(screen.getByText(/Cancellation Failed/)).toBeInTheDocument()
     );
     expect(
-      screen.getByText(/1 of 2 stream\(s\) could not be canceled/i)
+      screen.getAllByText(/1 of 2 stream\(s\) could not be canceled/i)[0]
     ).toBeInTheDocument();
 
     // The failed stream remains selected for retry

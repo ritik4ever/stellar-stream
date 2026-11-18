@@ -26,7 +26,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: frontend
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Install Playwright Chromium browser
         working-directory: frontend
