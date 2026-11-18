@@ -17,5 +17,7 @@ export default defineConfig({
     actionTimeout: 15000,
     viewport: { width: 1280, height: 800 },
     ignoreHTTPSErrors: true,
+    screenshot: 'only-on-failure',
+    trace: 'retain-on-failure',
   },
 });
