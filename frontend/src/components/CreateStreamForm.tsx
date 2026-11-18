@@ -378,6 +378,15 @@ export function CreateStreamForm({
     // Prevent duplicate submissions during confirmation
     if (isConfirming) return;
 
+    if (!walletAddress) {
+      setSimulationError("Wallet disconnected. Please reconnect before confirming.");
+      return;
+    }
+    if (feePreview.payload.sender && walletAddress !== feePreview.payload.sender) {
+      setSimulationError("Connected wallet does not match the stream sender. Please switch back to the original account.");
+      return;
+    }
+
     setIsConfirming(true);
     setSimulationError(null);
     try {
