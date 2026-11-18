@@ -43,6 +43,8 @@ interface StreamsTableProps {
   setUrlFilters?: (filters: ListStreamsFilters) => void;
   loadError?: string | null;
   onRetryLoad?: () => void;
+  loadMoreError?: string | null;
+  loadMoreStatus?: string | null;
 }
 
 const SKELETON_ROW_COUNT = 6;
@@ -110,6 +112,8 @@ export function StreamsTable({
   setUrlFilters,
   loadError,
   onRetryLoad,
+  loadMoreError,
+  loadMoreStatus,
 }: StreamsTableProps) {
   const { visibility, toggleColumn, isVisible } = useStreamTableColumns();
   const [columnsOpen, setColumnsOpen] = useState(false);
@@ -155,7 +159,7 @@ export function StreamsTable({
     if (!sentinel || !onLoadMore) return;
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0]?.isIntersecting && hasMore && !loadingMore) {
+        if (entries[0]?.isIntersecting && hasMore && !loadingMore && !loadMoreError) {
           onLoadMore();
         }
       },
@@ -163,7 +167,7 @@ export function StreamsTable({
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [onLoadMore, hasMore, loadingMore]);
+  }, [onLoadMore, hasMore, loadingMore, loadMoreError]);
 
   const [selectedStreamIds, setSelectedStreamIds] = useState<Set<string>>(new Set());
   const [expandedStreamId, setExpandedStreamId] = useState<string | null>(null);
@@ -539,7 +543,7 @@ export function StreamsTable({
             ...(shouldVirtualize ? { height: TABLE_SCROLL_VIEWPORT_HEIGHT } : {}),
           }}
         >
-          <table aria-busy={loading} aria-label="Streams">
+          <table aria-busy={loading || loadingMore} aria-label="Streams">
             <thead className="streams-table-head">
               <tr>
                 <th>
@@ -604,14 +608,25 @@ export function StreamsTable({
             style={{ height: 1 }}
             data-testid="infinite-scroll-sentinel"
           />
-          {loadingMore && (
+          {onLoadMore && (
             <div style={{ textAlign: "center", padding: "1rem", color: "var(--color-muted)" }}>
-              Loading more streams...
-            </div>
-          )}
-          {!hasMore && streams.length > 0 && (
-            <div style={{ textAlign: "center", padding: "1rem", color: "var(--color-muted)" }}>
-              End of results
+              <p role="status" aria-live="polite" aria-atomic="true">
+                {loadingMore
+                  ? "Loading more streams..."
+                  : loadMoreError ??
+                    loadMoreStatus ??
+                    (!hasMore ? "End of results" : "")}
+              </p>
+              {(hasMore || loadingMore) && (
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={onLoadMore}
+                  disabled={loadingMore}
+                >
+                  {loadMoreError ? "Retry loading streams" : "Load more streams"}
+                </button>
+              )}
             </div>
           )}
         </div>
