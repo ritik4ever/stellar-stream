@@ -16,6 +16,26 @@ vi.mock("../services/api", () => ({
   }),
 }));
 
+vi.mock("recharts", () => ({
+  ResponsiveContainer: ({ children }: any) => (
+    <div data-testid="responsive-container">{children}</div>
+  ),
+  AreaChart: ({ data, children }: any) => (
+    <svg data-testid="area-chart" data-points={data?.length}>{children}</svg>
+  ),
+  Area: ({ dataKey }: any) => <g data-testid={`area-${dataKey}`}>Area: {dataKey}</g>,
+  BarChart: ({ data, children }: any) => (
+    <svg data-testid="bar-chart" data-points={data?.length}>{children}</svg>
+  ),
+  Bar: ({ dataKey }: any) => <g data-testid={`bar-${dataKey}`}>Bar: {dataKey}</g>,
+  XAxis: ({ dataKey }: any) => <g data-testid="x-axis">{dataKey}</g>,
+  YAxis: () => <g data-testid="y-axis" />,
+  CartesianGrid: () => <g data-testid="cartesian-grid" />,
+  Tooltip: () => <g data-testid="tooltip" />,
+  Legend: () => <g data-testid="legend" />,
+  ReferenceArea: () => <g data-testid="reference-area" />,
+}));
+
 const mockData: MetricsSnapshot[] = [
   { timestamp: 1700000000000, active: 4, completed: 2, vested: 1000 },
   { timestamp: 1700086400000, active: 6, completed: 3, vested: 2500 },

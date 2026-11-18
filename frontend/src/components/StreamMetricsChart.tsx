@@ -44,7 +44,7 @@ export function StreamMetricsChart({
   const [refAreaRight, setRefAreaRight] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [stats, setStats] = useState<StreamStats | null>(null);
-  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState<Error | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startRange: [number, number]; active: boolean } | null>(null);
@@ -208,7 +208,7 @@ export function StreamMetricsChart({
     pinchRef.current = null;
   };
 
-  if (loading || statsLoading) {
+  if (loading) {
     return (
       <div className="chart-empty-state" aria-live="polite" aria-busy="true">
         <div className="chart-empty-state__content">

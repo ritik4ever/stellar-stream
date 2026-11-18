@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { http, HttpResponse } from "msw";
 import { server } from "../server";
@@ -270,12 +270,13 @@ describe("SenderDashboard - Enhanced Analytics & Activity", () => {
       expect(screen.getByText("Streams by Status")).toBeInTheDocument()
     );
 
-    // Verify chart is rendered (look for axis labels)
-    expect(screen.getByText("Scheduled")).toBeInTheDocument();
-    expect(screen.getByText("Active")).toBeInTheDocument();
-    expect(screen.getByText("Paused")).toBeInTheDocument();
-    expect(screen.getByText("Completed")).toBeInTheDocument();
-    expect(screen.getByText("Canceled")).toBeInTheDocument();
+    // Verify chart is rendered (look for axis labels inside the chart container)
+    const chart = screen.getByTestId("bar-chart");
+    expect(within(chart).getByText("Scheduled")).toBeInTheDocument();
+    expect(within(chart).getByText("Active")).toBeInTheDocument();
+    expect(within(chart).getByText("Paused")).toBeInTheDocument();
+    expect(within(chart).getByText("Completed")).toBeInTheDocument();
+    expect(within(chart).getByText("Canceled")).toBeInTheDocument();
   });
 
   // =========================================================================
@@ -1099,5 +1100,196 @@ describe("SenderDashboard - Enhanced Analytics & Activity", () => {
     const liveRegion = document.querySelector("[role='status'][aria-live='polite']");
     expect(liveRegion).not.toBeNull();
     expect(liveRegion).toHaveAttribute("aria-atomic", "true");
+  });
+
+  // =========================================================================
+  // Mobile & Narrow Screens Tests — SSB-2026-024
+  // =========================================================================
+
+  it("renders responsive mobile toolbar with status filter, sort, and search controls", async () => {
+    const SENDER_MOBILE_BAR = "GSENDER_MOBILE_BAR";
+    const streams = [
+      mockActiveStream("mob-1", SENDER_MOBILE_BAR),
+      mockScheduledStream("mob-2", SENDER_MOBILE_BAR),
+    ];
+    setupSenderHandler(streams, SENDER_MOBILE_BAR);
+    streams.forEach((s) => setupStreamHistoryHandler(s.id, []));
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_MOBILE_BAR}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Active & Scheduled")).toBeInTheDocument()
+    );
+
+    // Verify filter toolbar is rendered with accessible controls
+    expect(screen.getByRole("search", { name: /stream filters and search/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/filter by status/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/sort streams/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/search recipient or ID/i)).toBeInTheDocument();
+  });
+
+  it("filters streams by status using the mobile status filter", async () => {
+    const SENDER_MOBILE_FILTER = "GSENDER_MOBILE_FILTER";
+    const streams = [
+      mockActiveStream("mob-act", SENDER_MOBILE_FILTER),
+      mockScheduledStream("mob-sched", SENDER_MOBILE_FILTER),
+    ];
+    setupSenderHandler(streams, SENDER_MOBILE_FILTER);
+    streams.forEach((s) => setupStreamHistoryHandler(s.id, []));
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_MOBILE_FILTER}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Active & Scheduled")).toBeInTheDocument()
+    );
+
+    // Both streams initially displayed (addresses carry full recipient in aria-label and title)
+    expect(screen.getByLabelText(/Recipient: GRECIPIENT_mob-act/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Recipient: GRECIPIENT_mob-sched/i)).toBeInTheDocument();
+
+    // Select "scheduled" filter
+    const statusSelect = screen.getByLabelText(/filter by status/i);
+    fireEvent.change(statusSelect, { target: { value: "scheduled" } });
+
+    // Only scheduled stream remains visible
+    expect(screen.queryByLabelText(/Recipient: GRECIPIENT_mob-act/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Recipient: GRECIPIENT_mob-sched/i)).toBeInTheDocument();
+
+    // Reset button is visible when filter is active
+    const resetBtn = screen.getByRole("button", { name: /reset filters/i });
+    expect(resetBtn).toBeInTheDocument();
+
+    // Clicking reset restores both
+    fireEvent.click(resetBtn);
+    expect(screen.getByLabelText(/Recipient: GRECIPIENT_mob-act/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Recipient: GRECIPIENT_mob-sched/i)).toBeInTheDocument();
+  });
+
+  it("sorts streams by amount descending when amount-desc is selected", async () => {
+    const SENDER_MOBILE_SORT = "GSENDER_MOBILE_SORT";
+    const streamLow = { ...mockActiveStream("sort-low", SENDER_MOBILE_SORT), totalAmount: 100 };
+    const streamHigh = { ...mockActiveStream("sort-high", SENDER_MOBILE_SORT), totalAmount: 5000 };
+    setupSenderHandler([streamLow, streamHigh], SENDER_MOBILE_SORT);
+    setupStreamHistoryHandler("sort-low", []);
+    setupStreamHistoryHandler("sort-high", []);
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_MOBILE_SORT}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Active & Scheduled")).toBeInTheDocument()
+    );
+
+    const sortSelect = screen.getByLabelText(/sort streams/i);
+    fireEvent.change(sortSelect, { target: { value: "amount-desc" } });
+
+    // Table rows should order streamHigh first
+    const rows = document.querySelectorAll("tbody tr");
+    expect(rows.length).toBe(2);
+    expect(rows[0].textContent).toContain("5000");
+    expect(rows[1].textContent).toContain("100");
+  });
+
+  it("filters streams by search text and shows clear-filters button when zero streams match", async () => {
+    const SENDER_MOBILE_SEARCH = "GSENDER_MOBILE_SEARCH";
+    const streams = [mockActiveStream("search-1", SENDER_MOBILE_SEARCH)];
+    setupSenderHandler(streams, SENDER_MOBILE_SEARCH);
+    setupStreamHistoryHandler("search-1", []);
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_MOBILE_SEARCH}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Active & Scheduled")).toBeInTheDocument()
+    );
+
+    const searchInput = screen.getByLabelText(/search recipient or ID/i);
+    fireEvent.change(searchInput, { target: { value: "nonexistent-query-xyz" } });
+
+    // Empty filter state appears
+    await waitFor(() =>
+      expect(screen.getByText("No streams match your filter criteria.")).toBeInTheDocument()
+    );
+    const clearBtn = screen.getByRole("button", { name: /clear filters/i });
+    expect(clearBtn).toBeInTheDocument();
+
+    // Clicking clear filters restores the stream
+    fireEvent.click(clearBtn);
+    await waitFor(() =>
+      expect(screen.getByLabelText(/Recipient: GRECIPIENT_search-1/i)).toBeInTheDocument()
+    );
+  });
+
+  it("ensures critical amount column and action buttons have touch targets without horizontal clipping", async () => {
+    const SENDER_MOBILE_TOUCH = "GSENDER_MOBILE_TOUCH";
+    const stream = mockActiveStream("touch-1", SENDER_MOBILE_TOUCH);
+    setupSenderHandler([stream], SENDER_MOBILE_TOUCH);
+    setupStreamHistoryHandler("touch-1", []);
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_MOBILE_TOUCH}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Active & Scheduled")).toBeInTheDocument()
+    );
+
+    // Verify .table-wrap has both overflow-x and overflow-y enabled with touch scrolling
+    const tableWrap = document.querySelector(".table-wrap") as HTMLElement;
+    expect(tableWrap).not.toBeNull();
+    expect(tableWrap.style.overflowX).toBe("auto");
+    expect(tableWrap.style.overflowY).toBe("auto");
+
+    // Amount column carries .cell-amount class for whitespace protection
+    const amountCell = document.querySelector(".cell-amount");
+    expect(amountCell).not.toBeNull();
+    expect(amountCell?.textContent).toContain("1000 USDC");
+
+    // Action button has touch target styling
+    const cancelBtn = screen.getByRole("button", { name: /cancel stream to/i });
+    expect(cancelBtn).toHaveClass("btn-cancel");
+    expect(cancelBtn.style.minHeight).toBe("38px");
+    expect(cancelBtn.style.minWidth).toBe("44px");
+  });
+
+  it("renders zero-streams mobile empty state without clipping and with usable CTA target", async () => {
+    const SENDER_MOBILE_ZERO = "GSENDER_MOBILE_ZERO";
+    setupSenderHandler([], SENDER_MOBILE_ZERO);
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_MOBILE_ZERO}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("No Streams Found")).toBeInTheDocument()
+    );
+
+    const ctaBtn = screen.getByRole("button", { name: /create your first stream/i });
+    expect(ctaBtn).toBeInTheDocument();
+    expect(ctaBtn).toHaveClass("btn-primary");
   });
 });

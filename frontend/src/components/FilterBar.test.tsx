@@ -90,22 +90,30 @@ describe("FilterBar URL Sync Integration", () => {
       href: "http://localhost/",
     };
 
-    // Mock window.history
-    (window as any).history = {
-      replaceState: vi.fn(),
-      pushState: vi.fn(),
-      back: vi.fn(),
-      forward: vi.fn(),
-      go: vi.fn(),
-      length: 1,
-      state: null,
-    };
+    // Mock window.history safely
+    Object.defineProperty(window, "history", {
+      value: {
+        replaceState: vi.fn(),
+        pushState: vi.fn(),
+        back: vi.fn(),
+        forward: vi.fn(),
+        go: vi.fn(),
+        length: 1,
+        state: null,
+      },
+      writable: true,
+      configurable: true,
+    });
   });
 
   afterEach(() => {
     // Restore original window.location and window.history
     (window as any).location = originalLocation;
-    (window as any).history = originalHistory;
+    Object.defineProperty(window, "history", {
+      value: originalHistory,
+      writable: true,
+      configurable: true,
+    });
     cleanup();
     vi.clearAllMocks();
   });

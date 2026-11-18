@@ -5,6 +5,7 @@ interface FilterBarProps {
   filters: ListStreamsFilters;
   onChange: (filters: ListStreamsFilters) => void;
   setUrlFilters?: (filters: ListStreamsFilters) => void;
+  useUrlFilters?: boolean;
 }
 
 const STATUS_OPTIONS = [
@@ -16,22 +17,23 @@ const STATUS_OPTIONS = [
   { label: "Canceled", value: "canceled" },
 ];
 
-export function FilterBar({ filters, onChange, setUrlFilters }: FilterBarProps) {
+export function FilterBar({ filters, onChange, setUrlFilters, useUrlFilters }: FilterBarProps) {
+  const isUrlSync = Boolean(useUrlFilters || setUrlFilters);
 
   const handleTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    const newFilters = { ...filters, [name]: value };
+    const newFilters = { ...filters, [name]: value, ...(isUrlSync ? { page: 1 } : {}) };
     onChange(newFilters);
     if (setUrlFilters) {
-      setUrlFilters({ ...newFilters, page: 1 });
+      setUrlFilters(newFilters);
     }
   };
 
   const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newFilters = { ...filters, status: e.target.value };
+    const newFilters = { ...filters, status: e.target.value, ...(isUrlSync ? { page: 1 } : {}) };
     onChange(newFilters);
     if (setUrlFilters) {
-      setUrlFilters({ ...newFilters, page: 1 });
+      setUrlFilters(newFilters);
     }
   };
 
@@ -44,10 +46,11 @@ export function FilterBar({ filters, onChange, setUrlFilters }: FilterBarProps) 
       sender: "",
       recipient: "",
       ...preset,
+      ...(isUrlSync ? { page: 1 } : {}),
     };
     onChange(newFilters);
     if (setUrlFilters) {
-      setUrlFilters({ ...newFilters, page: 1 });
+      setUrlFilters(newFilters);
     }
   };
 
@@ -58,10 +61,11 @@ export function FilterBar({ filters, onChange, setUrlFilters }: FilterBarProps) 
       asset: "",
       sender: "",
       recipient: "",
+      ...(isUrlSync ? { page: 1 } : {}),
     };
     onChange(newFilters);
     if (setUrlFilters) {
-      setUrlFilters({ ...newFilters, page: 1 });
+      setUrlFilters(newFilters);
     }
   };
 

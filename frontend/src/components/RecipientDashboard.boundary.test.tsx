@@ -44,6 +44,11 @@ const server = setupServer(
     HttpResponse.json({
       data: [mockUnvestedStream("stream-u1"), mockUnvestedStream("stream-u2")],
     })
+  ),
+  http.get("/api/recipients/:address/streams", () =>
+    HttpResponse.json({
+      data: [mockUnvestedStream("stream-u1"), mockUnvestedStream("stream-u2")],
+    })
   )
 );
 
@@ -78,6 +83,9 @@ describe("RecipientDashboard boundary states (SSB-2026-026)", () => {
   it("shows enabled claim controls when funds are actually vested", async () => {
     server.use(
       http.get("/api/streams/recipient/:address", () =>
+        HttpResponse.json({ data: [mockVestedStream("stream-v1")] })
+      ),
+      http.get("/api/recipients/:address/streams", () =>
         HttpResponse.json({ data: [mockVestedStream("stream-v1")] })
       )
     );
