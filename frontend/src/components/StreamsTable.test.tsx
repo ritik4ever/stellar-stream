@@ -90,6 +90,24 @@ describe("StreamsTable column visibility", () => {
 
     expect(screen.getByRole("columnheader", { name: "Asset" })).toBeInTheDocument();
   });
+
+  it("shows a stream load error and invokes its retry action", () => {
+    const onRetryLoad = vi.fn();
+    render(
+      <StreamsTable
+        {...defaultProps}
+        loadError="Failed loading streams. Check your connection and retry."
+        onRetryLoad={onRetryLoad}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Check your connection and retry.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(onRetryLoad).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("StreamsTable virtual scrolling", () => {

@@ -41,6 +41,8 @@ interface StreamsTableProps {
   loadingMore?: boolean;
   onRefreshStreams?: () => void;
   setUrlFilters?: (filters: ListStreamsFilters) => void;
+  loadError?: string | null;
+  onRetryLoad?: () => void;
 }
 
 const SKELETON_ROW_COUNT = 6;
@@ -106,6 +108,8 @@ export function StreamsTable({
   loadingMore = false,
   onRefreshStreams,
   setUrlFilters,
+  loadError,
+  onRetryLoad,
 }: StreamsTableProps) {
   const { visibility, toggleColumn, isVisible } = useStreamTableColumns();
   const [columnsOpen, setColumnsOpen] = useState(false);
@@ -428,6 +432,21 @@ export function StreamsTable({
       )}
       <div className="card" ref={tableWrapperRef}>
         <FilterBar filters={filters} onChange={onFiltersChange} setUrlFilters={setUrlFilters} />
+        {loadError && (
+          <div role="alert" className="activity-error" style={{ marginBottom: "1rem" }}>
+            <p>{loadError}</p>
+            {onRetryLoad && (
+              <button
+                type="button"
+                className="retry-btn"
+                onClick={onRetryLoad}
+                disabled={loading}
+              >
+                {loading ? "Retrying…" : "Retry"}
+              </button>
+            )}
+          </div>
+        )}
         <div
           className="streams-table-toolbar"
           style={{

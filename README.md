@@ -247,7 +247,7 @@ page: number (integer >= 1)
 
 limit: number (integer 1..100)
 
-Search behavior: The q parameter performs case-insensitive partial matching across stream ID, sender, recipient, and asset code. Search combines with other filters (all filters are applied together). Empty or whitespace-only search terms are ignored.
+Search behavior: The q parameter performs case-insensitive partial matching across stream ID, sender, recipient, and asset code. Search combines with other filters (all filters are applied together). Empty or whitespace-only search terms are ignored. The dashboard preserves the entered query if a search request fails and offers a Retry action; only the latest query response is applied.
 
 Pagination behavior: If both page and limit are omitted, legacy mode applies and all matching rows are returned. If either page or limit is provided, pagination mode applies with defaults page=1 and limit=20.
 
