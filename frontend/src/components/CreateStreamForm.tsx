@@ -106,7 +106,7 @@ function AccountHint({ value }: { value: string }) {
 
   if (valid) {
     return (
-      <span className="field-hint field-hint--ok" aria-live="polite">
+      <span id="recipient-hint" className="field-hint field-hint--ok" aria-live="polite">
         ✓ Valid Stellar account ({len}/56)
       </span>
     );
@@ -114,14 +114,14 @@ function AccountHint({ value }: { value: string }) {
 
   if (!trimmed.startsWith("G")) {
     return (
-      <span className="field-hint field-hint--warn" aria-live="polite">
+      <span id="recipient-hint" className="field-hint field-hint--warn" aria-live="polite">
         Account IDs must start with the letter G ({len}/56 chars)
       </span>
     );
   }
 
   return (
-    <span className="field-hint field-hint--warn" aria-live="polite">
+    <span id="recipient-hint" className="field-hint field-hint--warn" aria-live="polite">
       {len < 56
         ? `${56 - len} more character${56 - len !== 1 ? "s" : ""} needed`
         : "Too long — must be exactly 56 characters"}{" "}
@@ -959,20 +959,22 @@ export function CreateStreamForm({
 
           <dl className="fee-preview-list">
             <div className="fee-preview-item">
-              <dt>Sender</dt>
+              <dt id="review-sender-dt">Sender</dt>
               <dd
                 className="account-preview-val"
                 data-testid="preview-sender"
+                aria-labelledby="review-sender-dt"
                 style={{ wordBreak: "break-all", overflowWrap: "anywhere" }}
               >
                 {feePreview.payload.sender}
               </dd>
             </div>
             <div className="fee-preview-item">
-              <dt>Recipient</dt>
+              <dt id="review-recipient-dt">Recipient</dt>
               <dd
                 className="account-preview-val"
                 data-testid="preview-recipient"
+                aria-labelledby="review-recipient-dt"
                 style={{ wordBreak: "break-all", overflowWrap: "anywhere" }}
               >
                 {feePreview.payload.recipient}
