@@ -333,67 +333,91 @@ export function StreamMetricsChart({
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          flexWrap: "wrap",
+          gap: "0.5rem",
           marginBottom: "1rem",
         }}
       >
-        <div style={{ color: "#9ca3af", fontSize: "0.875rem" }}>
+        <div
+          className="chart-header-range"
+          style={{ color: "#9ca3af", fontSize: "0.875rem", overflowWrap: "anywhere" }}
+          data-testid="chart-date-range"
+        >
           {visibleDateRange ? `Showing ${visibleDateRange}` : "Vested amount over time"}
         </div>
-        <div style={{ display: "flex", gap: "0.5rem" }}>
+        <div
+          className="chart-header-actions"
+          style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem" }}
+          data-testid="chart-header-controls"
+        >
           <button
+            type="button"
             onClick={() => setInteractionMode(prev => prev === "pan" ? "zoom" : "pan")}
             style={{
-              padding: "0.25rem 0.5rem",
+              padding: "0.4rem 0.75rem",
               backgroundColor: interactionMode === "zoom" ? "#10b981" : "#3b82f6",
               color: "#f9fafb",
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
               cursor: "pointer",
-              marginRight: "0.5rem",
+              minHeight: "44px",
             }}
+            aria-label={interactionMode === "pan" ? "Switch to Box Zoom mode" : "Switch to Pan mode"}
           >
             {interactionMode === "pan" ? "✋ Pan Mode" : "🔍 Zoom Mode"}
           </button>
           <button
+            type="button"
             onClick={() => zoomInOut(1.5)}
             style={{
-              padding: "0.25rem 0.5rem",
+              padding: "0.4rem 0.75rem",
               backgroundColor: "#374151",
               color: "#f9fafb",
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
               cursor: "pointer",
+              minHeight: "44px",
+              minWidth: "44px",
             }}
+            aria-label="Zoom in metrics chart"
           >
             Zoom In
           </button>
           <button
+            type="button"
             onClick={() => zoomInOut(0.67)}
             style={{
-              padding: "0.25rem 0.5rem",
+              padding: "0.4rem 0.75rem",
               backgroundColor: "#374151",
               color: "#f9fafb",
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
               cursor: "pointer",
+              minHeight: "44px",
+              minWidth: "44px",
             }}
+            aria-label="Zoom out metrics chart"
           >
             Zoom Out
           </button>
           <button
+            type="button"
             onClick={() => setZoomRange(null)}
             style={{
-              padding: "0.25rem 0.5rem",
+              padding: "0.4rem 0.75rem",
               backgroundColor: "#374151",
               color: "#f9fafb",
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
               cursor: "pointer",
+              minHeight: "44px",
+              minWidth: "44px",
             }}
+            aria-label="Reset zoom on metrics chart"
           >
             Reset
           </button>
