@@ -436,6 +436,21 @@ export function CreateStreamForm({
     const startAt =
       startInMinsNum > 0 ? nowSeconds + Math.floor(startInMinsNum * 60) : nowSeconds;
     const endAt = startAt + Math.floor(durationMinsNum * 60);
+
+    const startDate = new Date(startAt * 1000);
+    const startDatePart = new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      timeZone: "UTC",
+    }).format(startDate);
+    const startTimePart = new Intl.DateTimeFormat("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: "UTC",
+    }).format(startDate);
+
     const endDate = new Date(endAt * 1000);
     const datePart = new Intl.DateTimeFormat("en-US", {
       month: "short",
@@ -449,7 +464,12 @@ export function CreateStreamForm({
       hour12: false,
       timeZone: "UTC",
     }).format(endDate);
-    return `Ends: ${datePart} at ${timePart} UTC`;
+
+    const startDesc =
+      startInMinsNum === 0
+        ? "Starts immediately (current minute)"
+        : `Starts: ${startDatePart} at ${startTimePart} UTC`;
+    return `${startDesc} · Ends: ${datePart} at ${timePart} UTC`;
   })();
 
   return (
@@ -841,12 +861,23 @@ export function CreateStreamForm({
       </div>
 
       {estimatedEndLabel && (
-        <div className="field-hint" style={{ marginTop: "-0.5rem", marginBottom: "1rem", color: "var(--color-success-text, #2e7d32)", fontWeight: 500 }}>
+        <div
+          className="field-hint schedule-preview-box"
+          data-testid="schedule-preview"
+          style={{
+            marginTop: "-0.5rem",
+            marginBottom: "1rem",
+            color: "var(--color-success-text, #2e7d32)",
+            fontWeight: 500,
+            overflowWrap: "anywhere",
+            wordBreak: "break-word",
+          }}
+        >
           {estimatedEndLabel}
         </div>
       )}
 
-      <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginTop: "1rem" }}>
+      <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginTop: "1rem", flexWrap: "wrap" }}>
         {simulationError && !feePreview && (
           <span className="field-error" role="alert">
             {simulationError}
@@ -856,6 +887,7 @@ export function CreateStreamForm({
           <button
             type="button"
             className="btn-primary"
+            style={{ minHeight: "44px" }}
             onClick={() => void retryFeeEstimation()}
             disabled={isSubmitting || (streamMode === "single" ? !formValid : !isSplitValid)}
             aria-busy={isSubmitting}
@@ -865,8 +897,9 @@ export function CreateStreamForm({
         )}
         {!simulationError && (
           <button
-            className="btn-primary"
+            className="btn-primary create-stream-submit-btn"
             type="submit"
+            style={{ minHeight: "44px" }}
             disabled={isSubmitting || (streamMode === "single" ? !formValid : !isSplitValid)}
             aria-busy={isSubmitting}
           >
