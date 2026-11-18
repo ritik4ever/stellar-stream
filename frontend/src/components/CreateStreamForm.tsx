@@ -748,7 +748,7 @@ export function CreateStreamForm({
             aria-invalid={!!errors.totalAmount}
             required
           />
-          <span id="amount-hint" className="field-hint">
+          <span id="amount-hint" className="field-hint" aria-live="polite">
             Enter a positive number
           </span>
           {errors.totalAmount && (
@@ -920,7 +920,15 @@ export function CreateStreamForm({
       </div>
     </form>
     {feePreview && (
-      <div className="modal-backdrop" role="presentation">
+      <div
+        className="modal-backdrop"
+        role="presentation"
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && !isConfirming) {
+            setFeePreview(null);
+          }
+        }}
+      >
         <div
           className="modal-panel"
           role="dialog"
