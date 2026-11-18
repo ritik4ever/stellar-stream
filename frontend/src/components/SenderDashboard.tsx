@@ -149,6 +149,11 @@ export function SenderDashboard({
   const [cancelConfirmStreamId, setCancelConfirmStreamId] = useState<string | null>(null);
   const [bulkCancelConfirmPending, setBulkCancelConfirmPending] = useState(false);
 
+  // Mobile / Narrow-screen Filter & Sort State (SSB-2026-024)
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<string>("default");
+  const [searchQuery, setSearchQuery] = useState<string>("");
+
   // A11Y: refs for modal focus management and live region announcements
   const cancelModalRef = useRef<HTMLDivElement>(null);
   const cancelTriggerRef = useRef<HTMLElement | null>(null);
@@ -336,6 +341,62 @@ export function SenderDashboard({
       { name: "Canceled", value: statusCounts.canceled },
     ].filter((item) => item.value > 0);
   }, [stats]);
+
+  // Filtered & sorted stream lists for narrow & large stream list review (SSB-2026-024)
+  const displayedActiveAndScheduled = useMemo(() => {
+    let list = [...stats.scheduledStreams, ...stats.activeStreams];
+    if (statusFilter !== "all") {
+      list = list.filter((s) => s.progress.status === statusFilter);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      list = list.filter(
+        (s) =>
+          s.id.toLowerCase().includes(q) ||
+          s.recipient.toLowerCase().includes(q) ||
+          s.assetCode.toLowerCase().includes(q)
+      );
+    }
+    if (sortBy === "amount-desc") {
+      list.sort((a, b) => b.totalAmount - a.totalAmount);
+    } else if (sortBy === "amount-asc") {
+      list.sort((a, b) => a.totalAmount - b.totalAmount);
+    } else if (sortBy === "newest") {
+      list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    } else if (sortBy === "oldest") {
+      list.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    }
+    return list;
+  }, [stats.scheduledStreams, stats.activeStreams, statusFilter, searchQuery, sortBy]);
+
+  const displayedHistory = useMemo(() => {
+    let list = stats.completedStreams;
+    if (statusFilter !== "all" && statusFilter !== "completed" && statusFilter !== "canceled") {
+      return [];
+    }
+    if (statusFilter === "completed" || statusFilter === "canceled") {
+      list = list.filter((s) => s.progress.status === statusFilter);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      list = list.filter(
+        (s) =>
+          s.id.toLowerCase().includes(q) ||
+          s.recipient.toLowerCase().includes(q) ||
+          s.assetCode.toLowerCase().includes(q)
+      );
+    }
+    if (sortBy === "amount-desc") {
+      list.sort((a, b) => b.totalAmount - a.totalAmount);
+    } else if (sortBy === "amount-asc") {
+      list.sort((a, b) => a.totalAmount - b.totalAmount);
+    } else if (sortBy === "newest") {
+      list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    } else if (sortBy === "oldest") {
+      list.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    }
+    return list;
+  }, [stats.completedStreams, statusFilter, searchQuery, sortBy]);
 
   /**
    * Handles the creation of a new stream.
@@ -589,14 +650,7 @@ export function SenderDashboard({
       />
 
       <div className="card recipient-dashboard-card">
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: "0.5rem",
-          }}
-        >
+        <div className="dashboard-header">
           <h2
             className="recipient-dashboard-title"
             style={{ marginBottom: 0 }}
@@ -623,7 +677,7 @@ export function SenderDashboard({
               {actionError.title}
             </div>
             <div className="api-error-box__hint">{actionError.message}</div>
-            <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
               {actionError.action === "cancel" && actionError.streamId && (
                 <button
                   type="button"
@@ -763,13 +817,7 @@ export function SenderDashboard({
                 className="recipient-dashboard-section"
                 style={{ marginTop: "2rem" }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    gap: "1rem",
-                    alignItems: "center",
-                  }}
-                >
+                <div className="quick-actions-bar">
                   <h3 className="recipient-dashboard-section-title">
                     Quick Actions
                   </h3>
@@ -797,6 +845,84 @@ export function SenderDashboard({
               </section>
             )}
 
+            {/* Filter and Sort Toolbar (SSB-2026-024) */}
+            <div className="sender-filter-bar" role="search" aria-label="Stream filters and search">
+              <div className="sender-filter-field">
+                <label htmlFor="sender-status-filter">Filter by status</label>
+                <select
+                  id="sender-status-filter"
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="active">Active</option>
+                  <option value="scheduled">Scheduled</option>
+                  <option value="paused">Paused</option>
+                  <option value="completed">Completed</option>
+                  <option value="canceled">Canceled</option>
+                </select>
+              </div>
+              <div className="sender-filter-field">
+                <label htmlFor="sender-sort-filter">Sort streams</label>
+                <select
+                  id="sender-sort-filter"
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value)}
+                >
+                  <option value="default">Default Order</option>
+                  <option value="amount-desc">Amount: High to Low</option>
+                  <option value="amount-asc">Amount: Low to High</option>
+                  <option value="newest">Newest First</option>
+                  <option value="oldest">Oldest First</option>
+                </select>
+              </div>
+              <div className="sender-filter-field" style={{ flex: "2 1 200px" }}>
+                <label htmlFor="sender-search-input">Search recipient or ID</label>
+                <input
+                  id="sender-search-input"
+                  type="text"
+                  placeholder="Search by address or stream ID…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
+              {(statusFilter !== "all" || searchQuery !== "" || sortBy !== "default") && (
+                <div style={{ display: "flex", alignItems: "flex-end" }}>
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    style={{ minHeight: "40px", minWidth: "44px", padding: "0.45rem 0.85rem" }}
+                    onClick={() => {
+                      setStatusFilter("all");
+                      setSearchQuery("");
+                      setSortBy("default");
+                    }}
+                    aria-label="Reset filters"
+                  >
+                    Reset
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {displayedActiveAndScheduled.length === 0 && displayedHistory.length === 0 && (
+              <div className="activity-empty" role="status" style={{ padding: "1.5rem", marginTop: "1rem" }}>
+                <p>No streams match your filter criteria.</p>
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  style={{ minHeight: "40px", minWidth: "44px", marginTop: "0.5rem" }}
+                  onClick={() => {
+                    setStatusFilter("all");
+                    setSearchQuery("");
+                    setSortBy("default");
+                  }}
+                >
+                  Clear Filters
+                </button>
+              </div>
+            )}
+
             {/* Recent Activity Feed */}
             {events.length > 0 && (
               <section
@@ -808,9 +934,9 @@ export function SenderDashboard({
                   Recent Activity
                 </h3>
                 <div className="activity-feed" role="list">
-                  {events.map((event) => (
+                  {events.map((event, idx) => (
                     <div
-                      key={event.id}
+                      key={`${event.id}-${idx}`}
                       className="activity-item"
                       role="listitem"
                       style={{
@@ -856,8 +982,7 @@ export function SenderDashboard({
             )}
 
             {/* Active & Scheduled Streams Table */}
-            {(stats.activeStreams.length > 0 ||
-              stats.scheduledStreams.length > 0) && (
+            {displayedActiveAndScheduled.length > 0 && (
               <section
                 className="recipient-dashboard-section"
                 style={{ marginTop: "2rem" }}
@@ -866,7 +991,15 @@ export function SenderDashboard({
                 <h3 id="active-scheduled-heading" className="recipient-dashboard-section-title">
                   Active &amp; Scheduled
                 </h3>
-                <div className="table-wrap" style={{ maxHeight: "480px", overflowY: "auto" }}>
+                <div
+                  className="table-wrap"
+                  style={{
+                    maxHeight: "480px",
+                    overflowY: "auto",
+                    overflowX: "auto",
+                    WebkitOverflowScrolling: "touch",
+                  }}
+                >
                   <table aria-labelledby="active-scheduled-heading">
                     <thead>
                       <tr>
@@ -876,8 +1009,7 @@ export function SenderDashboard({
                             checked={
                               selectedStreamForBulkCancel.size > 0 &&
                               selectedStreamForBulkCancel.size ===
-                              (stats.activeStreams.length +
-                                stats.scheduledStreams.length)
+                                displayedActiveAndScheduled.length
                             }
                             ref={(el) => {
                               if (el) {
@@ -885,16 +1017,14 @@ export function SenderDashboard({
                                 el.indeterminate =
                                   selectedStreamForBulkCancel.size > 0 &&
                                   selectedStreamForBulkCancel.size <
-                                    (stats.activeStreams.length + stats.scheduledStreams.length);
+                                    displayedActiveAndScheduled.length;
                               }
                             }}
                             disabled={isBulkCanceling}
                             onChange={(e) => {
                               if (e.target.checked) {
                                 const ids = new Set(
-                                  [...stats.activeStreams, ...stats.scheduledStreams].map(
-                                    (s) => s.id
-                                  )
+                                  displayedActiveAndScheduled.map((s) => s.id)
                                 );
                                 setSelectedStreamForBulkCancel(ids);
                               } else {
@@ -903,7 +1033,7 @@ export function SenderDashboard({
                             }}
                             aria-label={
                               selectedStreamForBulkCancel.size ===
-                              (stats.activeStreams.length + stats.scheduledStreams.length)
+                              displayedActiveAndScheduled.length
                                 ? "Deselect all streams"
                                 : "Select all streams"
                             }
@@ -918,111 +1048,111 @@ export function SenderDashboard({
                       </tr>
                     </thead>
                     <tbody>
-                      {[...stats.scheduledStreams, ...stats.activeStreams].map(
-                        (stream) => (
-                          <tr key={stream.id}>
-                            <td>
-                              <input
-                                type="checkbox"
-                                checked={selectedStreamForBulkCancel.has(
-                                  stream.id
-                                )}
-                                disabled={isBulkCanceling}
-                                onChange={(e) => {
-                                  const newSet = new Set(
-                                    selectedStreamForBulkCancel
-                                  );
-                                  if (e.target.checked) {
-                                    newSet.add(stream.id);
-                                  } else {
-                                    newSet.delete(stream.id);
-                                  }
-                                  setSelectedStreamForBulkCancel(newSet);
-                                }}
-                                aria-label={`Select stream ${stream.id}`}
-                              />
-                            </td>
-                            <td>
-                              <span
-                                className="truncate-address"
-                                title={stream.recipient}
-                                aria-label={`Recipient: ${stream.recipient}`}
-                              >
-                                {stream.recipient.slice(0, 8)}…
-                                {stream.recipient.slice(-4)}
-                              </span>
-                            </td>
-                            <td>{stream.assetCode}</td>
-                            <td>
+                      {displayedActiveAndScheduled.map((stream) => (
+                        <tr key={stream.id}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={selectedStreamForBulkCancel.has(
+                                stream.id
+                              )}
+                              disabled={isBulkCanceling}
+                              onChange={(e) => {
+                                const newSet = new Set(
+                                  selectedStreamForBulkCancel
+                                );
+                                if (e.target.checked) {
+                                  newSet.add(stream.id);
+                                } else {
+                                  newSet.delete(stream.id);
+                                }
+                                setSelectedStreamForBulkCancel(newSet);
+                              }}
+                              aria-label={`Select stream ${stream.id}`}
+                            />
+                          </td>
+                          <td>
+                            <span
+                              className="truncate-address"
+                              title={stream.recipient}
+                              aria-label={`Recipient: ${stream.recipient}`}
+                            >
+                              {stream.recipient.slice(0, 8)}…
+                              {stream.recipient.slice(-4)}
+                            </span>
+                          </td>
+                          <td>{stream.assetCode}</td>
+                          <td className="cell-amount">
+                            <strong>
+                              {stream.totalAmount} {stream.assetCode}
+                            </strong>
+                          </td>
+                          <td>
+                            <span className={statusClass(stream.progress.status)}>
+                              {stream.progress.status}
+                            </span>
+                          </td>
+                          <td>
+                            <div
+                              className="progress-copy"
+                              aria-label={`${stream.progress.percentComplete}% complete`}
+                            >
                               <strong>
-                                {stream.totalAmount} {stream.assetCode}
+                                {stream.progress.percentComplete}%
                               </strong>
-                            </td>
-                            <td>
-                              <span className={statusClass(stream.progress.status)}>
-                                {stream.progress.status}
-                              </span>
-                            </td>
-                            <td>
+                            </div>
+                            <div
+                              className="progress-bar"
+                              aria-hidden
+                            >
                               <div
-                                className="progress-copy"
-                                aria-label={`${stream.progress.percentComplete}% complete`}
-                              >
-                                <strong>
-                                  {stream.progress.percentComplete}%
-                                </strong>
-                              </div>
-                              <div
-                                className="progress-bar"
-                                aria-hidden
-                              >
-                                <div
-                                  style={{
-                                    width: `${Math.min(
-                                      stream.progress.percentComplete,
-                                      100
-                                    )}%`,
-                                  }}
-                                />
-                              </div>
-                            </td>
-                            <td>
-                              <div className="action-cell">
-                                {stream.progress.status === "scheduled" && (
-                                  <button
-                                    className="btn-ghost btn-edit"
-                                    type="button"
-                                    aria-label={`Edit start time for stream to ${stream.recipient.slice(0, 8)}…${stream.recipient.slice(-4)}`}
-                                    onClick={() => onEditStartTime(stream)}
-                                  >
-                                    ✏️ Edit
-                                  </button>
-                                )}
+                                style={{
+                                  width: `${Math.min(
+                                    stream.progress.percentComplete,
+                                    100
+                                  )}%`,
+                                }}
+                              />
+                            </div>
+                          </td>
+                          <td>
+                            <div className="action-cell">
+                              {stream.progress.status === "scheduled" && (
                                 <button
+                                  className="btn-ghost btn-edit"
                                   type="button"
-                                  className="btn-ghost"
-                                  style={{
-                                    color: "var(--color-error)",
-                                    padding: "4px 8px",
-                                  }}
-                                  onClick={() => handleCancel(stream.id)}
-                                  disabled={
-                                    stream.progress.status === "canceled" ||
-                                    cancelingStreamId !== null ||
-                                    isBulkCanceling
-                                  }
-                                  aria-busy={cancelingStreamId === stream.id}
-                                  aria-label={`Cancel stream to ${stream.recipient.slice(0, 8)}…${stream.recipient.slice(-4)}`}
+                                  aria-label={`Edit start time for stream to ${stream.recipient.slice(0, 8)}…${stream.recipient.slice(-4)}`}
+                                  onClick={() => onEditStartTime(stream)}
                                 >
-                                  {cancelingStreamId === stream.id
-                                    ? "Canceling…"
-                                    : "Cancel"}
+                                  ✏️ Edit
                                 </button>
-                              </div>
-                            </td>
-                          </tr>
-                        )
-                      )}
+                              )}
+                              <button
+                                type="button"
+                                className="btn-ghost btn-cancel"
+                                style={{
+                                  color: "var(--color-error)",
+                                  minHeight: "38px",
+                                  minWidth: "44px",
+                                  padding: "4px 8px",
+                                }}
+                                onClick={() => handleCancel(stream.id)}
+                                disabled={
+                                  stream.progress.status === "canceled" ||
+                                  cancelingStreamId !== null ||
+                                  isBulkCanceling
+                                }
+                                aria-busy={cancelingStreamId === stream.id}
+                                aria-label={`Cancel stream to ${stream.recipient.slice(0, 8)}…${stream.recipient.slice(-4)}`}
+                              >
+                                {cancelingStreamId === stream.id
+                                  ? "Canceling…"
+                                  : "Cancel"}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
@@ -1030,13 +1160,21 @@ export function SenderDashboard({
             )}
 
             {/* Completed Streams Table */}
-            {stats.completedStreams.length > 0 && (
+            {displayedHistory.length > 0 && (
               <section
                 className="recipient-dashboard-section"
                 aria-labelledby="history-heading"
               >
                 <h3 id="history-heading" className="recipient-dashboard-section-title">History</h3>
-                <div className="table-wrap" style={{ maxHeight: "480px", overflowY: "auto" }}>
+                <div
+                  className="table-wrap"
+                  style={{
+                    maxHeight: "480px",
+                    overflowY: "auto",
+                    overflowX: "auto",
+                    WebkitOverflowScrolling: "touch",
+                  }}
+                >
                   <table aria-labelledby="history-heading">
                     <thead>
                       <tr>
@@ -1047,7 +1185,7 @@ export function SenderDashboard({
                       </tr>
                     </thead>
                     <tbody>
-                      {stats.completedStreams.map((stream) => (
+                      {displayedHistory.map((stream) => (
                         <tr key={stream.id}>
                           <td>
                             <span
@@ -1060,7 +1198,7 @@ export function SenderDashboard({
                             </span>
                           </td>
                           <td>{stream.assetCode}</td>
-                          <td>
+                          <td className="cell-amount">
                             <strong>
                               {stream.totalAmount} {stream.assetCode}
                             </strong>

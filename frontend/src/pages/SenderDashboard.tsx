@@ -300,7 +300,7 @@ export function SenderDashboard({ wallet: propWallet }: SenderDashboardPageProps
         </span>
       </td>
       <td>{stream.assetCode}</td>
-      <td>
+      <td className="cell-amount">
         <strong>
           {stream.totalAmount} {stream.assetCode}
         </strong>
@@ -374,7 +374,15 @@ export function SenderDashboard({ wallet: propWallet }: SenderDashboardPageProps
       aria-labelledby={`${tableId}-heading`}
     >
       <h3 id={`${tableId}-heading`} className="recipient-dashboard-section-title">{title}</h3>
-      <div className="table-wrap">
+      <div
+        className="table-wrap"
+        style={{
+          maxHeight: "480px",
+          overflowY: "auto",
+          overflowX: "auto",
+          WebkitOverflowScrolling: "touch",
+        }}
+      >
         <table aria-labelledby={`${tableId}-heading`}>
           <thead>
             <tr>
@@ -466,7 +474,7 @@ export function SenderDashboard({ wallet: propWallet }: SenderDashboardPageProps
                 ✕
               </button>
             </div>
-            <p className="modal-stream-hint">
+            <p className="modal-stream-hint" style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>
               Are you sure you want to {confirmAction.action} stream{" "}
               <strong>#{confirmAction.stream.id}</strong>?
             </p>

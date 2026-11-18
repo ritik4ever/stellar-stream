@@ -338,6 +338,9 @@ input {
 
 .table-wrap {
   overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
 }
 
 .streams-table-scroll {
@@ -532,6 +535,26 @@ td {
   gap: 0.4rem;
   flex-wrap: wrap;
   align-items: center;
+  min-width: 120px;
+}
+
+.action-cell button,
+.action-cell .btn-ghost,
+.action-cell .btn-edit,
+.action-cell .btn-cancel {
+  min-height: 38px;
+  min-width: 44px;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  touch-action: manipulation;
+}
+
+.btn-cancel {
+  color: var(--color-error, #ef4444);
 }
 
 .btn-edit {
@@ -1426,4 +1449,201 @@ input {
   display: flex;
   align-items: center;
   margin-right: 0.5rem;
+}
+
+/* ── Mobile responsiveness: Sender Dashboard (SSB-2026-024) ── */
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.cell-amount {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.recipient-dashboard table {
+  min-width: 580px;
+}
+
+.recipient-dashboard input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  min-height: 20px;
+  cursor: pointer;
+  accent-color: #0ea5a5;
+  vertical-align: middle;
+}
+
+.sender-filter-bar {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+  padding: 0.85rem;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+.sender-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex: 1 1 140px;
+  min-width: 120px;
+}
+
+.sender-filter-field label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #4b5563;
+}
+
+.sender-filter-field input,
+.sender-filter-field select {
+  min-height: 40px;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  background: white;
+  color: #111827;
+  width: 100%;
+  box-sizing: border-box;
+  touch-action: manipulation;
+}
+
+.quick-actions-bar {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* 768px Tablet Breakpoint */
+@media (max-width: 768px) {
+  .recipient-dashboard-metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .sender-filter-bar {
+    gap: 0.6rem;
+    padding: 0.75rem;
+  }
+
+  .sender-filter-field {
+    flex: 1 1 calc(50% - 0.6rem);
+    min-width: 130px;
+  }
+}
+
+/* 480px & 320px Narrow Mobile Breakpoint */
+@media (max-width: 480px) {
+  .dashboard-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .dashboard-header button {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .recipient-dashboard-metrics {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+
+  .metric-card strong {
+    font-size: 1.2rem;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .sender-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 0.65rem;
+  }
+
+  .sender-filter-field {
+    flex: 1 1 100%;
+    min-width: 100%;
+  }
+
+  .sender-filter-field input,
+  .sender-filter-field select {
+    min-height: 44px;
+    font-size: 16px; /* Prevents auto-zoom on iOS */
+  }
+
+  .quick-actions-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .quick-actions-bar button {
+    width: 100%;
+    margin-left: 0 !important;
+    min-height: 44px;
+  }
+
+  .modal-backdrop {
+    padding: 0.75rem;
+  }
+
+  .modal-panel {
+    padding: 1.25rem 0.9rem;
+    border-radius: 10px;
+    max-width: 100%;
+  }
+
+  .modal-actions {
+    flex-direction: column-reverse;
+    gap: 0.5rem;
+  }
+
+  .modal-actions button {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .modal-close {
+    min-height: 44px;
+    min-width: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .activity-empty button {
+    width: 100%;
+    min-height: 44px;
+  }
+}
+
+/* Dark mode overrides for mobile sender filter */
+.dark .sender-filter-bar {
+  background: #1f2937;
+  border-color: #374151;
+}
+
+.dark .sender-filter-field label {
+  color: #9ca3af;
+}
+
+.dark .sender-filter-field input,
+.dark .sender-filter-field select {
+  background: #111827;
+  border-color: #4b5563;
+  color: #f9fafb;
 }
