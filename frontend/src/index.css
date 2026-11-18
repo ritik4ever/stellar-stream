@@ -639,6 +639,21 @@ td {
   color: #111827;
   font-weight: 700;
   text-align: right;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+@media (max-width: 480px) {
+  .fee-preview-list div {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+  }
+  .fee-preview-list dd {
+    text-align: left;
+    width: 100%;
+  }
 }
 .chart-section {
   background: white;

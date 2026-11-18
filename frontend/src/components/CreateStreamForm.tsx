@@ -950,6 +950,26 @@ export function CreateStreamForm({
           )}
 
           <dl className="fee-preview-list">
+            <div className="fee-preview-item">
+              <dt>Sender</dt>
+              <dd
+                className="account-preview-val"
+                data-testid="preview-sender"
+                style={{ wordBreak: "break-all", overflowWrap: "anywhere" }}
+              >
+                {feePreview.payload.sender}
+              </dd>
+            </div>
+            <div className="fee-preview-item">
+              <dt>Recipient</dt>
+              <dd
+                className="account-preview-val"
+                data-testid="preview-recipient"
+                style={{ wordBreak: "break-all", overflowWrap: "anywhere" }}
+              >
+                {feePreview.payload.recipient}
+              </dd>
+            </div>
             <div>
               <dt>Total amount</dt>
               <dd>
@@ -972,6 +992,7 @@ export function CreateStreamForm({
               className="btn-ghost"
               onClick={() => setFeePreview(null)}
               disabled={isConfirming}
+              style={{ minHeight: "44px" }}
             >
               {simulationError ? "Edit" : "Cancel"}
             </button>
@@ -982,6 +1003,7 @@ export function CreateStreamForm({
                 onClick={() => void confirmCreateStream()}
                 disabled={isConfirming}
                 aria-busy={isConfirming}
+                style={{ minHeight: "44px" }}
               >
                 {isConfirming ? "Retrying..." : "Retry Confirmation"}
               </button>
@@ -992,6 +1014,7 @@ export function CreateStreamForm({
                 onClick={() => void confirmCreateStream()}
                 disabled={isConfirming}
                 aria-busy={isConfirming}
+                style={{ minHeight: "44px" }}
               >
                 {isConfirming ? "Creating..." : "Confirm"}
               </button>
