@@ -25,6 +25,7 @@ import {
 } from "../services/api";
 import { ListStreamsFilters } from "../services/api";
 import { OpenIssue, Stream } from "../types/stream";
+import { StatsPanel } from "../components/StatsPanel";
 
 export interface DashboardPageProps {
   wallet?: FreighterState;
@@ -289,24 +290,14 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
 
   return (
     <>
-      <section className="metric-grid">
-        <article className="metric-card">
-          <span>Total Streams</span>
-          <strong>{metrics.total}</strong>
-        </article>
-        <article className="metric-card">
-          <span>Active</span>
-          <strong>{metrics.active}</strong>
-        </article>
-        <article className="metric-card">
-          <span>Completed</span>
-          <strong>{metrics.completed}</strong>
-        </article>
-        <article className="metric-card">
-          <span>Total Vested</span>
-          <strong>{metrics.vested}</strong>
-        </article>
-      </section>
+      <StatsPanel
+        total={metrics.total}
+        active={metrics.active}
+        completed={metrics.completed}
+        vested={metrics.vested}
+        loading={initialLoading}
+        streamsLoading={loadingMore}
+      />
 
       <section className="chart-section">
         <h2 className="chart-section__title">Stream Metrics Trends</h2>

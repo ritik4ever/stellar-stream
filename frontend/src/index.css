@@ -1529,6 +1529,109 @@ input {
   flex-wrap: wrap;
 }
 
+/* ── Stats Panel Component Styles ────────────────────────────────────────── */
+
+.stats-panel-container {
+  margin-bottom: 1rem;
+}
+
+.stats-account-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.875rem;
+  color: #4b5563;
+  overflow: hidden;
+}
+
+.stats-account-label {
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.stats-account-value {
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: break-all;
+}
+
+.stats-error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.875rem 1rem;
+  background-color: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  color: #991b1b;
+  margin-bottom: 1rem;
+}
+
+.stats-error-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.stats-error-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.stats-error-text strong {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.stats-error-text p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #b91c1c;
+}
+
+.stats-streams-loading-hint {
+  display: block;
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin-top: 0.25rem;
+  font-style: italic;
+}
+
+.stats-retry-btn {
+  min-height: 44px;
+  min-width: 80px;
+  padding: 0.5rem 1rem;
+  background-color: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 500;
+  font-size: 0.875rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.2s;
+}
+
+.stats-retry-btn:hover:not(:disabled) {
+  background-color: #dc2626;
+}
+
+.stats-retry-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.stats-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.75rem;
+}
+
 /* 768px Tablet Breakpoint */
 @media (max-width: 768px) {
   .recipient-dashboard-metrics {
@@ -1543,6 +1646,11 @@ input {
   .sender-filter-field {
     flex: 1 1 calc(50% - 0.6rem);
     min-width: 130px;
+  }
+
+  .stats-metric-grid {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.625rem;
   }
 }
 
@@ -1560,6 +1668,11 @@ input {
 
   .recipient-dashboard-metrics {
     grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+
+  .stats-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.5rem;
   }
 
@@ -1597,6 +1710,15 @@ input {
     min-height: 44px;
   }
 
+  .stats-error-banner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .stats-retry-btn {
+    width: 100%;
+  }
+
   .modal-backdrop {
     padding: 0.75rem;
   }
@@ -1628,6 +1750,51 @@ input {
   .activity-empty button {
     width: 100%;
     min-height: 44px;
+  }
+}
+
+@media (max-width: 360px) {
+  .stats-panel-container {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .stats-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .metric-card {
+    padding: 0.5rem;
+    min-width: 0;
+  }
+
+  .metric-card span {
+    font-size: 0.75rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .metric-card strong {
+    font-size: 1.05rem;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .stats-account-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+  }
+
+  .stats-account-value {
+    max-width: 100%;
+    font-size: 0.75rem;
+  }
+
+  .stats-error-banner {
+    padding: 0.75rem;
   }
 }
 

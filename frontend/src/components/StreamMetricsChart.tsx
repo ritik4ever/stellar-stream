@@ -19,6 +19,8 @@ interface StreamMetricsChartProps {
   data: MetricsSnapshot[];
   loading?: boolean;
   error?: Error | null;
+  isStale?: boolean;
+  onRetry?: () => void;
 }
 
 /** Format a unix-ms timestamp as a short date label (e.g. "Jun 24"). */
@@ -29,7 +31,13 @@ function formatDate(timestamp: number): string {
   });
 }
 
-export function StreamMetricsChart({ data, loading = false, error = null }: StreamMetricsChartProps) {
+export function StreamMetricsChart({
+  data,
+  loading = false,
+  error = null,
+  isStale = false,
+  onRetry,
+}: StreamMetricsChartProps) {
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
   const [interactionMode, setInteractionMode] = useState<"pan" | "zoom">("pan");
   const [refAreaLeft, setRefAreaLeft] = useState<string | null>(null);
@@ -213,15 +221,25 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
   }
 
   if (error || statsError) {
+    const handleActionRetry = () => {
+      if (onRetry) {
+        onRetry();
+      }
+      if (statsError) {
+        handleRetry();
+      }
+    };
+
     return (
       <div className="chart-empty-state" role="alert">
         <div className="chart-empty-state__content">
           <span className="chart-empty-state__icon">⚠️</span>
           <h3>Failed to Load Chart</h3>
           <p>{error?.message || statsError?.message || "An error occurred while fetching metrics history."}</p>
-          {statsError && (
+          {(statsError || onRetry) && (
             <button
-              onClick={handleRetry}
+              onClick={handleActionRetry}
+              data-testid="metrics-retry-button"
               style={{
                 marginTop: "1rem",
                 padding: "0.5rem 1rem",
@@ -230,6 +248,8 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
                 border: "none",
                 borderRadius: "0.25rem",
                 cursor: "pointer",
+                minHeight: "44px",
+                minWidth: "80px",
               }}
             >
               Retry
@@ -267,73 +287,137 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
 
   return (
     <div className="chart-container" style={{ position: "relative" }}>
+      {isStale && (
+        <div
+          className="chart-stale-banner"
+          role="status"
+          data-testid="metrics-stale-banner"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            backgroundColor: "#fffbeb",
+            border: "1px solid #fef3c7",
+            borderRadius: "6px",
+            padding: "0.5rem 0.75rem",
+            color: "#92400e",
+            fontSize: "0.85rem",
+            marginBottom: "0.75rem",
+          }}
+        >
+          <span>Displaying cached metrics. Data may be stale.</span>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              data-testid="metrics-reconnect-button"
+              style={{
+                padding: "0.25rem 0.75rem",
+                backgroundColor: "#d97706",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: "pointer",
+                minHeight: "36px",
+                fontWeight: 500,
+              }}
+            >
+              Sync Latest
+            </button>
+          )}
+        </div>
+      )}
       <div
         className="chart-header"
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          flexWrap: "wrap",
+          gap: "0.5rem",
           marginBottom: "1rem",
         }}
       >
-        <div style={{ color: "#9ca3af", fontSize: "0.875rem" }}>
+        <div
+          className="chart-header-range"
+          style={{ color: "#9ca3af", fontSize: "0.875rem", overflowWrap: "anywhere" }}
+          data-testid="chart-date-range"
+        >
           {visibleDateRange ? `Showing ${visibleDateRange}` : "Vested amount over time"}
         </div>
-        <div style={{ display: "flex", gap: "0.5rem" }}>
+        <div
+          className="chart-header-actions"
+          style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem" }}
+          data-testid="chart-header-controls"
+        >
           <button
+            type="button"
             onClick={() => setInteractionMode(prev => prev === "pan" ? "zoom" : "pan")}
             style={{
-              padding: "0.25rem 0.5rem",
+              padding: "0.4rem 0.75rem",
               backgroundColor: interactionMode === "zoom" ? "#10b981" : "#3b82f6",
               color: "#f9fafb",
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
               cursor: "pointer",
-              marginRight: "0.5rem",
+              minHeight: "44px",
             }}
+            aria-label={interactionMode === "pan" ? "Switch to Box Zoom mode" : "Switch to Pan mode"}
           >
             {interactionMode === "pan" ? "✋ Pan Mode" : "🔍 Zoom Mode"}
           </button>
           <button
+            type="button"
             onClick={() => zoomInOut(1.5)}
             style={{
-              padding: "0.25rem 0.5rem",
+              padding: "0.4rem 0.75rem",
               backgroundColor: "#374151",
               color: "#f9fafb",
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
               cursor: "pointer",
+              minHeight: "44px",
+              minWidth: "44px",
             }}
+            aria-label="Zoom in metrics chart"
           >
             Zoom In
           </button>
           <button
+            type="button"
             onClick={() => zoomInOut(0.67)}
             style={{
-              padding: "0.25rem 0.5rem",
+              padding: "0.4rem 0.75rem",
               backgroundColor: "#374151",
               color: "#f9fafb",
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
               cursor: "pointer",
+              minHeight: "44px",
+              minWidth: "44px",
             }}
+            aria-label="Zoom out metrics chart"
           >
             Zoom Out
           </button>
           <button
+            type="button"
             onClick={() => setZoomRange(null)}
             style={{
-              padding: "0.25rem 0.5rem",
+              padding: "0.4rem 0.75rem",
               backgroundColor: "#374151",
               color: "#f9fafb",
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
               cursor: "pointer",
+              minHeight: "44px",
+              minWidth: "44px",
             }}
+            aria-label="Reset zoom on metrics chart"
           >
             Reset
           </button>
