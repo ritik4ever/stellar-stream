@@ -697,6 +697,7 @@ export function CreateStreamForm({
               aria-describedby={errors.assetCode ? "asset-error" : "asset-hint"}
               aria-invalid={!!errors.assetCode}
               required
+              style={{ minHeight: "44px" }}
             >
               {allowedAssets.map((a) => (
                 <option key={a} value={a}>
@@ -747,6 +748,7 @@ export function CreateStreamForm({
             aria-describedby={errors.totalAmount ? "amount-error" : "amount-hint"}
             aria-invalid={!!errors.totalAmount}
             required
+            style={{ minHeight: "44px" }}
           />
           <span id="amount-hint" className="field-hint" aria-live="polite">
             Enter a positive number

@@ -645,6 +645,11 @@ td {
 }
 
 @media (max-width: 480px) {
+  .field-group input,
+  .field-group select {
+    min-height: 44px;
+  }
+
   .fee-preview-list div {
     flex-direction: column;
     align-items: flex-start;
