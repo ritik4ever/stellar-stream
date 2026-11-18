@@ -995,8 +995,20 @@ export function CreateStreamForm({
 
           {simulationError && (
             <div className="api-error-box" role="alert">
-              <div className="api-error-box__title">Submission failed</div>
-              <div className="api-error-box__hint">{simulationError}</div>
+              <div className="api-error-box__title">
+                {simulationError.toLowerCase().includes("clock") ||
+                simulationError.toLowerCase().includes("timezone") ||
+                simulationError.toLowerCase().includes("skew")
+                  ? "Device clock or timezone mismatch"
+                  : "Submission failed"}
+              </div>
+              <div className="api-error-box__hint">
+                {simulationError.toLowerCase().includes("clock") ||
+                simulationError.toLowerCase().includes("timezone") ||
+                simulationError.toLowerCase().includes("skew")
+                  ? "Your device clock differs from Stellar network time. Re-attempting will recompute timestamps against current network time."
+                  : simulationError}
+              </div>
             </div>
           )}
 
