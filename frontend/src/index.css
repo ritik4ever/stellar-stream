@@ -1427,3 +1427,129 @@ input {
   align-items: center;
   margin-right: 0.5rem;
 }
+
+/* ── Stats Panel Component Styles ────────────────────────────────────────── */
+
+.stats-panel-container {
+  margin-bottom: 1rem;
+}
+
+.stats-account-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.875rem;
+  color: #4b5563;
+  overflow: hidden;
+}
+
+.stats-account-label {
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.stats-account-value {
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: break-all;
+}
+
+.stats-error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.875rem 1rem;
+  background-color: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  color: #991b1b;
+  margin-bottom: 1rem;
+}
+
+.stats-error-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.stats-error-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.stats-error-text strong {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.stats-error-text p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #b91c1c;
+}
+
+.stats-streams-loading-hint {
+  display: block;
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin-top: 0.25rem;
+  font-style: italic;
+}
+
+.stats-retry-btn {
+  min-height: 44px;
+  min-width: 80px;
+  padding: 0.5rem 1rem;
+  background-color: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 500;
+  font-size: 0.875rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.2s;
+}
+
+.stats-retry-btn:hover:not(:disabled) {
+  background-color: #dc2626;
+}
+
+.stats-retry-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.stats-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.75rem;
+}
+
+@media (max-width: 480px) {
+  .stats-metric-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.5rem;
+  }
+
+  .metric-card strong {
+    font-size: 1.15rem;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .stats-error-banner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .stats-retry-btn {
+    width: 100%;
+  }
+}
+
