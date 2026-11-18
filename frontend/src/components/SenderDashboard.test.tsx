@@ -724,15 +724,27 @@ describe("SenderDashboard - Enhanced Analytics & Activity", () => {
       expect(screen.getByText("Sender Dashboard")).toBeInTheDocument()
     );
 
-    const cancelBtn = screen.getByRole("button", { name: /Cancel/i });
+    // Click the Cancel button — should open accessible confirmation modal (no window.confirm)
+    const cancelBtn = screen.getByRole("button", { name: /Cancel stream to/i });
     fireEvent.click(cancelBtn);
+
+    // The accessible modal should appear
+    await waitFor(() =>
+      expect(screen.getByRole("dialog")).toBeInTheDocument()
+    );
+    expect(screen.getByText("Cancel stream?")).toBeInTheDocument();
+
+    // Confirm via the accessible modal button
+    fireEvent.click(screen.getByRole("button", { name: /Yes, cancel stream/i }));
 
     // Action error banner displays useful message and Retry Cancel button
     await waitFor(() =>
       expect(screen.getByRole("alert")).toBeInTheDocument()
     );
     expect(screen.getByText("Cancellation Failed")).toBeInTheDocument();
-    expect(screen.getByText(/Database lock timeout/i)).toBeInTheDocument();
+    // Scope to the alert box to avoid the live-region duplicate
+    const alertBox = screen.getByRole("alert");
+    expect(alertBox).toHaveTextContent(/Database lock timeout/i);
 
     const retryCancelBtn = screen.getByRole("button", { name: /Retry Cancel/i });
     expect(retryCancelBtn).toBeInTheDocument();
@@ -789,11 +801,20 @@ describe("SenderDashboard - Enhanced Analytics & Activity", () => {
     const bulkCancelBtn = screen.getByText(/Bulk Cancel \(2\)/);
     fireEvent.click(bulkCancelBtn);
 
+    // Accessible confirmation modal appears — confirm via keyboard-operable button
+    await waitFor(() =>
+      expect(screen.getByRole("dialog")).toBeInTheDocument()
+    );
+    expect(screen.getByText(/Cancel 2 stream\(s\)\?/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Yes, cancel 2 stream\(s\)/i }));
+
     // Error banner appears
     await waitFor(() =>
       expect(screen.getByText("Bulk Cancellation Failed")).toBeInTheDocument()
     );
-    expect(screen.getByText(/1 of 2 stream\(s\) could not be canceled/)).toBeInTheDocument();
+    // Scope to alert box to avoid matching the live-region duplicate
+    const bulkAlertBox = screen.getByRole("alert");
+    expect(bulkAlertBox).toHaveTextContent(/1 of 2 stream\(s\) could not be canceled/);
 
     // SAFE INPUT PRESERVED: The failed stream 'bulk-s2' remains selected
     expect(screen.getByText(/Bulk Cancel \(1\)/)).toBeInTheDocument();
@@ -849,5 +870,234 @@ describe("SenderDashboard - Enhanced Analytics & Activity", () => {
     const tableWraps = document.querySelectorAll(".table-wrap");
     expect(tableWraps.length).toBeGreaterThan(0);
     expect((tableWraps[0] as HTMLElement).style.maxHeight).toBe("480px");
+  });
+
+  // =========================================================================
+  // A11Y Tests — SSB-2026-023
+  // =========================================================================
+
+  it("opens accessible cancel confirmation dialog instead of window.confirm when Cancel is clicked", async () => {
+    const SENDER_A11Y_CANCEL = "GSENDER_A11Y_CANCEL";
+    const streams = [mockActiveStream("a11y-s1", SENDER_A11Y_CANCEL)];
+    setupSenderHandler(streams, SENDER_A11Y_CANCEL);
+    setupStreamHistoryHandler("a11y-s1", []);
+
+    server.use(
+      http.post("/api/streams/:id/cancel", () =>
+        HttpResponse.json({ data: mockCanceledStream("a11y-s1", SENDER_A11Y_CANCEL) })
+      )
+    );
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_A11Y_CANCEL}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Active & Scheduled")).toBeInTheDocument()
+    );
+
+    // Cancel button opens a dialog — no window.confirm
+    const cancelBtn = screen.getByRole("button", { name: /Cancel stream to/i });
+    fireEvent.click(cancelBtn);
+
+    // Dialog is present with correct role and labelling
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog).toHaveAttribute("aria-labelledby", "cancel-confirm-title");
+    expect(screen.getByText("Cancel stream?")).toBeInTheDocument();
+
+    // Both action buttons are keyboard-operable
+    const keepBtn = screen.getByRole("button", { name: /Keep stream/i });
+    const confirmBtn = screen.getByRole("button", { name: /Yes, cancel stream/i });
+    expect(keepBtn).toBeInTheDocument();
+    expect(confirmBtn).toBeInTheDocument();
+
+    // Dismiss with Keep stream — dialog closes, no cancel sent
+    fireEvent.click(keepBtn);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    );
+  });
+
+  it("closes cancel dialog with Escape key (keyboard operability)", async () => {
+    const SENDER_A11Y_ESC = "GSENDER_A11Y_ESC";
+    const streams = [mockActiveStream("esc-s1", SENDER_A11Y_ESC)];
+    setupSenderHandler(streams, SENDER_A11Y_ESC);
+    setupStreamHistoryHandler("esc-s1", []);
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_A11Y_ESC}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Active & Scheduled")).toBeInTheDocument()
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Cancel stream to/i }));
+    await screen.findByRole("dialog");
+
+    // Escape key closes the dialog
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    );
+  });
+
+  it("opens accessible bulk cancel confirmation dialog with correct count in title", async () => {
+    const SENDER_A11Y_BULK = "GSENDER_A11Y_BULK";
+    const streams = [
+      mockActiveStream("bulk-a-1", SENDER_A11Y_BULK),
+      mockActiveStream("bulk-a-2", SENDER_A11Y_BULK),
+    ];
+    setupSenderHandler(streams, SENDER_A11Y_BULK);
+    streams.forEach((s) => setupStreamHistoryHandler(s.id, []));
+
+    server.use(
+      http.post("/api/streams/:id/cancel", ({ params }) =>
+        HttpResponse.json({ data: mockCanceledStream(String(params.id), SENDER_A11Y_BULK) })
+      )
+    );
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_A11Y_BULK}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Active & Scheduled")).toBeInTheDocument()
+    );
+
+    // Select all and open bulk confirm dialog
+    const checkboxes = screen.getAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+    fireEvent.click(screen.getByText(/Bulk Cancel \(2\)/));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveAttribute("aria-labelledby", "bulk-cancel-confirm-title");
+    expect(screen.getByText(/Cancel 2 stream\(s\)\?/i)).toBeInTheDocument();
+
+    // Confirm and streams get cancelled
+    fireEvent.click(screen.getByRole("button", { name: /Yes, cancel 2 stream\(s\)/i }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    );
+  });
+
+  it("table headers have scope=col for screen reader column association", async () => {
+    const SENDER_A11Y_TH = "GSENDER_A11Y_TH";
+    const streams = [mockActiveStream("th-s1", SENDER_A11Y_TH)];
+    setupSenderHandler(streams, SENDER_A11Y_TH);
+    setupStreamHistoryHandler("th-s1", []);
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_A11Y_TH}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Active & Scheduled")).toBeInTheDocument()
+    );
+
+    // All visible <th> elements in the active/scheduled table must have scope="col"
+    const ths = document.querySelectorAll("table thead th");
+    expect(ths.length).toBeGreaterThan(0);
+    ths.forEach((th) => {
+      // Header checkboxes don't need scope; labeled text headers do
+      if (th.textContent?.trim()) {
+        expect(th).toHaveAttribute("scope", "col");
+      }
+    });
+  });
+
+  it("select-all checkbox shows indeterminate state when partially selected", async () => {
+    const SENDER_A11Y_INDET = "GSENDER_A11Y_INDET";
+    const streams = [
+      mockActiveStream("indet-s1", SENDER_A11Y_INDET),
+      mockActiveStream("indet-s2", SENDER_A11Y_INDET),
+    ];
+    setupSenderHandler(streams, SENDER_A11Y_INDET);
+    streams.forEach((s) => setupStreamHistoryHandler(s.id, []));
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_A11Y_INDET}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Active & Scheduled")).toBeInTheDocument()
+    );
+
+    const checkboxes = screen.getAllByRole("checkbox");
+    const headerCheckbox = checkboxes[0] as HTMLInputElement;
+
+    // Select only 1 of 2 streams → indeterminate
+    fireEvent.click(checkboxes[1]);
+    expect(headerCheckbox.indeterminate).toBe(true);
+    expect(headerCheckbox.checked).toBe(false);
+
+    // Select both → checked, not indeterminate
+    fireEvent.click(checkboxes[2]);
+    expect(headerCheckbox.indeterminate).toBe(false);
+    expect(headerCheckbox.checked).toBe(true);
+  });
+
+  it("truncated recipient addresses carry title and aria-label with full address", async () => {
+    const SENDER_A11Y_ADDR = "GSENDER_A11Y_ADDR";
+    const stream = mockActiveStream("addr-s1", SENDER_A11Y_ADDR);
+    setupSenderHandler([stream], SENDER_A11Y_ADDR);
+    setupStreamHistoryHandler("addr-s1", []);
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_A11Y_ADDR}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Active & Scheduled")).toBeInTheDocument()
+    );
+
+    // Truncated address span must carry title and aria-label with full recipient
+    const truncSpan = document.querySelector(".truncate-address") as HTMLElement;
+    expect(truncSpan).not.toBeNull();
+    expect(truncSpan.getAttribute("title")).toBe(stream.recipient);
+    expect(truncSpan.getAttribute("aria-label")).toContain(stream.recipient);
+  });
+
+  it("renders a polite aria-live region for screen reader announcements", async () => {
+    const SENDER_A11Y_LIVE = "GSENDER_A11Y_LIVE";
+    setupSenderHandler([mockActiveStream("live-s1", SENDER_A11Y_LIVE)], SENDER_A11Y_LIVE);
+    setupStreamHistoryHandler("live-s1", []);
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_A11Y_LIVE}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Sender Dashboard")).toBeInTheDocument()
+    );
+
+    // The live region is present in the DOM (sr-only, polite)
+    const liveRegion = document.querySelector("[role='status'][aria-live='polite']");
+    expect(liveRegion).not.toBeNull();
+    expect(liveRegion).toHaveAttribute("aria-atomic", "true");
   });
 });
