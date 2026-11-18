@@ -32,6 +32,13 @@ import {
   startIndexer,
   getCircuitBreakerStatus,
 } from "./services/indexer";
+import {
+  getIdempotentStream,
+  storeIdempotentStream,
+  isInFlightStreamCreation,
+  markStreamCreationInFlight,
+  clearStreamCreationInFlight,
+} from "./services/streamIdempotency";
 import { ADMIN_CALLER, adminAuth, authorizeAdminApiKey } from "./middleware/adminAuth";
 import { deleteStreamById, reconcileStream } from "./services/streamStore";
 import { getCache } from "./services/cache";
@@ -1650,8 +1657,41 @@ app.post(
       return;
     }
 
+    const idempotencyKey =
+      (req.headers["idempotency-key"] as string) ||
+      (req.headers["x-idempotency-key"] as string) ||
+      `fp:${parsedBody.data.sender}:${parsedBody.data.recipient}:${parsedBody.data.assetCode}:${parsedBody.data.totalAmount}:${parsedBody.data.durationSeconds}:${parsedBody.data.startAt ?? ""}`;
+
+    // Handle repeat POST after client timeout (idempotent replay)
+    const cachedStream = getIdempotentStream(idempotencyKey);
+    if (cachedStream) {
+      res.setHeader("X-Idempotent-Replay", "true");
+      res.status(200).json({
+        data: {
+          ...cachedStream,
+          progress: calculateProgress(cachedStream),
+        },
+      });
+      return;
+    }
+
+    // Handle two identical requests arriving together (concurrency guard)
+    if (isInFlightStreamCreation(idempotencyKey)) {
+      sendApiError(
+        req,
+        res,
+        409,
+        "A stream creation request with identical parameters is currently in flight.",
+        { code: "CONFLICT" },
+      );
+      return;
+    }
+
+    markStreamCreationInFlight(idempotencyKey);
+
     try {
       const stream = await createStream(parsedBody.data);
+      storeIdempotentStream(idempotencyKey, stream);
       res.status(201).json({
         data: {
           ...stream,
@@ -1673,6 +1713,8 @@ app.post(
           code: normalizedError.code ?? "INTERNAL_ERROR",
         },
       );
+    } finally {
+      clearStreamCreationInFlight(idempotencyKey);
     }
   },
 );
