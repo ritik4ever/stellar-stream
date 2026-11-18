@@ -701,7 +701,21 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
   const hasLimit = req.query.limit !== undefined;
 
   const now = nowInSeconds();
-  let data = listStreams(query.include_archived, query.sort ?? "createdAt", query.order ?? "desc").map((stream) => ({
+  let rawStreams;
+  try {
+    rawStreams = listStreams(
+      query.include_archived,
+      query.sort ?? "createdAt",
+      query.order ?? "desc",
+    );
+  } catch (_error) {
+    sendApiError(req, res, 500, "Failed to retrieve streams.", {
+      code: "INTERNAL_ERROR",
+    });
+    return;
+  }
+
+  let data = rawStreams.map((stream) => ({
     ...stream,
     progress: calculateProgress(stream, now),
   }));
