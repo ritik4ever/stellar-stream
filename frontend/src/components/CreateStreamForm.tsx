@@ -76,6 +76,18 @@ function humaniseApiError(raw: string): { title: string; hint: string } {
       hint: "Stream duration must be at least 1 minute (60 seconds). Increase the duration and try again.",
     };
   }
+  if (
+    lower.includes("clock") ||
+    lower.includes("timezone") ||
+    lower.includes("skew") ||
+    lower.includes("time mismatch") ||
+    lower.includes("timestamp")
+  ) {
+    return {
+      title: "Device clock or timezone mismatch",
+      hint: "Your device clock differs from Stellar network time. Please ensure automatic time sync is enabled in your OS settings and retry.",
+    };
+  }
   if (lower.includes("not found")) {
     return {
       title: "Stream not found",
@@ -427,6 +439,13 @@ export function CreateStreamForm({
   }
 
   const parsedApiError = apiError ? humaniseApiError(apiError) : null;
+  const isClockMismatch = Boolean(
+    apiError && (
+      apiError.toLowerCase().includes("clock") ||
+      apiError.toLowerCase().includes("timezone") ||
+      apiError.toLowerCase().includes("skew")
+    )
+  );
 
   const startInMinsNum = Number(values.startInMinutes);
   const durationMinsNum = Number(values.durationMinutes);
@@ -875,6 +894,8 @@ export function CreateStreamForm({
         <div
           className="field-hint schedule-preview-box"
           data-testid="schedule-preview"
+          role="status"
+          aria-live="polite"
           style={{
             marginTop: "-0.5rem",
             marginBottom: "1rem",
@@ -884,6 +905,23 @@ export function CreateStreamForm({
             wordBreak: "break-word",
           }}
         >
+          {startInMinsNum === 0 && (
+            <span
+              className="schedule-boundary-tag schedule-boundary-tag--immediate"
+              data-testid="boundary-current-minute"
+              style={{
+                display: "inline-block",
+                padding: "2px 8px",
+                marginRight: "6px",
+                fontSize: "0.8rem",
+                borderRadius: "4px",
+                background: "rgba(46, 125, 50, 0.12)",
+                color: "#2e7d32",
+              }}
+            >
+              Current-minute boundary
+            </span>
+          )}
           {estimatedEndLabel}
         </div>
       )}
@@ -911,10 +949,13 @@ export function CreateStreamForm({
             className="btn-primary create-stream-submit-btn"
             type="submit"
             style={{ minHeight: "44px" }}
-            disabled={isSubmitting || (streamMode === "single" ? !formValid : !isSplitValid)}
+            disabled={isSubmitting || (streamMode === "single" ? !formValid : !isSplitValid) || isClockMismatch}
             aria-busy={isSubmitting}
+            title={isClockMismatch ? "Device clock mismatch — please sync your device time to proceed" : undefined}
           >
-            {isSubmitting
+            {isClockMismatch
+              ? "Clock Out of Sync"
+              : isSubmitting
               ? (streamMode === "split" ? "Creating..." : "Estimating fee...")
               : (streamMode === "split" ? "Create Split Stream" : "Create Stream")}
           </button>
