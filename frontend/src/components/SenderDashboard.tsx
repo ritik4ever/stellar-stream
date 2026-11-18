@@ -379,6 +379,11 @@ export function SenderDashboard({
    */
   const handleCancel = (id: string) => {
     if (cancelingStreamId !== null || isBulkCanceling) return;
+    const target = streams.find((s) => s.id === id);
+    if (target?.progress?.status === "canceled") {
+      announce(`Stream ${id} is already canceled.`);
+      return;
+    }
     setCancelConfirmStreamId(id);
   };
 
@@ -1081,58 +1086,84 @@ export function SenderDashboard({
         )}
       </div>
 
-      {/* A11Y: Accessible cancel confirmation modal — replaces window.confirm */}
-      {cancelConfirmStreamId !== null && (
-        <div
-          className="modal-backdrop"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setCancelConfirmStreamId(null);
-          }}
-        >
+      {/* A11Y: Accessible cancel confirmation modal — replaces window.confirm (SSB-2026-068) */}
+      {cancelConfirmStreamId !== null && (() => {
+        const streamToCancel = streams.find((s) => s.id === cancelConfirmStreamId);
+        const remaining = streamToCancel
+          ? Math.max(0, streamToCancel.totalAmount - (streamToCancel.progress?.vestedAmount || 0))
+          : 0;
+        const formattedRemaining = remaining.toLocaleString("en-US", { maximumFractionDigits: 2 });
+        const isAlreadyCanceled =
+          streamToCancel?.progress?.status === "canceled" ||
+          streamToCancel?.progress?.status === "completed";
+
+        return (
           <div
-            ref={cancelModalRef}
-            className="modal-panel"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="cancel-confirm-title"
+            className="modal-backdrop"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setCancelConfirmStreamId(null);
+            }}
           >
-            <div className="modal-header">
-              <h3 id="cancel-confirm-title" className="modal-title">
-                Cancel stream?
-              </h3>
-              <button
-                type="button"
-                className="modal-close"
-                aria-label="Close cancel confirmation dialog"
-                onClick={() => setCancelConfirmStreamId(null)}
-              >
-                ✕
-              </button>
-            </div>
-            <p className="modal-stream-hint">
-              Are you sure you want to cancel stream{" "}
-              <strong>#{cancelConfirmStreamId}</strong>? This action cannot be undone.
-            </p>
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="btn-ghost"
-                onClick={() => setCancelConfirmStreamId(null)}
-              >
-                Keep stream
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                style={{ backgroundColor: "var(--color-error)" }}
-                onClick={() => void confirmCancelStream()}
-              >
-                Yes, cancel stream
-              </button>
+            <div
+              ref={cancelModalRef}
+              className="modal-panel"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="cancel-confirm-title"
+              aria-describedby="cancel-confirm-desc"
+            >
+              <div className="modal-header">
+                <h3 id="cancel-confirm-title" className="modal-title">
+                  Cancel stream?
+                </h3>
+                <button
+                  type="button"
+                  className="modal-close"
+                  aria-label="Close cancel confirmation dialog"
+                  onClick={() => setCancelConfirmStreamId(null)}
+                >
+                  ✕
+                </button>
+              </div>
+              <div id="cancel-confirm-desc">
+                <p className="modal-stream-hint">
+                  Are you sure you want to cancel stream{" "}
+                  <strong>#{cancelConfirmStreamId}</strong>? This irreversible action will terminate the stream immediately.
+                </p>
+                {streamToCancel && (
+                  <p className="modal-refundable-amount" data-testid="cancel-refundable-amount" style={{ margin: "0.5rem 0", color: "#1f2937", fontSize: "0.9rem" }}>
+                    Refundable to sender: <strong>{formattedRemaining} {streamToCancel.assetCode}</strong>
+                  </p>
+                )}
+              </div>
+              {isAlreadyCanceled && (
+                <div role="alert" style={{ color: "var(--color-error)", marginBottom: "1rem", fontSize: "0.85rem" }}>
+                  This stream is already {streamToCancel?.progress?.status} and cannot be canceled.
+                </div>
+              )}
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => setCancelConfirmStreamId(null)}
+                >
+                  Keep stream
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  style={{ backgroundColor: "var(--color-error)" }}
+                  onClick={() => void confirmCancelStream()}
+                  disabled={isAlreadyCanceled || cancelingStreamId !== null}
+                  aria-busy={cancelingStreamId !== null}
+                >
+                  {cancelingStreamId !== null ? "Canceling stream…" : "Yes, cancel stream"}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* A11Y: Accessible bulk cancel confirmation modal — replaces window.confirm */}
       {bulkCancelConfirmPending && (
