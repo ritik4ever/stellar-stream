@@ -92,6 +92,7 @@ describe('StreamDetailDrawer', () => {
   it('shows error state for missing stream', async () => {
     render(<StreamDetailDrawer streamId="missing" onClose={onClose} />);
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+    expect(screen.getByText('Stream not found')).toBeInTheDocument();
     expect(screen.getByText(/could not be found/i)).toBeInTheDocument();
   });
 
@@ -126,15 +127,67 @@ describe('StreamDetailDrawer', () => {
     await waitFor(() => expect(screen.getByText('Cancel Stream')).toBeInTheDocument());
   });
 
-  it('cancel button is disabled for finalized streams', async () => {
+  it('shows an explicit canceled state and no cancel action', async () => {
     server.use(streamWithStatus('canceled'));
     render(<StreamDetailDrawer streamId="42" onClose={onClose} onCancel={onCancel} />);
-    await waitFor(() => expect(screen.getByText('Cancel Stream')).toBeDisabled());
+    await waitFor(() => expect(screen.getByLabelText('Canceled stream')).toBeInTheDocument());
+    expect(screen.getByText(/canceled and cannot be modified/i)).toBeInTheDocument();
+    expect(screen.queryByText('Cancel Stream')).not.toBeInTheDocument();
   });
 
   it('does not render cancel button when onCancel is not provided', async () => {
     render(<StreamDetailDrawer streamId="42" onClose={onClose} />);
     await waitFor(() => expect(screen.queryByText('Cancel Stream')).not.toBeInTheDocument());
+  });
+
+  it('shows an explicit refresh error and removes mutation actions', async () => {
+    let streamRequests = 0;
+    server.use(
+      http.get('/api/streams/:id', () => {
+        streamRequests += 1;
+        if (streamRequests > 1) {
+          return HttpResponse.json({ error: 'Refresh failed' }, { status: 500 });
+        }
+        return HttpResponse.json({
+          data: {
+            id: '42',
+            sender: 'GSENDER123',
+            recipient: 'GRECIPIENT456',
+            assetCode: 'USDC',
+            totalAmount: 1000,
+            durationSeconds: 86400,
+            startAt: 1700000000,
+            createdAt: 1699990000,
+            progress: {
+              status: 'active',
+              ratePerSecond: 0.01157,
+              elapsedSeconds: 43200,
+              vestedAmount: 500,
+              remainingAmount: 500,
+              percentComplete: 50,
+            },
+          },
+        });
+      }),
+    );
+
+    render(
+      <StreamDetailDrawer
+        streamId="42"
+        onClose={onClose}
+        onCancel={onCancel}
+        walletAddress="GSENDER123"
+        signAction={signAction}
+        onPause={onPause}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText('Cancel Stream')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Cancel Stream'));
+
+    await waitFor(() => expect(screen.getByText('Unable to refresh stream')).toBeInTheDocument());
+    expect(screen.getByText('Refresh failed')).toBeInTheDocument();
+    expect(screen.queryByText('Cancel Stream')).not.toBeInTheDocument();
+    expect(screen.queryByText('⏸ Pause')).not.toBeInTheDocument();
   });
 
   // ── Pause button visibility ───────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Stream } from "../types/stream";
-import { StreamEvent, getStream, getStreamHistory } from "../services/api";
+import { ApiError, StreamEvent, getStream, getStreamHistory } from "../services/api";
 import { CopyableAddress } from "./CopyableAddress";
 import { CliffMarker } from "./CliffMarker";
 
@@ -109,6 +109,7 @@ export function StreamDetailDrawer({
   const [history, setHistory] = useState<StreamEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<"missing" | "load" | "refresh" | null>(null);
   const [canceling, setCanceling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [pausing, setPausing] = useState(false);
@@ -119,27 +120,40 @@ export function StreamDetailDrawer({
   const abortRef = useRef<AbortController | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
-  const fetchData = useCallback(async (id: string) => {
+  const fetchData = useCallback(async (id: string, refresh = false) => {
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
     setLoading(true);
     setError(null);
-    setStream(null);
-    setHistory([]);
+    setErrorKind(null);
+    if (!refresh) {
+      setStream(null);
+      setHistory([]);
+    }
 
     try {
-      const [s, h] = await Promise.all([getStream(id), getStreamHistory(id)]);
+      const [s, h] = await Promise.all([
+        getStream(id, ctrl.signal),
+        getStreamHistory(id, ctrl.signal),
+      ]);
       if (ctrl.signal.aborted) return;
       setStream(s);
       setHistory(h);
     } catch (err) {
       if (ctrl.signal.aborted) return;
       const msg = err instanceof Error ? err.message : "Failed to load stream.";
-      setError(msg.toLowerCase().includes("not found")
-        ? `Stream "${id}" could not be found. It may have been deleted.`
-        : msg);
+      if (err instanceof ApiError && err.statusCode === 404) {
+        setError(`Stream "${id}" could not be found. It may have been deleted.`);
+        setErrorKind("missing");
+      } else if (refresh) {
+        setError(msg);
+        setErrorKind("refresh");
+      } else {
+        setError(msg);
+        setErrorKind("load");
+      }
     } finally {
       if (!ctrl.signal.aborted) setLoading(false);
     }
@@ -186,7 +200,7 @@ export function StreamDetailDrawer({
     setCancelError(null);
     try {
       await onCancel(stream.id);
-      await fetchData(stream.id);
+      await fetchData(stream.id, true);
     } catch (err) {
       setCancelError(err instanceof Error ? err.message : "Cancel failed.");
     } finally {
@@ -201,7 +215,7 @@ export function StreamDetailDrawer({
     try {
       await signAction({ action: "pause", streamId: stream.id, timestamp: Date.now() });
       await onPause(stream.id);
-      await fetchData(stream.id);
+      await fetchData(stream.id, true);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Pause failed.");
     } finally {
@@ -216,7 +230,7 @@ export function StreamDetailDrawer({
     try {
       await signAction({ action: "resume", streamId: stream.id, timestamp: Date.now() });
       await onResume(stream.id);
-      await fetchData(stream.id);
+      await fetchData(stream.id, true);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Resume failed.");
     } finally {
@@ -246,7 +260,10 @@ export function StreamDetailDrawer({
     !!signAction &&
     stream?.progress.status === "paused";
 
-  const hasActions = !!onCancel || showPause || showResume;
+  const hasActions =
+    errorKind !== "refresh" &&
+    !isFinalised &&
+    (!!onCancel || showPause || showResume);
 
   return (
     <div
@@ -283,11 +300,20 @@ export function StreamDetailDrawer({
             <div className="drawer-error" role="alert">
               <span className="drawer-error__icon" aria-hidden="true">⚠</span>
               <div>
+                {errorKind === "missing" && (
+                  <p className="drawer-error__title"><strong>Stream not found</strong></p>
+                )}
+                {errorKind === "refresh" && (
+                  <p className="drawer-error__title"><strong>Unable to refresh stream</strong></p>
+                )}
+                {errorKind === "load" && (
+                  <p className="drawer-error__title"><strong>Unable to load stream</strong></p>
+                )}
                 <p className="drawer-error__msg">{error}</p>
                 <button
                   type="button"
                   className="retry-btn"
-                  onClick={() => fetchData(streamId)}
+                  onClick={() => fetchData(streamId, errorKind === "refresh")}
                   style={{ marginTop: "0.5rem" }}
                 >
                   Retry
@@ -310,8 +336,15 @@ export function StreamDetailDrawer({
           )}
 
           {/* Content */}
-          {!loading && !error && stream && (
+          {!loading && (!error || errorKind === "refresh") && stream && (
             <>
+              {stream.progress.status === "canceled" && (
+                <div className="drawer-error" role="status" aria-label="Canceled stream">
+                  <span className="drawer-error__icon" aria-hidden="true">✕</span>
+                  <p><strong>This stream is canceled and cannot be modified.</strong></p>
+                </div>
+              )}
+
               {/* Metadata section */}
               <section className="drawer-section" aria-labelledby="drawer-meta-heading">
                 <h3 id="drawer-meta-heading" className="drawer-section-title">Metadata</h3>
