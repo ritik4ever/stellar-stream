@@ -756,6 +756,7 @@ export function CreateStreamForm({
                 onClick={() => void fetchConfig()}
                 disabled={isFetchingConfig}
                 data-testid="retry-asset-config"
+                aria-label="Retry loading asset configuration"
                 style={{ fontSize: "0.8rem", padding: "2px 8px" }}
               >
                 {isFetchingConfig ? "Retrying..." : "Retry Loading Assets"}
