@@ -194,4 +194,20 @@ describe("useStreamFilter", () => {
     });
     expect(result.current.filteredStreams).toHaveLength(3);
   });
+
+  it("ignores whitespace-only queries and matches mixed-case queries", () => {
+    const { result } = renderHook(() => useStreamFilter(mockStreams));
+
+    act(() => {
+      result.current.setFilter("q", "   ");
+    });
+    expect(result.current.filteredStreams).toEqual(mockStreams);
+
+    act(() => {
+      result.current.setFilter("q", "sEnDeR_2");
+    });
+    expect(result.current.filteredStreams.map((stream) => stream.id)).toEqual([
+      "stream_2",
+    ]);
+  });
 });
