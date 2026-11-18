@@ -276,10 +276,38 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
     return (
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Recipient Dashboard</h2>
-        <div className="activity-error">
+        <div className="activity-error" role="alert">
           <span style={{ fontSize: "2rem", display: "block", marginBottom: "0.5rem" }}>⚠️</span>
           <h3>Dashboard Load Failed</h3>
           <p className="muted">{error}</p>
+          <button
+            type="button"
+            className="btn-primary"
+            data-testid="recipient-retry-btn"
+            style={{
+              marginTop: "1rem",
+              padding: "0.5rem 1rem",
+              backgroundColor: "#3b82f6",
+              color: "white",
+              border: "none",
+              borderRadius: "6px",
+              cursor: "pointer",
+              minHeight: "44px",
+              minWidth: "80px",
+            }}
+            onClick={() => {
+              if (recipientAddress) {
+                setLoading(true);
+                setError(null);
+                listRecipientStreams(recipientAddress)
+                  .then((data) => setStreams(data))
+                  .catch((err) => setError(err instanceof Error ? err.message : "Failed to load streams."))
+                  .finally(() => setLoading(false));
+              }
+            }}
+          >
+            Retry
+          </button>
         </div>
       </div>
     );
