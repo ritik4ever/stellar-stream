@@ -89,7 +89,7 @@ export function FilterBar({ filters, onChange, setUrlFilters }: FilterBarProps) 
             style={{
               border: "1.5px solid #d1d5db",
               borderRadius: "8px",
-              minHeight: "38px",
+              minHeight: "44px",
               padding: "0.45rem 0.6rem",
               fontSize: "0.9rem",
               outline: "none"

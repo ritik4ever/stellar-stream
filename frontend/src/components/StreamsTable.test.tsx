@@ -96,6 +96,7 @@ describe("StreamsTable column visibility", () => {
     render(
       <StreamsTable
         {...defaultProps}
+        filters={{ status: "active" }}
         loadError="Failed loading streams. Check your connection and retry."
         onRetryLoad={onRetryLoad}
       />,
@@ -104,9 +105,38 @@ describe("StreamsTable column visibility", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Check your connection and retry.",
     );
+    expect(screen.getByLabelText("Status")).toHaveValue("active");
+    expect(screen.getByText("Vested: 20.00 USDC")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
     expect(onRetryLoad).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the stream amount and row actions available in labeled cells", () => {
+    const { container } = render(<StreamsTable {...defaultProps} />);
+
+    expect(screen.getByText("Vested: 20.00 USDC").closest("td")).toHaveAttribute(
+      "data-label",
+      "Progress",
+    );
+    expect(screen.getByRole("button", { name: "Cancel stream 1" }).closest("td"))
+      .toHaveAttribute("data-label", "Actions");
+    expect(screen.getByText("G_SENDER...").closest("td")).toHaveAttribute(
+      "data-label",
+      "Sender",
+    );
+    expect(
+      screen.getByTitle(
+        "G_SENDER123456789012345678901234567890123456789012345678901",
+      ),
+    ).toBeInTheDocument();
+    expect(container.querySelector(".copyable-address__copy")).toHaveStyle({
+      minHeight: "44px",
+    });
+    expect(container.querySelector(".mobile-select-all input")).toHaveAttribute(
+      "aria-label",
+      "Select all streams",
+    );
   });
 });
 
