@@ -69,6 +69,10 @@ import {
 } from "./services/webhook";
 import { emitListStreamsSignal } from "./services/listStreamsOutcome";
 import {
+  emitCancelStreamSignal,
+  CancelStreamOutcome,
+} from "./services/cancelStreamOutcome";
+import {
   archiveOldStreams,
   calculateProgress,
   compareStreams,
@@ -1778,6 +1782,11 @@ app.post(
   mutationLimiter,
   authMiddleware,
   async (req: Request, res: Response) => {
+    const startTime = Date.now();
+    const requestId =
+      (req.headers["x-request-id"] as string) ||
+      (req.headers["x-correlation-id"] as string);
+
     const parsedId = parseStreamId(req.params.id);
     if (!parsedId.ok) {
       sendValidationError(req, res, parsedId.issues);
@@ -1798,12 +1807,63 @@ app.post(
       return;
     }
 
+    const wasAlreadyCanceled = stream.canceledAt !== undefined;
+    const now = nowInSeconds();
+    const progressBefore = calculateProgress(stream, now);
+    const wasCompleted =
+      progressBefore.status === "completed" ||
+      (stream.claimedAmount !== undefined && stream.claimedAmount >= stream.totalAmount);
+    const initialClaimedAmount = stream.claimedAmount ?? 0;
+
     try {
       const updated = await cancelStream(parsedId.value);
       if (!updated) {
+        emitCancelStreamSignal({
+          outcome: "failure",
+          detail: "Failed to update stream during cancellation.",
+          isNormalEmpty: false,
+          isRacingClaim: false,
+          isRepeatedCancel: wasAlreadyCanceled,
+          latencyMs: Date.now() - startTime,
+          streamId: parsedId.value,
+          sender: stream.sender,
+          recipient: stream.recipient,
+          requestId,
+        });
         sendApiError(req, res, 500, "Failed to cancel stream.", { code: "INTERNAL_ERROR" });
         return;
       }
+
+      const isRacingClaim = (updated.claimedAmount ?? 0) > initialClaimedAmount;
+
+      let outcome: CancelStreamOutcome = "success";
+      let detail = "Stream cancelled successfully.";
+
+      if (wasAlreadyCanceled) {
+        outcome = "already_canceled";
+        detail = "Repeated cancel on an already canceled stream.";
+      } else if (isRacingClaim) {
+        outcome = "racing_claim";
+        detail = "Cancel succeeded with racing claim settlement.";
+      } else if (wasCompleted) {
+        outcome = "already_completed";
+        detail = "Cancel requested on an already completed stream.";
+      }
+
+      emitCancelStreamSignal({
+        outcome,
+        detail,
+        isNormalEmpty: wasAlreadyCanceled || wasCompleted,
+        isRacingClaim,
+        isRepeatedCancel: wasAlreadyCanceled,
+        latencyMs: Date.now() - startTime,
+        streamId: parsedId.value,
+        sender: stream.sender,
+        recipient: stream.recipient,
+        canceledAt: updated.canceledAt,
+        requestId,
+      });
+
       res.json({
         data: {
           ...updated,
@@ -1812,6 +1872,18 @@ app.post(
       });
     } catch (error: any) {
       logger.error({ err: error, streamId: parsedId.value }, "failed to cancel stream");
+      emitCancelStreamSignal({
+        outcome: "failure",
+        detail: error?.message || "Failed to cancel stream.",
+        isNormalEmpty: false,
+        isRacingClaim: false,
+        isRepeatedCancel: wasAlreadyCanceled,
+        latencyMs: Date.now() - startTime,
+        streamId: parsedId.value,
+        sender: stream.sender,
+        recipient: stream.recipient,
+        requestId,
+      });
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to cancel stream.",
