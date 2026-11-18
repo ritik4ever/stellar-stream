@@ -19,6 +19,8 @@ interface StreamMetricsChartProps {
   data: MetricsSnapshot[];
   loading?: boolean;
   error?: Error | null;
+  isStale?: boolean;
+  onRetry?: () => void;
 }
 
 /** Format a unix-ms timestamp as a short date label (e.g. "Jun 24"). */
@@ -29,7 +31,13 @@ function formatDate(timestamp: number): string {
   });
 }
 
-export function StreamMetricsChart({ data, loading = false, error = null }: StreamMetricsChartProps) {
+export function StreamMetricsChart({
+  data,
+  loading = false,
+  error = null,
+  isStale = false,
+  onRetry,
+}: StreamMetricsChartProps) {
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
   const [interactionMode, setInteractionMode] = useState<"pan" | "zoom">("pan");
   const [refAreaLeft, setRefAreaLeft] = useState<string | null>(null);
@@ -213,15 +221,25 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
   }
 
   if (error || statsError) {
+    const handleActionRetry = () => {
+      if (onRetry) {
+        onRetry();
+      }
+      if (statsError) {
+        handleRetry();
+      }
+    };
+
     return (
       <div className="chart-empty-state" role="alert">
         <div className="chart-empty-state__content">
           <span className="chart-empty-state__icon">⚠️</span>
           <h3>Failed to Load Chart</h3>
           <p>{error?.message || statsError?.message || "An error occurred while fetching metrics history."}</p>
-          {statsError && (
+          {(statsError || onRetry) && (
             <button
-              onClick={handleRetry}
+              onClick={handleActionRetry}
+              data-testid="metrics-retry-button"
               style={{
                 marginTop: "1rem",
                 padding: "0.5rem 1rem",
@@ -230,6 +248,8 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
                 border: "none",
                 borderRadius: "0.25rem",
                 cursor: "pointer",
+                minHeight: "44px",
+                minWidth: "80px",
               }}
             >
               Retry
@@ -267,6 +287,46 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
 
   return (
     <div className="chart-container" style={{ position: "relative" }}>
+      {isStale && (
+        <div
+          className="chart-stale-banner"
+          role="status"
+          data-testid="metrics-stale-banner"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            backgroundColor: "#fffbeb",
+            border: "1px solid #fef3c7",
+            borderRadius: "6px",
+            padding: "0.5rem 0.75rem",
+            color: "#92400e",
+            fontSize: "0.85rem",
+            marginBottom: "0.75rem",
+          }}
+        >
+          <span>Displaying cached metrics. Data may be stale.</span>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              data-testid="metrics-reconnect-button"
+              style={{
+                padding: "0.25rem 0.75rem",
+                backgroundColor: "#d97706",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: "pointer",
+                minHeight: "36px",
+                fontWeight: 500,
+              }}
+            >
+              Sync Latest
+            </button>
+          )}
+        </div>
+      )}
       <div
         className="chart-header"
         style={{
