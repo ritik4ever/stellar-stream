@@ -1035,6 +1035,12 @@ export function CreateStreamForm({
                 {feePreview.payload.recipient}
               </dd>
             </div>
+            <div className="fee-preview-item">
+              <dt id="review-duration-dt">Duration</dt>
+              <dd aria-labelledby="review-duration-dt">
+                {Math.round(feePreview.payload.durationSeconds / 60)} minutes
+              </dd>
+            </div>
             <div>
               <dt>Total amount</dt>
               <dd>
