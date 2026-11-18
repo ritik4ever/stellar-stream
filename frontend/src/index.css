@@ -1010,6 +1010,167 @@ td {
   font-size: 0.88rem;
 }
 
+.mobile-select-all {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .filter-bar input,
+  .filter-bar select,
+  .filter-bar .btn-ghost {
+    min-height: 44px;
+  }
+
+  .streams-table-scroll {
+    overflow-x: hidden;
+  }
+
+  .streams-table-scroll > table {
+    display: block;
+    width: 100%;
+  }
+
+  .streams-table-head {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .streams-table-head th:first-child {
+    display: none;
+  }
+
+  .mobile-select-all {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 44px;
+    cursor: pointer;
+  }
+
+  .mobile-select-all input {
+    width: 20px;
+    height: 20px;
+  }
+
+  .streams-table-scroll tbody {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .streams-table-scroll tbody > tr:not(.streams-table-spacer) {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+  }
+
+  .streams-table-scroll tbody > tr:not(.streams-table-spacer) > td {
+    display: grid;
+    grid-template-columns: minmax(5rem, 30%) minmax(0, 1fr);
+    align-items: start;
+    gap: 0.5rem;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    padding: 0.65rem 0.75rem;
+  }
+
+  .streams-table-scroll tbody > tr:not(.streams-table-spacer) > td::before {
+    content: attr(data-label);
+    color: #6b7280;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+
+  .streams-table-scroll tbody > tr > td[data-label="Select"] {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .stream-row-select {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    cursor: pointer;
+  }
+
+  .stream-row-select input {
+    width: 20px;
+    height: 20px;
+  }
+
+  .streams-table-scroll tbody > tr > td[data-label="Select"]::before,
+  .streams-table-scroll tbody > tr[data-timeline-row] > td::before {
+    content: none;
+  }
+
+  .streams-table-scroll tbody > tr > td[data-label="ID"] button {
+    max-width: 100%;
+    min-height: 44px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: left;
+  }
+
+  .streams-table-scroll tbody > tr[data-timeline-row] {
+    display: block;
+  }
+
+  .streams-table-scroll tbody > tr[data-timeline-row] > td {
+    display: block;
+    width: auto;
+  }
+
+  .streams-table-scroll tbody > tr.streams-table-spacer {
+    display: block;
+    border: 0;
+  }
+
+  .streams-table-scroll tbody > tr.streams-table-spacer > td {
+    display: block;
+  }
+
+  .streams-table-scroll .copyable-address {
+    display: flex !important;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .streams-table-scroll .truncate-address {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .streams-table-scroll .action-cell {
+    min-width: 0;
+  }
+
+  .streams-table-scroll .action-cell > button {
+    min-height: 44px;
+  }
+
+  .streams-table-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .streams-table-toolbar a.btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}
+
 /* ── Skeleton / Loading states ─────────────────────────── */
 
 @keyframes shimmer {

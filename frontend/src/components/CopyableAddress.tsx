@@ -30,6 +30,7 @@ export function CopyableAddress({
 
   return (
     <div
+      className="copyable-address"
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -42,11 +43,11 @@ export function CopyableAddress({
       <button
         type="button"
         onClick={handleCopy}
-        className="btn-ghost"
+        className="btn-ghost copyable-address__copy"
         style={{
           padding: "0.15rem 0.35rem",
           fontSize: "0.75rem",
-          minHeight: "unset",
+          minHeight: "44px",
           lineHeight: "1",
         }}
         title="Copy address"

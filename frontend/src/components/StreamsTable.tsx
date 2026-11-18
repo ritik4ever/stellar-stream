@@ -457,6 +457,16 @@ export function StreamsTable({
             gap: "0.75rem",
           }}
         >
+          <label className="mobile-select-all">
+            <input
+              type="checkbox"
+              aria-label="Select all streams"
+              checked={allSelectableSelected}
+              onChange={handleSelectAllToggle}
+              disabled={loading}
+            />
+            <span>Select all streams</span>
+          </label>
           <h2 style={{ margin: 0 }}>Live Streams</h2>
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
             <div className="column-toggle" ref={columnsRef} style={{ position: "relative" }}>
@@ -703,16 +713,18 @@ const StreamRow = memo(function StreamRow({
   return (
     <>
       <tr ref={measureRef} data-index={dataIndex}>
-        <td>
-          <input
-            type="checkbox"
-            aria-label={`Select stream ${stream.id}`}
-            checked={isSelected}
-            onChange={() => onCheckboxToggle(stream.id)}
-            disabled={isFinalised}
-          />
+        <td data-label="Select">
+          <label className="stream-row-select">
+            <input
+              type="checkbox"
+              aria-label={`Select stream ${stream.id}`}
+              checked={isSelected}
+              onChange={() => onCheckboxToggle(stream.id)}
+              disabled={isFinalised}
+            />
+          </label>
         </td>
-        <td>
+        <td data-label="ID">
           <button
             type="button"
             className="btn-ghost"
@@ -726,21 +738,21 @@ const StreamRow = memo(function StreamRow({
             {isExpanded ? "▲" : "▼"} {stream.id}
           </button>
         </td>
-        <td>
+        <td data-label="Sender">
           <CopyableAddress address={stream.sender} truncationMode="end" />
         </td>
-        <td>
+        <td data-label="Recipient">
           <CopyableAddress address={stream.recipient} truncationMode="end" />
         </td>
-        {show("assetCode") && <td>{stream.assetCode}</td>}
-        {show("duration") && <td>{formatDuration(stream.durationSeconds)}</td>}
+        {show("assetCode") && <td data-label="Asset">{stream.assetCode}</td>}
+        {show("duration") && <td data-label="Duration">{formatDuration(stream.durationSeconds)}</td>}
         {show("ratePerSecond") && (
-          <td>{stream.progress.ratePerSecond.toFixed(6)}</td>
+          <td data-label="Rate / sec">{stream.progress.ratePerSecond.toFixed(6)}</td>
         )}
         {show("pausedDuration") && (
-          <td>{stream.pausedDuration ?? 0}s</td>
+          <td data-label="Paused">{stream.pausedDuration ?? 0}s</td>
         )}
-        <td>
+        <td data-label="Progress">
           <div className="progress-copy">
             <strong>{stream.progress.percentComplete.toFixed(2)}%</strong>
             <span className="muted">
@@ -755,7 +767,7 @@ const StreamRow = memo(function StreamRow({
             />
           </div>
         </td>
-        <td>
+        <td data-label="Status">
           <div className="status-cell">
             <span className={statusClass(stream.progress.status)}>
               {stream.progress.status}
@@ -776,7 +788,7 @@ const StreamRow = memo(function StreamRow({
             )}
           </div>
         </td>
-        <td>
+        <td data-label="Actions">
           <div className="action-cell">
             {isScheduled && (
               <button
