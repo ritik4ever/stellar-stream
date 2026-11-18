@@ -65,6 +65,11 @@ vi.mock("../components/StreamsTable", async () => {
       loading,
       loadError,
       onRetryLoad,
+      onLoadMore,
+      hasMore,
+      loadingMore,
+      loadMoreError,
+      loadMoreStatus,
     }: {
       filters: ListStreamsFilters;
       onFiltersChange: (filters: ListStreamsFilters) => void;
@@ -72,6 +77,11 @@ vi.mock("../components/StreamsTable", async () => {
       loading: boolean;
       loadError?: string | null;
       onRetryLoad?: () => void;
+      onLoadMore?: () => void;
+      hasMore?: boolean;
+      loadingMore?: boolean;
+      loadMoreError?: string | null;
+      loadMoreStatus?: string | null;
     }) => (
       <div>
         <FilterBar filters={filters} onChange={onFiltersChange} />
@@ -83,6 +93,20 @@ vi.mock("../components/StreamsTable", async () => {
               Retry
             </button>
           </div>
+        )}
+        {onLoadMore && (
+          <>
+            <div role="status" aria-live="polite" aria-atomic="true">
+              {loadingMore
+                ? "Loading more streams..."
+                : loadMoreError ?? loadMoreStatus ?? ""}
+            </div>
+            {(hasMore || loadingMore) && (
+              <button type="button" onClick={onLoadMore} disabled={loadingMore}>
+                {loadMoreError ? "Retry loading streams" : "Load more streams"}
+              </button>
+            )}
+          </>
         )}
         {streams.map((stream) => (
           <div key={stream.id}>{stream.id}</div>
@@ -113,12 +137,17 @@ function makeStream(id: string): Stream {
   };
 }
 
-function result(ids: string[]): PaginatedResult<Stream> {
+function result(
+  ids: string[],
+  total = ids.length,
+  page = 1,
+  limit = 20,
+): PaginatedResult<Stream> {
   return {
     data: ids.map(makeStream),
-    total: ids.length,
-    page: 1,
-    limit: 20,
+    total,
+    page,
+    limit,
   };
 }
 
@@ -210,5 +239,39 @@ describe("Dashboard stream search recovery", () => {
     );
     expect(input).toHaveValue("safe query");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("announces and retries a failed next-page request, then stops at an empty last page", async () => {
+    const firstPage = result(
+      Array.from({ length: 20 }, (_, index) => `stream-${index + 1}`),
+      21,
+    );
+    let pageAttempts = 0;
+    listStreamsMock.mockImplementation((filters?: ListStreamsFilters) => {
+      if (filters?.limit === 1) return Promise.resolve(result([], 21, 1, 1));
+      if (filters?.page === 2) {
+        pageAttempts += 1;
+        if (pageAttempts === 1) return Promise.reject(new Error("request expired"));
+        return Promise.resolve(result([], 20, 2));
+      }
+      return Promise.resolve(firstPage);
+    });
+
+    renderDashboard();
+    const loadMore = await screen.findByRole("button", { name: "Load more streams" });
+    fireEvent.click(loadMore);
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Failed loading more streams",
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading streams" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("No more streams to load."),
+    );
+    expect(screen.queryByRole("button", { name: "Load more streams" })).not.toBeInTheDocument();
+    expect(screen.getByText("stream-1")).toBeInTheDocument();
+    expect(pageAttempts).toBe(2);
   });
 });

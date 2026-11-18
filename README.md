@@ -251,6 +251,8 @@ Search behavior: The q parameter performs case-insensitive partial matching acro
 
 Pagination behavior: If both page and limit are omitted, legacy mode applies and all matching rows are returned. If either page or limit is provided, pagination mode applies with defaults page=1 and limit=20.
 
+The dashboard stream table loads 20 streams at a time. More streams load on scroll or with the keyboard-operable “Load more streams” button. Loading, results, end-of-results, and page-load failures are announced politely; a failed page can be retried without losing the loaded rows.
+
 Validation: Invalid status, page, or limit returns 400.
 
 Response:

@@ -60,6 +60,8 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
   const { filters, filteredStreams, setFilter } = useStreamFilter(streams);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const [loadMoreStatus, setLoadMoreStatus] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
 
   const wsUrl = getWebSocketUrl();
@@ -118,6 +120,8 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
     const requestId = ++streamRequestId.current;
     setLoadingStreams(true);
     setStreamLoadError(null);
+    setLoadMoreError(null);
+    setLoadMoreStatus(null);
     try {
       const result = await listStreams({ ...currentFilters, limit: 20 });
       if (requestId !== streamRequestId.current) return;
@@ -154,14 +158,31 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
   async function loadMore(): Promise<void> {
     if (loadingMore || !hasMore) return;
     setLoadingMore(true);
+    setLoadMoreError(null);
+    setLoadMoreStatus("Loading more streams...");
     const requestId = streamRequestId.current;
     try {
       const nextPage = currentPage + 1;
       const result = await listStreams({ ...apiFilters, page: nextPage, limit: 20 });
       if (requestId !== streamRequestId.current) return;
       setStreams((prev) => [...prev, ...result.data]);
-      setHasMore(result.page * result.limit < result.total);
+      const hasAdditionalStreams =
+        result.data.length > 0 && result.page * result.limit < result.total;
+      setHasMore(hasAdditionalStreams);
       setCurrentPage(result.page);
+      setLoadMoreStatus(
+        result.data.length > 0
+          ? `Loaded ${result.data.length} more streams.`
+          : "No more streams to load.",
+      );
+    } catch (err) {
+      if (requestId !== streamRequestId.current) return;
+      const message =
+        err instanceof ApiError
+          ? `Failed loading more streams (${err.statusCode}). Check your connection and retry.`
+          : "Failed loading more streams. Check your connection and retry.";
+      setLoadMoreError(message);
+      setLoadMoreStatus(null);
     } finally {
       setLoadingMore(false);
     }
@@ -347,6 +368,8 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
           loading={loadingStreams}
           loadError={streamLoadError}
           onRetryLoad={retryStreamLoad}
+          loadMoreError={loadMoreError}
+          loadMoreStatus={loadMoreStatus}
           filters={tableFilters}
           totalStreamCount={totalUnfilteredCount}
           onCreateStream={scrollToCreateStream}
