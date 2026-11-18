@@ -72,6 +72,7 @@ import {
   emitCancelStreamSignal,
   CancelStreamOutcome,
 } from "./services/cancelStreamOutcome";
+import { emitCreateStreamSignal } from "./services/createStreamOutcome";
 import {
   archiveOldStreams,
   calculateProgress,
@@ -1706,6 +1707,11 @@ app.post(
   mutationLimiter,
   authMiddleware,
   async (req: Request, res: Response) => {
+    const startTime = Date.now();
+    const requestId =
+      (req.headers["x-request-id"] as string) ||
+      (req.headers["x-correlation-id"] as string);
+
     const currentAllowedAssets = getAllowedAssets();
     const parsedBody = createStreamPayloadWithAllowedAssetsSchema(
       currentAllowedAssets,
@@ -1723,6 +1729,19 @@ app.post(
     // Handle repeat POST after client timeout (idempotent replay)
     const cachedStream = getIdempotentStream(idempotencyKey);
     if (cachedStream) {
+      emitCreateStreamSignal({
+        outcome: "idempotent_replay",
+        detail: "Repeat POST after client timeout served from cache.",
+        isNormalEmpty: true,
+        isConcurrentConflict: false,
+        isIdempotentReplay: true,
+        latencyMs: Date.now() - startTime,
+        streamId: cachedStream.id,
+        sender: cachedStream.sender,
+        recipient: cachedStream.recipient,
+        idempotencyKey,
+        requestId,
+      });
       res.setHeader("X-Idempotent-Replay", "true");
       res.status(200).json({
         data: {
@@ -1735,6 +1754,18 @@ app.post(
 
     // Handle two identical requests arriving together (concurrency guard)
     if (isInFlightStreamCreation(idempotencyKey)) {
+      emitCreateStreamSignal({
+        outcome: "concurrent_conflict",
+        detail: "Two identical stream creation requests arrived together.",
+        isNormalEmpty: false,
+        isConcurrentConflict: true,
+        isIdempotentReplay: false,
+        latencyMs: Date.now() - startTime,
+        sender: parsedBody.data.sender,
+        recipient: parsedBody.data.recipient,
+        idempotencyKey,
+        requestId,
+      });
       sendApiError(
         req,
         res,
@@ -1750,6 +1781,19 @@ app.post(
     try {
       const stream = await createStream(parsedBody.data);
       storeIdempotentStream(idempotencyKey, stream);
+      emitCreateStreamSignal({
+        outcome: "success",
+        detail: "Stream created successfully.",
+        isNormalEmpty: false,
+        isConcurrentConflict: false,
+        isIdempotentReplay: false,
+        latencyMs: Date.now() - startTime,
+        streamId: stream.id,
+        sender: stream.sender,
+        recipient: stream.recipient,
+        idempotencyKey,
+        requestId,
+      });
       res.status(201).json({
         data: {
           ...stream,
@@ -1758,6 +1802,18 @@ app.post(
       });
     } catch (error: any) {
       logger.error({ err: error }, "failed to create stream");
+      emitCreateStreamSignal({
+        outcome: "failure",
+        detail: error?.message || "Failed to create stream.",
+        isNormalEmpty: false,
+        isConcurrentConflict: false,
+        isIdempotentReplay: false,
+        latencyMs: Date.now() - startTime,
+        sender: parsedBody.data.sender,
+        recipient: parsedBody.data.recipient,
+        idempotencyKey,
+        requestId,
+      });
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to create stream.",
