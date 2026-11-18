@@ -67,6 +67,7 @@ import {
   countDeadLetters,
   requeueDeadLetter,
 } from "./services/webhook";
+import { emitListStreamsSignal } from "./services/listStreamsOutcome";
 import {
   archiveOldStreams,
   calculateProgress,
@@ -676,6 +677,11 @@ app.post(["/api/admin/auth", "/api/auth/admin"], (req: Request, res: Response) =
 });
 
 app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  const requestId =
+    (req.headers["x-request-id"] as string) ||
+    (req.headers["x-correlation-id"] as string);
+
   const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
   if (!parsedQuery.success) {
     sendValidationError(req, res, parsedQuery.error.issues);
@@ -709,6 +715,17 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
       query.order ?? "desc",
     );
   } catch (_error) {
+    emitListStreamsSignal({
+      outcome: "failure",
+      detail: "Database read failure during pagination.",
+      isNormalEmpty: false,
+      latencyMs: Date.now() - startTime,
+      page: query.page ?? PAGINATION_DEFAULT_PAGE,
+      limit: query.limit ?? PAGINATION_DEFAULT_LIMIT,
+      total: 0,
+      returnedCount: 0,
+      requestId,
+    });
     sendApiError(req, res, 500, "Failed to retrieve streams.", {
       code: "INTERNAL_ERROR",
     });
@@ -788,6 +805,21 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
   } catch {
     // If cache fails, just proceed
   }
+
+  emitListStreamsSignal({
+    outcome: "success",
+    detail:
+      total === 0
+        ? "Normal empty stream list query."
+        : "Stream list query retrieved successfully.",
+    isNormalEmpty: total === 0,
+    latencyMs: Date.now() - startTime,
+    page,
+    limit,
+    total,
+    returnedCount: paginatedData.length,
+    requestId,
+  });
 
   res.set("Cache-Control", "max-age=5");
   res.json(result);
