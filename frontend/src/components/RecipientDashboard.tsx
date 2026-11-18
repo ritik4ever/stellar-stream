@@ -86,8 +86,9 @@ function ClaimButton({
 
   let label = `Claim ${claimableAmount} ${assetCode}`;
   if (!walletConnected) label = "Connect wallet";
-  if (isPending) label = "Claiming…";
-  if (isConfirmed) label = "Claimed ✓";
+  else if (claimableAmount <= 0) label = "Nothing to claim";
+  else if (isPending) label = "Claiming…";
+  else if (isConfirmed) label = "Claimed ✓";
 
   return (
     <button
@@ -377,6 +378,25 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
           </article>
         </section>
 
+        {activeStreams.length > 0 && totalClaimable === 0 && (
+          <div
+            className="recipient-no-claimable-notice"
+            role="status"
+            data-testid="no-claimable-notice"
+            style={{
+              padding: "0.75rem 1rem",
+              backgroundColor: "#f3f4f6",
+              border: "1px solid #e5e7eb",
+              borderRadius: "8px",
+              color: "#4b5563",
+              fontSize: "0.875rem",
+              marginBottom: "1rem",
+            }}
+          >
+            <strong>No claimable balance yet.</strong> Streams are active, but funds have not vested yet. Check back as vesting progresses.
+          </div>
+        )}
+
         {activeStreams.length > 0 && (
           <section className="recipient-dashboard-section">
             <div
@@ -394,7 +414,8 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
                 <button
                   type="button"
                   className="btn-claim"
-                  disabled={isPending || isBatchClaiming}
+                  disabled={isPending || isBatchClaiming || totalClaimable <= 0}
+                  aria-label={totalClaimable <= 0 ? "No claimable streams to claim" : "Claim all streams"}
                   onClick={async () => {
                     const inputs: BatchClaimInput[] = activeStreams.map((s) => ({
                       streamId: s.id,
