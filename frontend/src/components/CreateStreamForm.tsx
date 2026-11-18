@@ -1,4 +1,4 @@
-import { useState, useEffect, FormEvent } from "react";
+import { useState, useEffect, useCallback, FormEvent } from "react";
 import {
   estimateCreateStreamFee,
   getConfig,
@@ -228,29 +228,36 @@ export function CreateStreamForm({
   ]);
   const [splitErrors, setSplitErrors] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function fetchConfig() {
-      try {
-        const config = await getConfig();
-        setAllowedAssets(config.allowedAssets);
-        
-        // Handle defaulting logic
-        const currentAsset = values.assetCode;
-        const isCurrentValid = config.allowedAssets.includes(currentAsset);
-        
-        if (!isCurrentValid) {
-          if (config.allowedAssets.includes("USDC")) {
-            setValues(prev => ({ ...prev, assetCode: "USDC" }));
-          } else if (config.allowedAssets.length > 0) {
-            setValues(prev => ({ ...prev, assetCode: config.allowedAssets[0] }));
-          }
+  const [isFetchingConfig, setIsFetchingConfig] = useState(false);
+
+  const fetchConfig = useCallback(async () => {
+    setIsFetchingConfig(true);
+    try {
+      const config = await getConfig();
+      setAllowedAssets(config.allowedAssets);
+      setConfigFetchFailed(false);
+      
+      // Handle defaulting logic
+      const currentAsset = values.assetCode;
+      const isCurrentValid = config.allowedAssets.includes(currentAsset);
+      
+      if (!isCurrentValid) {
+        if (config.allowedAssets.includes("USDC")) {
+          setValues(prev => ({ ...prev, assetCode: "USDC" }));
+        } else if (config.allowedAssets.length > 0) {
+          setValues(prev => ({ ...prev, assetCode: config.allowedAssets[0] }));
         }
-      } catch (err) {
-        console.error("Failed to fetch config:", err);
-        setConfigFetchFailed(true);
       }
+    } catch (err) {
+      console.error("Failed to fetch config:", err);
+      setConfigFetchFailed(true);
+    } finally {
+      setIsFetchingConfig(false);
     }
-    fetchConfig();
+  }, [values.assetCode, setValues]);
+
+  useEffect(() => {
+    void fetchConfig();
   }, []); // Only fetch once on mount
   const [touched, setTouched] = useState<
     Partial<Record<keyof FormValues, boolean>>
@@ -735,12 +742,63 @@ export function CreateStreamForm({
         <div
           className={`field-group${errors.assetCode ? " field-group--error" : ""}`}
         >
-          <label htmlFor="stream-asset">
-            Asset Code
-            <span className="field-required" aria-hidden>
-              *
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <label htmlFor="stream-asset">
+              Asset Code
+              <span className="field-required" aria-hidden>
+                *
+              </span>
+            </label>
+            {configFetchFailed && (
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => void fetchConfig()}
+                disabled={isFetchingConfig}
+                data-testid="retry-asset-config"
+                style={{ fontSize: "0.8rem", padding: "2px 8px" }}
+              >
+                {isFetchingConfig ? "Retrying..." : "Retry Loading Assets"}
+              </button>
+            )}
+          </div>
+
+          {configFetchFailed && (
+            <span
+              className="asset-boundary-tag asset-boundary-tag--failed"
+              data-testid="boundary-metadata-failed"
+              style={{
+                display: "inline-block",
+                padding: "2px 8px",
+                marginBottom: "4px",
+                fontSize: "0.8rem",
+                borderRadius: "4px",
+                background: "rgba(220, 38, 38, 0.12)",
+                color: "#dc2626",
+              }}
+            >
+              Asset metadata failed to load
             </span>
-          </label>
+          )}
+
+          {!configFetchFailed && allowedAssets.length === 0 && (
+            <span
+              className="asset-boundary-tag asset-boundary-tag--empty"
+              data-testid="boundary-empty-assets"
+              style={{
+                display: "inline-block",
+                padding: "2px 8px",
+                marginBottom: "4px",
+                fontSize: "0.8rem",
+                borderRadius: "4px",
+                background: "rgba(234, 88, 12, 0.12)",
+                color: "#ea580c",
+              }}
+            >
+              No allowed assets configured
+            </span>
+          )}
+
           {!configFetchFailed && allowedAssets.length > 0 ? (
             <select
               id="stream-asset"
@@ -769,8 +827,12 @@ export function CreateStreamForm({
               aria-describedby={errors.assetCode ? "asset-error" : "asset-hint"}
               aria-invalid={!!errors.assetCode}
               required
+              style={{ minHeight: "44px" }}
             />
           )}
+          <span id="asset-hint" className="field-hint" role="status" aria-live="polite">
+            Selected asset: {values.assetCode || "None"}
+          </span>
           {errors.assetCode && (
             <span id="asset-error" className="field-error" role="alert">
               {errors.assetCode}
