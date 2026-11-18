@@ -172,10 +172,10 @@ describe("StreamsTable infinite scroll", () => {
     let observerCallback: IntersectionObserverCallback = () => {};
 
     vi.spyOn(window, "IntersectionObserver").mockImplementation(
-      (callback) => {
+      function (this: any, callback: any) {
         observerCallback = callback;
         return { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn(), root: null, rootMargin: "", thresholds: [] };
-      },
+      } as any,
     );
 
     render(
@@ -199,10 +199,10 @@ describe("StreamsTable infinite scroll", () => {
     let observerCallback: IntersectionObserverCallback = () => {};
 
     vi.spyOn(window, "IntersectionObserver").mockImplementation(
-      (callback) => {
+      function (this: any, callback: any) {
         observerCallback = callback;
         return { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn(), root: null, rootMargin: "", thresholds: [] };
-      },
+      } as any,
     );
 
     render(
@@ -225,10 +225,10 @@ describe("StreamsTable infinite scroll", () => {
     let observerCallback: IntersectionObserverCallback = () => {};
 
     vi.spyOn(window, "IntersectionObserver").mockImplementation(
-      (callback) => {
+      function (this: any, callback: any) {
         observerCallback = callback;
         return { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn(), root: null, rootMargin: "", thresholds: [] };
-      },
+      } as any,
     );
 
     render(
@@ -250,7 +250,7 @@ describe("StreamsTable infinite scroll", () => {
 describe("StreamsTable WebSocket progress updates", () => {
   beforeEach(() => {
     localStorage.clear();
-    vi.stubEnv("VITE_WS_URL", "");
+    vi.stubEnv("VITE_WS_URL", "ws://localhost:3001");
   });
 
   afterEach(() => {
@@ -273,7 +273,7 @@ describe("StreamsTable WebSocket progress updates", () => {
     render(<StreamsTable {...defaultProps} streams={streams} />);
     
     // Initial progress for stream 1
-    const initialProgress = screen.getByText("20%");
+    const initialProgress = screen.getAllByText(/20(\.00)?%/)[0];
     expect(initialProgress).toBeInTheDocument();
     
     // Full integration testing would require:

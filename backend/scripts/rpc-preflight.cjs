@@ -1,5 +1,26 @@
 const fs = require('node:fs');
-const { parse } = require('dotenv');
+let parse;
+try {
+  parse = require('dotenv').parse;
+} catch {
+  parse = function parseEnv(src) {
+    const res = {};
+    for (const line of src.toString().split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx !== -1) {
+        const key = trimmed.slice(0, eqIdx).trim();
+        let val = trimmed.slice(eqIdx + 1).trim();
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        res[key] = val;
+      }
+    }
+    return res;
+  };
+}
 
 const NETWORKS = {
   testnet: {
