@@ -781,11 +781,12 @@ export function SenderDashboard({
                   {selectedStreamForBulkCancel.size > 0 && (
                     <button
                       type="button"
-                      className="btn-primary"
+                      className="btn-primary bulk-cancel-btn"
                       style={{
                         backgroundColor: "#ef4444",
                         padding: "0.5rem 1rem",
                         fontSize: "0.875rem",
+                        minHeight: "44px",
                         marginLeft: "auto",
                       }}
                       onClick={handleBulkCancel}
