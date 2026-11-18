@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useFreighter, type FreighterState } from "../hooks/useFreighter";
 import { listStreams, pauseStream, resumeStream, cancelStream } from "../services/api";
@@ -22,16 +22,18 @@ export function SenderDashboard({ wallet: propWallet }: SenderDashboardPageProps
 
   const [streams, setStreams] = useState<Stream[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isRetryingLoad, setIsRetryingLoad] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
     stream: Stream;
     action: "pause" | "resume" | "cancel";
   } | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const senderAddress = wallet?.address ?? null;
 
-  useEffect(() => {
+  const loadStreams = useCallback(async (isRetry = false) => {
     if (!senderAddress) {
       setLoading(false);
       setStreams([]);
@@ -39,26 +41,30 @@ export function SenderDashboard({ wallet: propWallet }: SenderDashboardPageProps
       return;
     }
 
-    let active = true;
-    setLoading(true);
+    if (isRetry) {
+      setIsRetryingLoad(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
 
-    const load = async () => {
-      try {
-        const result = await listStreams({ sender: senderAddress });
-        if (active) setStreams(result.data);
-      } catch (err) {
-        if (active) {
-          setError(err instanceof Error ? err.message : "Failed to load streams.");
-        }
-      } finally {
-        if (active) setLoading(false);
-      }
-    };
+    try {
+      const result = await listStreams({ sender: senderAddress });
+      setStreams(result.data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load streams.");
+    } finally {
+      setLoading(false);
+      setIsRetryingLoad(false);
+    }
+  }, [senderAddress]);
 
-    load();
+  useEffect(() => {
+    let active = true;
+    loadStreams();
 
     const interval = setInterval(async () => {
+      if (!senderAddress || !active) return;
       try {
         const result = await listStreams({ sender: senderAddress });
         if (active) setStreams(result.data);
@@ -71,7 +77,7 @@ export function SenderDashboard({ wallet: propWallet }: SenderDashboardPageProps
       active = false;
       clearInterval(interval);
     };
-  }, [senderAddress]);
+  }, [senderAddress, loadStreams]);
 
   const summary = useMemo(() => {
     let totalStreaming = 0;
@@ -110,6 +116,7 @@ export function SenderDashboard({ wallet: propWallet }: SenderDashboardPageProps
 
   const runAction = async (stream: Stream, action: "pause" | "resume" | "cancel") => {
     setActionBusy(true);
+    setActionError(null);
     try {
       if (action === "pause") await pauseStream(stream.id);
       else if (action === "resume") await resumeStream(stream.id);
@@ -119,7 +126,7 @@ export function SenderDashboard({ wallet: propWallet }: SenderDashboardPageProps
       setStreams(result.data);
       setConfirmAction(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : `Failed to ${action} stream.`);
+      setActionError(err instanceof Error ? err.message : `Failed to ${action} stream.`);
     } finally {
       setActionBusy(false);
     }
@@ -140,7 +147,7 @@ export function SenderDashboard({ wallet: propWallet }: SenderDashboardPageProps
     );
   }
 
-  if (loading) {
+  if (loading && !isRetryingLoad) {
     return (
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">My Streams</h2>
@@ -161,12 +168,21 @@ export function SenderDashboard({ wallet: propWallet }: SenderDashboardPageProps
     return (
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">My Streams</h2>
-        <div className="activity-error">
-          <span style={{ fontSize: "2rem", display: "block", marginBottom: "0.5rem" }}>
+        <div className="activity-error" role="alert">
+          <span style={{ fontSize: "2rem", display: "block", marginBottom: "0.5rem" }} aria-hidden="true">
             ⚠️
           </span>
           <h3>Dashboard Load Failed</h3>
           <p className="muted">{error}</p>
+          <button
+            type="button"
+            className="retry-btn"
+            onClick={() => void loadStreams(true)}
+            disabled={loading || isRetryingLoad}
+            aria-busy={loading || isRetryingLoad}
+          >
+            {loading || isRetryingLoad ? "Retrying…" : "Retry"}
+          </button>
         </div>
       </div>
     );
@@ -342,11 +358,20 @@ export function SenderDashboard({ wallet: propWallet }: SenderDashboardPageProps
               Are you sure you want to {confirmAction.action} stream{" "}
               <strong>#{confirmAction.stream.id}</strong>?
             </p>
+            {actionError && (
+              <div className="api-error-box" role="alert" style={{ marginBottom: "1rem" }}>
+                <div className="api-error-box__title">Action Failed</div>
+                <div className="api-error-box__hint">{actionError}</div>
+              </div>
+            )}
             <div className="modal-actions">
               <button
                 type="button"
                 className="btn-ghost"
-                onClick={() => setConfirmAction(null)}
+                onClick={() => {
+                  setConfirmAction(null);
+                  setActionError(null);
+                }}
                 disabled={actionBusy}
               >
                 Close
@@ -356,8 +381,9 @@ export function SenderDashboard({ wallet: propWallet }: SenderDashboardPageProps
                 className="btn-primary"
                 onClick={() => runAction(confirmAction.stream, confirmAction.action)}
                 disabled={actionBusy}
+                aria-busy={actionBusy}
               >
-                {actionBusy ? "Working…" : "Confirm"}
+                {actionBusy ? "Working…" : actionError ? "Retry" : "Confirm"}
               </button>
             </div>
           </div>

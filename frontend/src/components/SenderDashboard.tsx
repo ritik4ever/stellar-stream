@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import {
   listStreams,
   cancelStream,
@@ -25,6 +25,15 @@ interface SenderDashboardProps {
   senderAddress: string | null;
   /** Callback to open the edit start time modal */
   onEditStartTime: (stream: Stream) => void;
+  /** Optional callback to trigger wallet reconnect */
+  onReconnect?: () => void;
+}
+
+export interface SenderDashboardActionError {
+  title: string;
+  message: string;
+  action: "cancel" | "bulk_cancel" | "refresh";
+  streamId?: string;
 }
 
 /**
@@ -118,18 +127,23 @@ function getEventLabel(
 export function SenderDashboard({
   senderAddress,
   onEditStartTime,
+  onReconnect,
 }: SenderDashboardProps) {
   const [streams, setStreams] = useState<Stream[]>([]);
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isRetryingLoad, setIsRetryingLoad] = useState(false);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<SenderDashboardActionError | null>(null);
+  const [cancelingStreamId, setCancelingStreamId] = useState<string | null>(null);
+  const [isBulkCanceling, setIsBulkCanceling] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [selectedStreamForBulkCancel, setSelectedStreamForBulkCancel] =
     useState<Set<string>>(new Set());
 
-  useEffect(() => {
+  const loadStreams = useCallback(async (isRetry = false) => {
     if (!senderAddress) {
       setLoading(false);
       setStreams([]);
@@ -138,37 +152,37 @@ export function SenderDashboard({
       return;
     }
 
-    let active = true;
-    setLoading(true);
+    if (isRetry) {
+      setIsRetryingLoad(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
 
-    const load = async () => {
-      try {
-        const result = await listStreams({ sender: senderAddress });
-        if (!active) return;
-        setStreams(result.data);
+    try {
+      const result = await listStreams({ sender: senderAddress });
+      setStreams(result.data);
 
-        // Fetch events in background
-        setEventsLoading(true);
-        const recentEvents = await getSenderEvents(senderAddress);
-        if (active) {
-          setEvents(recentEvents);
-        }
-      } catch (err) {
-        if (!active) return;
-        setError(err instanceof Error ? err.message : "Failed to load streams.");
-      } finally {
-        if (active) {
-          setLoading(false);
-          setEventsLoading(false);
-        }
-      }
-    };
+      // Fetch events in background
+      setEventsLoading(true);
+      const recentEvents = await getSenderEvents(senderAddress);
+      setEvents(recentEvents);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load streams.");
+    } finally {
+      setLoading(false);
+      setIsRetryingLoad(false);
+      setEventsLoading(false);
+    }
+  }, [senderAddress]);
 
-    load();
+  useEffect(() => {
+    let active = true;
+    loadStreams();
 
     // Poll every 5 seconds to keep metrics and progress fresh
     const interval = setInterval(async () => {
+      if (!senderAddress || !active) return;
       try {
         const result = await listStreams({ sender: senderAddress });
         if (active) {
@@ -189,7 +203,7 @@ export function SenderDashboard({
       active = false;
       clearInterval(interval);
     };
-  }, [senderAddress]);
+  }, [senderAddress, loadStreams]);
 
   // Compute analytics
   const stats = useMemo(() => {
@@ -242,6 +256,8 @@ export function SenderDashboard({
   /**
    * Handles the creation of a new stream.
    * Ensures the dashboard is refreshed before closing the form.
+   * If post-creation refresh fails with a recoverable error, closes form and presents
+   * retry without re-submitting creation to avoid duplicate transactions.
    *
    * @param payload - The data for the new stream.
    */
@@ -249,25 +265,42 @@ export function SenderDashboard({
     setCreateError(null);
     try {
       await createStream(payload);
-      const data = await listStreams({ sender: senderAddress! });
-      setStreams(data.data);
-
-      setShowCreateForm(false);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to create stream.";
       setCreateError(msg);
       throw err;
     }
+
+    // On-chain stream creation succeeded. Close form to prevent duplicate submissions.
+    setShowCreateForm(false);
+
+    try {
+      const data = await listStreams({ sender: senderAddress! });
+      setStreams(data.data);
+    } catch (refreshErr) {
+      setActionError({
+        title: "Refresh Pending",
+        message:
+          "Stream was created successfully, but refreshing the dashboard failed. Click Retry to view your updated streams.",
+        action: "refresh",
+      });
+    }
   };
 
   /**
    * Prompts for confirmation and cancels a stream if the user agrees.
+   * Prevents duplicate requests with in-flight guards and displays actionable retry on failure.
    *
    * @param id - The unique identifier of the stream to cancel.
    */
   const handleCancel = async (id: string) => {
+    if (cancelingStreamId !== null || isBulkCanceling) return;
+
     if (!window.confirm("Are you sure you want to cancel this stream?"))
       return;
+
+    setCancelingStreamId(id);
+    setActionError(null);
     try {
       await cancelStream(id);
       const result = await listStreams({ sender: senderAddress! });
@@ -277,17 +310,28 @@ export function SenderDashboard({
       const recentEvents = await getSenderEvents(senderAddress!);
       setEvents(recentEvents);
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to cancel stream");
+      const msg = err instanceof Error ? err.message : "Failed to cancel stream";
+      setActionError({
+        title: "Cancellation Failed",
+        message: msg,
+        action: "cancel",
+        streamId: id,
+      });
+    } finally {
+      setCancelingStreamId(null);
     }
   };
 
   /**
-   * Handles bulk cancellation of selected streams
+   * Handles bulk cancellation of selected streams.
+   * Preserves uncancelled / failed streams in the selection set for actionable retry.
+   * Prevents duplicate in-flight bulk requests.
    */
   const handleBulkCancel = async () => {
+    if (isBulkCanceling || cancelingStreamId !== null) return;
+
     const selectedIds = Array.from(selectedStreamForBulkCancel);
     if (selectedIds.length === 0) {
-      alert("Please select at least one stream to cancel");
       return;
     }
 
@@ -296,18 +340,43 @@ export function SenderDashboard({
     );
     if (!confirmed) return;
 
+    setIsBulkCanceling(true);
+    setActionError(null);
+
+    const failedIds: string[] = [];
+    let lastErrorMsg = "";
+
+    for (const id of selectedIds) {
+      try {
+        await cancelStream(id);
+      } catch (err) {
+        failedIds.push(id);
+        lastErrorMsg = err instanceof Error ? err.message : "Failed to cancel stream";
+      }
+    }
+
     try {
-      await Promise.all(selectedIds.map((id) => cancelStream(id)));
       const result = await listStreams({ sender: senderAddress! });
       setStreams(result.data);
-      setSelectedStreamForBulkCancel(new Set());
-
-      // Refresh events
       const recentEvents = await getSenderEvents(senderAddress!);
       setEvents(recentEvents);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to bulk cancel streams");
+    } catch (e) {
+      // Non-fatal list refresh error
     }
+
+    if (failedIds.length > 0) {
+      // Preserve safe input: retain failed IDs in selection for actionable retry
+      setSelectedStreamForBulkCancel(new Set(failedIds));
+      setActionError({
+        title: "Bulk Cancellation Failed",
+        message: `${failedIds.length} of ${selectedIds.length} stream(s) could not be canceled: ${lastErrorMsg}`,
+        action: "bulk_cancel",
+      });
+    } else {
+      setSelectedStreamForBulkCancel(new Set());
+    }
+
+    setIsBulkCanceling(false);
   };
 
   if (!senderAddress) {
@@ -320,12 +389,22 @@ export function SenderDashboard({
           <p className="muted" style={{ fontSize: "0.85rem" }}>
             Connect your wallet to see streams where you are the sender.
           </p>
+          {onReconnect && (
+            <button
+              type="button"
+              className="btn-primary"
+              style={{ marginTop: "1rem" }}
+              onClick={onReconnect}
+            >
+              Connect Wallet
+            </button>
+          )}
         </div>
       </div>
     );
   }
 
-  if (loading) {
+  if (loading && !isRetryingLoad) {
     return (
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Sender Dashboard</h2>
@@ -346,12 +425,33 @@ export function SenderDashboard({
     return (
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Sender Dashboard</h2>
-        <div className="activity-error">
-          <span style={{ fontSize: "2rem", display: "block", marginBottom: "0.5rem" }}>
+        <div className="activity-error" role="alert">
+          <span style={{ fontSize: "2rem", display: "block", marginBottom: "0.5rem" }} aria-hidden="true">
             ⚠️
           </span>
           <h3>Dashboard Load Failed</h3>
           <p className="muted">{error}</p>
+          <div style={{ display: "flex", gap: "0.75rem", justifyContent: "center", marginTop: "1rem" }}>
+            <button
+              type="button"
+              className="retry-btn"
+              onClick={() => void loadStreams(true)}
+              disabled={loading || isRetryingLoad}
+              aria-busy={loading || isRetryingLoad}
+            >
+              {loading || isRetryingLoad ? "Retrying…" : "Retry"}
+            </button>
+            {onReconnect && (
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={onReconnect}
+                style={{ padding: "0.4rem 1rem", fontSize: "0.85rem" }}
+              >
+                Reconnect Wallet
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -408,6 +508,59 @@ export function SenderDashboard({
         <p className="muted recipient-dashboard-subtitle">
           View your outgoing streams, analytics, and recent activity.
         </p>
+
+        {actionError && (
+          <div className="api-error-box" role="alert" style={{ marginTop: "1rem", marginBottom: "1rem" }}>
+            <div className="api-error-box__title">
+              <span className="api-error-box__icon" aria-hidden="true">⚠️</span>
+              {actionError.title}
+            </div>
+            <div className="api-error-box__hint">{actionError.message}</div>
+            <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              {actionError.action === "cancel" && actionError.streamId && (
+                <button
+                  type="button"
+                  className="retry-btn"
+                  onClick={() => void handleCancel(actionError.streamId!)}
+                  disabled={cancelingStreamId !== null || isBulkCanceling}
+                  aria-busy={cancelingStreamId === actionError.streamId}
+                >
+                  {cancelingStreamId === actionError.streamId ? "Retrying…" : "Retry Cancel"}
+                </button>
+              )}
+              {actionError.action === "bulk_cancel" && (
+                <button
+                  type="button"
+                  className="retry-btn"
+                  onClick={() => void handleBulkCancel()}
+                  disabled={isBulkCanceling || cancelingStreamId !== null}
+                  aria-busy={isBulkCanceling}
+                >
+                  {isBulkCanceling ? "Retrying…" : "Retry Bulk Cancel"}
+                </button>
+              )}
+              {actionError.action === "refresh" && (
+                <button
+                  type="button"
+                  className="retry-btn"
+                  onClick={() => void loadStreams(true)}
+                  disabled={loading || isRetryingLoad}
+                  aria-busy={loading || isRetryingLoad}
+                >
+                  {loading || isRetryingLoad ? "Retrying…" : "Retry Refresh"}
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn-ghost"
+                style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}
+                onClick={() => setActionError(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
 
         {showCreateForm ? (
           <section style={{ marginTop: "1.5rem" }}>
@@ -513,8 +666,12 @@ export function SenderDashboard({
                         marginLeft: "auto",
                       }}
                       onClick={handleBulkCancel}
+                      disabled={isBulkCanceling || cancelingStreamId !== null}
+                      aria-busy={isBulkCanceling}
                     >
-                      Bulk Cancel ({selectedStreamForBulkCancel.size})
+                      {isBulkCanceling
+                        ? `Canceling (${selectedStreamForBulkCancel.size})…`
+                        : `Bulk Cancel (${selectedStreamForBulkCancel.size})`}
                     </button>
                   )}
                 </div>
@@ -581,7 +738,7 @@ export function SenderDashboard({
                 <h3 className="recipient-dashboard-section-title">
                   Active & Scheduled
                 </h3>
-                <div className="table-wrap">
+                <div className="table-wrap" style={{ maxHeight: "480px", overflowY: "auto" }}>
                   <table>
                     <thead>
                       <tr>
@@ -593,6 +750,7 @@ export function SenderDashboard({
                               (stats.activeStreams.length +
                                 stats.scheduledStreams.length)
                             }
+                            disabled={isBulkCanceling}
                             onChange={(e) => {
                               if (e.target.checked) {
                                 const ids = new Set(
@@ -626,6 +784,7 @@ export function SenderDashboard({
                                 checked={selectedStreamForBulkCancel.has(
                                   stream.id
                                 )}
+                                disabled={isBulkCanceling}
                                 onChange={(e) => {
                                   const newSet = new Set(
                                     selectedStreamForBulkCancel
@@ -697,9 +856,16 @@ export function SenderDashboard({
                                     padding: "4px 8px",
                                   }}
                                   onClick={() => handleCancel(stream.id)}
-                                  disabled={stream.progress.status === "canceled"}
+                                  disabled={
+                                    stream.progress.status === "canceled" ||
+                                    cancelingStreamId !== null ||
+                                    isBulkCanceling
+                                  }
+                                  aria-busy={cancelingStreamId === stream.id}
                                 >
-                                  Cancel
+                                  {cancelingStreamId === stream.id
+                                    ? "Canceling…"
+                                    : "Cancel"}
                                 </button>
                               </div>
                             </td>
@@ -716,7 +882,7 @@ export function SenderDashboard({
             {stats.completedStreams.length > 0 && (
               <section className="recipient-dashboard-section">
                 <h3 className="recipient-dashboard-section-title">History</h3>
-                <div className="table-wrap">
+                <div className="table-wrap" style={{ maxHeight: "480px", overflowY: "auto" }}>
                   <table>
                     <thead>
                       <tr>

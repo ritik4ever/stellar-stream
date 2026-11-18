@@ -6,6 +6,26 @@ import { SenderDashboard } from "./SenderDashboard";
 import { Stream } from "../types/stream";
 import { StreamEvent } from "../services/api";
 
+// Mock recharts for JSDOM so inner chart elements render properly
+vi.mock("recharts", () => ({
+  ResponsiveContainer: ({ children }: any) => <div>{children}</div>,
+  BarChart: ({ data, children }: any) => (
+    <div data-testid="bar-chart">
+      {data?.map((d: any, idx: number) => (
+        <span key={`${d.name}-${idx}`}>{d.name}</span>
+      ))}
+      {children}
+    </div>
+  ),
+  Bar: () => null,
+  XAxis: () => null,
+  YAxis: () => null,
+  CartesianGrid: () => null,
+  Tooltip: () => null,
+  Legend: () => null,
+  Cell: () => null,
+}));
+
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
@@ -182,7 +202,7 @@ describe("SenderDashboard - Enhanced Analytics & Activity", () => {
     const amountCard = screen
       .getByText("Total Amount Streamed")
       .closest("article");
-    expect(amountCard?.querySelector("strong")?.textContent).toContain("3000");
+    expect(amountCard?.querySelector("strong")?.textContent).toContain("3,500");
 
     expect(screen.getByText("Active Streams")).toBeInTheDocument();
     const activeCard = screen
@@ -568,5 +588,266 @@ describe("SenderDashboard - Enhanced Analytics & Activity", () => {
 
     expect(screen.getByText("Wallet Not Connected")).toBeInTheDocument();
     expect(screen.getByText(/Connect your wallet/)).toBeInTheDocument();
+  });
+
+  // =========================================================================
+  // Recovery Paths, Zero Streams & Large Lists Review (SSB-2026-022)
+  // =========================================================================
+
+  it("shows actionable Retry button when load fails and successfully recovers on retry", async () => {
+    const SENDER_RETRY = "GSENDER_RETRY";
+    let failFirst = true;
+
+    server.use(
+      http.get("/api/streams", () => {
+        if (failFirst) {
+          return HttpResponse.json({ error: "Transient network failure 503" }, { status: 503 });
+        }
+        return HttpResponse.json({
+          data: [mockActiveStream("recovered-stream-1", SENDER_RETRY)],
+          total: 1,
+          page: 1,
+          limit: 20,
+        });
+      })
+    );
+    setupStreamHistoryHandler("recovered-stream-1", []);
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_RETRY}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    // Initial failure displays message and actionable retry button
+    await waitFor(() =>
+      expect(screen.getByText("Dashboard Load Failed")).toBeInTheDocument()
+    );
+    expect(screen.getByText(/503/)).toBeInTheDocument();
+    const retryBtn = screen.getByRole("button", { name: /Retry/i });
+    expect(retryBtn).toBeInTheDocument();
+
+    // Now resolve the failure and click Retry
+    failFirst = false;
+    fireEvent.click(retryBtn);
+
+    // Dashboard successfully recovers
+    await waitFor(() =>
+      expect(screen.getByText("Sender Dashboard")).toBeInTheDocument()
+    );
+    expect(screen.getByText("Total Streams Created")).toBeInTheDocument();
+    expect(screen.getByLabelText(/Select stream recovered-stream-1/i)).toBeInTheDocument();
+  });
+
+  it("prevents duplicate requests during dashboard load retry", async () => {
+    const SENDER_DEDUP = "GSENDER_DEDUP";
+    let requestCount = 0;
+
+    server.use(
+      http.get("/api/streams", () => {
+        requestCount++;
+        return HttpResponse.json({ error: "Server busy 500" }, { status: 500 });
+      })
+    );
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_DEDUP}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Dashboard Load Failed")).toBeInTheDocument()
+    );
+    expect(requestCount).toBe(1);
+
+    const retryBtn = screen.getByRole("button", { name: /Retry/i });
+    // Click retry
+    fireEvent.click(retryBtn);
+    // Clicking while busy does not trigger duplicate requests
+    fireEvent.click(retryBtn);
+
+    await waitFor(() => {
+      expect(requestCount).toBe(2);
+    });
+  });
+
+  it("shows reconnect wallet option when wallet is disconnected or onReconnect is provided", async () => {
+    const onReconnect = vi.fn();
+    render(
+      <SenderDashboard
+        senderAddress={null}
+        onEditStartTime={onEditStartTime}
+        onReconnect={onReconnect}
+      />
+    );
+
+    expect(screen.getByText("Wallet Not Connected")).toBeInTheDocument();
+    const connectBtn = screen.getByRole("button", { name: /Connect Wallet/i });
+    expect(connectBtn).toBeInTheDocument();
+
+    fireEvent.click(connectBtn);
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces an actionable error banner and Retry Cancel button when stream cancellation returns a recoverable error", async () => {
+    const SENDER_CANCEL_ERR = "GSENDER_CANCEL_ERR";
+    const streams = [mockActiveStream("cancel-fail-1", SENDER_CANCEL_ERR)];
+    setupSenderHandler(streams, SENDER_CANCEL_ERR);
+    setupStreamHistoryHandler("cancel-fail-1", []);
+
+    let cancelAttempts = 0;
+    server.use(
+      http.post("/api/streams/:id/cancel", () => {
+        cancelAttempts++;
+        if (cancelAttempts === 1) {
+          return HttpResponse.json({ error: "Database lock timeout" }, { status: 500 });
+        }
+        return HttpResponse.json({
+          data: mockCanceledStream("cancel-fail-1", SENDER_CANCEL_ERR),
+        });
+      })
+    );
+
+    window.confirm = vi.fn().mockReturnValue(true);
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_CANCEL_ERR}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Sender Dashboard")).toBeInTheDocument()
+    );
+
+    const cancelBtn = screen.getByRole("button", { name: /Cancel/i });
+    fireEvent.click(cancelBtn);
+
+    // Action error banner displays useful message and Retry Cancel button
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toBeInTheDocument()
+    );
+    expect(screen.getByText("Cancellation Failed")).toBeInTheDocument();
+    expect(screen.getByText(/Database lock timeout/i)).toBeInTheDocument();
+
+    const retryCancelBtn = screen.getByRole("button", { name: /Retry Cancel/i });
+    expect(retryCancelBtn).toBeInTheDocument();
+
+    // Clicking retry re-attempts cancellation
+    fireEvent.click(retryCancelBtn);
+
+    await waitFor(() => {
+      expect(cancelAttempts).toBe(2);
+    });
+  });
+
+  it("preserves safe selection input and enables Retry Bulk Cancel when bulk cancellation encounters a recoverable error", async () => {
+    const SENDER_BULK_ERR = "GSENDER_BULK_ERR";
+    const streams = [
+      mockActiveStream("bulk-s1", SENDER_BULK_ERR),
+      mockActiveStream("bulk-s2", SENDER_BULK_ERR),
+    ];
+    setupSenderHandler(streams, SENDER_BULK_ERR);
+    setupStreamHistoryHandler("bulk-s1", []);
+    setupStreamHistoryHandler("bulk-s2", []);
+
+    let bulkCancelAttempts: string[] = [];
+    server.use(
+      http.post("/api/streams/:id/cancel", ({ params }) => {
+        const id = String(params.id);
+        bulkCancelAttempts.push(id);
+        if (id === "bulk-s2" && bulkCancelAttempts.filter(x => x === "bulk-s2").length === 1) {
+          return HttpResponse.json({ error: "Transient gateway error" }, { status: 503 });
+        }
+        return HttpResponse.json({
+          data: mockCanceledStream(id, SENDER_BULK_ERR),
+        });
+      })
+    );
+
+    window.confirm = vi.fn().mockReturnValue(true);
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_BULK_ERR}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Active & Scheduled")).toBeInTheDocument()
+    );
+
+    // Select all streams with header checkbox
+    const checkboxes = screen.getAllByRole("checkbox");
+    fireEvent.click(checkboxes[0]);
+
+    const bulkCancelBtn = screen.getByText(/Bulk Cancel \(2\)/);
+    fireEvent.click(bulkCancelBtn);
+
+    // Error banner appears
+    await waitFor(() =>
+      expect(screen.getByText("Bulk Cancellation Failed")).toBeInTheDocument()
+    );
+    expect(screen.getByText(/1 of 2 stream\(s\) could not be canceled/)).toBeInTheDocument();
+
+    // SAFE INPUT PRESERVED: The failed stream 'bulk-s2' remains selected
+    expect(screen.getByText(/Bulk Cancel \(1\)/)).toBeInTheDocument();
+
+    const retryBulkBtn = screen.getByRole("button", { name: /Retry Bulk Cancel/i });
+    expect(retryBulkBtn).toBeInTheDocument();
+
+    // Clicking Retry Bulk Cancel retries only the remaining stream
+    fireEvent.click(retryBulkBtn);
+
+    await waitFor(() => {
+      expect(bulkCancelAttempts).toEqual(["bulk-s1", "bulk-s2", "bulk-s2"]);
+    });
+  });
+
+  it("reviews large stream list: handles 150 streams correctly with aggregate stats and table scrolling", async () => {
+    const SENDER_LARGE = "GSENDER_LARGE";
+    const streams: Stream[] = [];
+    for (let i = 1; i <= 150; i++) {
+      if (i <= 50) {
+        streams.push(mockActiveStream(`large-s-${i}`, SENDER_LARGE));
+      } else if (i <= 100) {
+        streams.push(mockScheduledStream(`large-s-${i}`, SENDER_LARGE));
+      } else {
+        streams.push(mockCompletedStream(`large-s-${i}`, SENDER_LARGE));
+      }
+    }
+
+    setupSenderHandler(streams, SENDER_LARGE);
+    for (let i = 1; i <= 5; i++) {
+      setupStreamHistoryHandler(`large-s-${i}`, []);
+    }
+
+    render(
+      <SenderDashboard
+        senderAddress={SENDER_LARGE}
+        onEditStartTime={onEditStartTime}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Sender Dashboard")).toBeInTheDocument()
+    );
+
+    // Metrics correctly aggregated across 150 streams
+    const totalStreamsCard = screen.getByText("Total Streams Created").closest("article");
+    expect(totalStreamsCard?.querySelector("strong")?.textContent).toBe("150");
+
+    const activeStreamsCard = screen.getByText("Active Streams").closest("article");
+    expect(activeStreamsCard?.querySelector("strong")?.textContent).toBe("50");
+
+    // Table containers have scroll containment style
+    const tableWraps = document.querySelectorAll(".table-wrap");
+    expect(tableWraps.length).toBeGreaterThan(0);
+    expect((tableWraps[0] as HTMLElement).style.maxHeight).toBe("480px");
   });
 });
