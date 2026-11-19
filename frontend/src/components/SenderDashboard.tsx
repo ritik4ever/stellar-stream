@@ -389,7 +389,7 @@ export function SenderDashboard({
    */
   const confirmCancelStream = async (overrideId?: string) => {
     const id = overrideId ?? cancelConfirmStreamId;
-    if (!id) return;
+    if (!id || cancelingStreamId !== null || isBulkCanceling) return;
     setCancelConfirmStreamId(null);
     setCancelingStreamId(id);
     setActionError(null);
@@ -403,9 +403,17 @@ export function SenderDashboard({
       announce(`Stream ${id} canceled successfully.`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to cancel stream";
+      const isTimeout =
+        msg.toLowerCase().includes("timeout") ||
+        msg.toLowerCase().includes("timed out") ||
+        msg.toLowerCase().includes("network error") ||
+        msg.toLowerCase().includes("abort");
+
       setActionError({
-        title: "Cancellation Failed",
-        message: msg,
+        title: isTimeout ? "Cancel Request Timed Out" : "Cancellation Failed",
+        message: isTimeout
+          ? `${msg}. Cancel submission timed out while contacting the network. Stream parameters have been preserved. You can safely retry without duplicate transactions.`
+          : msg,
         action: "cancel",
         streamId: id,
       });
@@ -617,17 +625,25 @@ export function SenderDashboard({
         </p>
 
         {actionError && (
-          <div className="api-error-box" role="alert" style={{ marginTop: "1rem", marginBottom: "1rem" }}>
-            <div className="api-error-box__title">
+          <div
+            className="api-error-box"
+            role="alert"
+            data-testid="cancel-error-box"
+            style={{ marginTop: "1rem", marginBottom: "1rem" }}
+          >
+            <div className="api-error-box__title" data-testid="cancel-error-title">
               <span className="api-error-box__icon" aria-hidden="true">⚠️</span>
               {actionError.title}
             </div>
-            <div className="api-error-box__hint">{actionError.message}</div>
+            <div className="api-error-box__hint" data-testid="cancel-error-message">
+              {actionError.message}
+            </div>
             <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
               {actionError.action === "cancel" && actionError.streamId && (
                 <button
                   type="button"
                   className="retry-btn"
+                  data-testid="cancel-retry-btn"
                   onClick={() => void confirmCancelStream(actionError.streamId)}
                   disabled={cancelingStreamId !== null || isBulkCanceling}
                   aria-busy={cancelingStreamId === actionError.streamId}
@@ -660,6 +676,7 @@ export function SenderDashboard({
               <button
                 type="button"
                 className="btn-ghost"
+                data-testid="cancel-dismiss-error-btn"
                 style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}
                 onClick={() => setActionError(null)}
               >
