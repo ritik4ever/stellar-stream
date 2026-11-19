@@ -16,7 +16,11 @@ export function computeFilteredEvents(
   const filtered = activeFilters.size === 0
     ? events
     : events.filter((e) => activeFilters.has(e.eventType));
-  return [...filtered].sort((a, b) => a.timestamp - b.timestamp);
+  return [...filtered].sort((a, b) => a.timestamp - b.timestamp || a.id - b.id);
+}
+
+export function isConcurrentEvent(event: StreamEvent, allEvents: StreamEvent[]): boolean {
+  return allEvents.some((other) => other.id !== event.id && other.timestamp === event.timestamp);
 }
 
 export function toggleFilter(prev: Set<EventType>, type: EventType): Set<EventType> {
@@ -180,7 +184,13 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
 
   if (loading) {
     return (
-      <div className="activity-feed">
+      <div
+        className="activity-feed"
+        role="status"
+        aria-label="Loading event history"
+        data-testid="timeline-loading-state"
+      >
+        <span className="sr-only">Loading event history…</span>
         {Array.from({ length: 3 }).map((_, idx) => (
           <div key={`activity-skeleton-${idx}`} className="skeleton skeleton-item" />
         ))}
@@ -243,30 +253,52 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
         onToggle={(type) => setActiveFilters((prev) => toggleFilter(prev, type))}
         onClear={() => setActiveFilters(clearFilters())}
       />
-      {filteredEvents.map((event) => (
-        <div key={event.id} className="activity-item">
-          <div className="activity-icon">{getEventIcon(event.eventType)}</div>
-          <div className="activity-content">
-            <p className="activity-title">{formatEventTitle(event.eventType)}</p>
-            <div className="activity-meta">
-              <span>{timeAgo(event.timestamp)}</span>
-              {isGlobalFeed && (
-                <a href={`#stream-${event.streamId}`} className="muted">
-                  Stream {event.streamId}
-                </a>
+      {filteredEvents.map((event) => {
+        const isConcurrent = isConcurrentEvent(event, filteredEvents);
+        return (
+          <div key={event.id} className="activity-item" data-testid={`activity-item-${event.id}`}>
+            <div className="activity-icon">{getEventIcon(event.eventType)}</div>
+            <div className="activity-content">
+              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.5rem" }}>
+                <p className="activity-title" style={{ margin: 0 }}>{formatEventTitle(event.eventType)}</p>
+                {isConcurrent && (
+                  <span
+                    className="concurrent-event-badge"
+                    data-testid="concurrent-event-badge"
+                    style={{
+                      display: "inline-block",
+                      fontSize: "0.75rem",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      backgroundColor: "#fef3c7",
+                      color: "#92400e",
+                      fontWeight: 600,
+                    }}
+                  >
+                    Simultaneous event
+                  </span>
+                )}
+              </div>
+              <div className="activity-meta">
+                <span>{timeAgo(event.timestamp)}</span>
+                {isGlobalFeed && (
+                  <a href={`#stream-${event.streamId}`} className="muted">
+                    Stream {event.streamId}
+                  </a>
+                )}
+              </div>
+              <div className="muted" style={{ marginTop: "0.35rem" }}>
+                {getEventDescription(event)}
+              </div>
+              {event.actor && (
+                <div style={{ marginTop: "0.5rem" }}>
+                  <CopyableAddress address={event.actor} truncationMode="end" />
+                </div>
               )}
             </div>
-            <div className="muted" style={{ marginTop: "0.35rem" }}>
-              {getEventDescription(event)}
-            </div>
-            {event.actor && (
-              <div style={{ marginTop: "0.5rem" }}>
-                <CopyableAddress address={event.actor} truncationMode="end" />
-              </div>
-            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
