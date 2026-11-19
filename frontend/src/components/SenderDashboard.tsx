@@ -893,6 +893,38 @@ export function SenderDashboard({
                     </span>
                   )}
                 </h3>
+                {selectedStreamForBulkCancel.size > 0 && (
+                  <div
+                    className="bulk-selection-scope-banner"
+                    role="status"
+                    data-testid="bulk-selection-scope-notice"
+                    style={{
+                      padding: "0.5rem 0.75rem",
+                      backgroundColor: "#eff6ff",
+                      border: "1px solid #bfdbfe",
+                      borderRadius: "6px",
+                      fontSize: "0.85rem",
+                      color: "#1e40af",
+                      marginBottom: "0.75rem",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <span>
+                      <strong>{selectedStreamForBulkCancel.size}</strong> stream(s) selected across this view.
+                    </span>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      style={{ padding: "2px 8px", fontSize: "0.8rem", height: "auto" }}
+                      onClick={() => setSelectedStreamForBulkCancel(new Set())}
+                      data-testid="bulk-clear-selection-btn"
+                    >
+                      Clear selection
+                    </button>
+                  </div>
+                )}
                 <div className="table-wrap" style={{ maxHeight: "480px", overflowY: "auto" }}>
                   <table aria-labelledby="active-scheduled-heading">
                     <thead>
