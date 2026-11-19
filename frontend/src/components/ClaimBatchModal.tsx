@@ -18,6 +18,11 @@ export function ClaimBatchModal({
   const isClaiming = state.phase === "claiming";
   const isComplete = state.phase === "complete";
 
+  const claimableEntries = Object.entries(state.claimableByStreamId || {});
+  const claimableStreamsCount = claimableEntries.filter(([, amount]) => amount > 0).length;
+  const isZeroClaimable = state.totalClaimable <= 0;
+  const isPartialClaim = !isZeroClaimable && claimableStreamsCount < streamCount && streamCount > 1;
+
   const summaryLabel = `Claim ${state.totalClaimable.toFixed(4)} ${state.assetLabel} across ${streamCount} stream${streamCount !== 1 ? "s" : ""}`;
 
   return (
@@ -44,7 +49,45 @@ export function ClaimBatchModal({
 
         {(state.phase === "ready" || isClaiming || isComplete) && (
           <>
-            <p>{summaryLabel}</p>
+            <p data-testid="claim-preview-summary">{summaryLabel}</p>
+
+            {state.phase === "ready" && isZeroClaimable && (
+              <div
+                className="boundary-notice boundary-notice--zero"
+                role="status"
+                data-testid="claim-preview-zero-notice"
+                style={{
+                  padding: "0.75rem 1rem",
+                  backgroundColor: "#fef3c7",
+                  border: "1px solid #fde68a",
+                  borderRadius: "8px",
+                  color: "#92400e",
+                  fontSize: "0.875rem",
+                  marginBottom: "0.75rem",
+                }}
+              >
+                <strong>No claimable balance.</strong> All selected streams currently have zero claimable balance. Funds will become available as streams vest.
+              </div>
+            )}
+
+            {state.phase === "ready" && isPartialClaim && (
+              <div
+                className="boundary-notice boundary-notice--partial"
+                role="status"
+                data-testid="claim-preview-partial-notice"
+                style={{
+                  padding: "0.75rem 1rem",
+                  backgroundColor: "#eff6ff",
+                  border: "1px solid #bfdbfe",
+                  borderRadius: "8px",
+                  color: "#1e40af",
+                  fontSize: "0.875rem",
+                  marginBottom: "0.75rem",
+                }}
+              >
+                <strong>Partial claim available.</strong> Only {claimableStreamsCount} of {streamCount} streams have vested funds ready to claim ({state.totalClaimable.toFixed(4)} {state.assetLabel}).
+              </div>
+            )}
 
             {isClaiming && (
               <p className="muted" role="status" aria-live="polite">
@@ -81,12 +124,30 @@ export function ClaimBatchModal({
         <div className="modal-actions">
           {state.phase === "ready" && (
             <>
-              <button type="button" className="btn-ghost" onClick={onClose}>
+              <button type="button" className="btn-ghost" onClick={onClose} data-testid="claim-cancel-btn">
                 Cancel
               </button>
-              <button type="button" className="btn-primary" onClick={onConfirm}>
-                Confirm claim
-              </button>
+              {isZeroClaimable ? (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled
+                  aria-disabled="true"
+                  data-testid="claim-confirm-btn"
+                  style={{ opacity: 0.6, cursor: "not-allowed" }}
+                >
+                  Nothing to claim
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={onConfirm}
+                  data-testid="claim-confirm-btn"
+                >
+                  {isPartialClaim ? "Confirm partial claim" : "Confirm claim"}
+                </button>
+              )}
             </>
           )}
           {isClaiming && (
