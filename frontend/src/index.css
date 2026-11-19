@@ -1729,6 +1729,36 @@ input {
   cursor: not-allowed;
 }
 
+.stats-recovery-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.stats-reconnect-btn {
+  min-height: 44px;
+  min-width: 80px;
+  padding: 0.5rem 1rem;
+  background-color: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 500;
+  font-size: 0.875rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.2s;
+}
+
+.stats-reconnect-btn:hover:not(:disabled) {
+  background-color: #1d4ed8;
+}
+
+.stats-reconnect-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* ── Stats Panel Boundary State Enhancements (SSB-2026-086) ─────────────── */
 
 .stats-boundary-banner {

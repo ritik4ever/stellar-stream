@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 
 export interface StatsPanelProps {
   total?: number;
@@ -7,7 +7,8 @@ export interface StatsPanelProps {
   vested?: number;
   loading?: boolean;
   error?: Error | null;
-  onRetry?: () => void;
+  onRetry?: () => void | Promise<void>;
+  onReconnect?: () => void | Promise<void>;
   streamsLoading?: boolean;
   className?: string;
   accountId?: string;
@@ -28,12 +29,15 @@ export function StatsPanel({
   loading = false,
   error = null,
   onRetry,
+  onReconnect,
   streamsLoading = false,
   className = "",
   accountId,
   onPrimaryAction,
   primaryActionLabel,
 }: StatsPanelProps) {
+  const [isRetrying, setIsRetrying] = useState(false);
+
   const safeTotal = Number.isFinite(total) ? Math.max(0, total) : 0;
   const safeActive = Number.isFinite(active) ? Math.max(0, active) : 0;
   const safeCompleted = Number.isFinite(completed) ? Math.max(0, completed) : 0;
@@ -58,6 +62,28 @@ export function StatsPanel({
     maximumFractionDigits: 2,
   });
 
+  const handleRetry = async () => {
+    if (loading || isRetrying || !onRetry) return;
+    setIsRetrying(true);
+    try {
+      await onRetry();
+    } finally {
+      setIsRetrying(false);
+    }
+  };
+
+  const handleReconnect = async () => {
+    if (loading || isRetrying) return;
+    const action = onReconnect || onRetry;
+    if (!action) return;
+    setIsRetrying(true);
+    try {
+      await action();
+    } finally {
+      setIsRetrying(false);
+    }
+  };
+
   return (
     <section
       className={`stats-panel-container ${className}`}
@@ -75,7 +101,7 @@ export function StatsPanel({
           : "ready"
       }
     >
-      {/* Account ID display if provided, formatted for narrow screen responsiveness */}
+      {/* Account ID display if provided, preserved safely across failure and recovery */}
       {accountId && (
         <div className="stats-account-row" data-testid="stats-account-row">
           <span className="stats-account-label">Account:</span>
@@ -126,7 +152,7 @@ export function StatsPanel({
         </div>
       )}
 
-      {/* Failure State with Retry Action */}
+      {/* Failure State with Actionable Recovery Path */}
       {error && (
         <div
           className="stats-error-banner"
@@ -168,21 +194,36 @@ export function StatsPanel({
               )}
             </div>
           </div>
-          {onRetry && (
-            <button
-              type="button"
-              className="stats-retry-btn"
-              onClick={onRetry}
-              disabled={loading}
-              data-testid="stats-retry-button"
-            >
-              {loading
-                ? "Retrying…"
-                : streamsLoading
-                ? "Retry Loading Stats"
-                : "Retry"}
-            </button>
-          )}
+          <div className="stats-recovery-actions" data-testid="stats-recovery-actions">
+            {onReconnect && (
+              <button
+                type="button"
+                className="stats-reconnect-btn"
+                onClick={handleReconnect}
+                disabled={loading || isRetrying}
+                aria-busy={loading || isRetrying}
+                data-testid="stats-reconnect-button"
+              >
+                {loading || isRetrying ? "Reconnecting…" : "Reconnect"}
+              </button>
+            )}
+            {onRetry && (
+              <button
+                type="button"
+                className="stats-retry-btn"
+                onClick={handleRetry}
+                disabled={loading || isRetrying}
+                aria-busy={loading || isRetrying}
+                data-testid="stats-retry-button"
+              >
+                {loading || isRetrying
+                  ? "Retrying…"
+                  : streamsLoading
+                  ? "Retry Loading Stats"
+                  : "Retry"}
+              </button>
+            )}
+          </div>
         </div>
       )}
 
