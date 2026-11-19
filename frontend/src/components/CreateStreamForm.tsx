@@ -742,7 +742,7 @@ export function CreateStreamForm({
         <div
           className={`field-group${errors.assetCode ? " field-group--error" : ""}`}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.35rem" }}>
             <label htmlFor="stream-asset">
               Asset Code
               <span className="field-required" aria-hidden>
@@ -757,7 +757,7 @@ export function CreateStreamForm({
                 disabled={isFetchingConfig}
                 data-testid="retry-asset-config"
                 aria-label="Retry loading asset configuration"
-                style={{ fontSize: "0.8rem", padding: "2px 8px" }}
+                style={{ fontSize: "0.8rem", padding: "4px 8px", minHeight: "36px" }}
               >
                 {isFetchingConfig ? "Retrying..." : "Retry Loading Assets"}
               </button>
@@ -776,6 +776,8 @@ export function CreateStreamForm({
                 borderRadius: "4px",
                 background: "rgba(220, 38, 38, 0.12)",
                 color: "#dc2626",
+                wordBreak: "break-word",
+                maxWidth: "100%",
               }}
             >
               Asset metadata failed to load
@@ -794,6 +796,8 @@ export function CreateStreamForm({
                 borderRadius: "4px",
                 background: "rgba(234, 88, 12, 0.12)",
                 color: "#ea580c",
+                wordBreak: "break-word",
+                maxWidth: "100%",
               }}
             >
               No allowed assets configured
@@ -809,7 +813,7 @@ export function CreateStreamForm({
               aria-describedby={errors.assetCode ? "asset-error" : "asset-hint"}
               aria-invalid={!!errors.assetCode}
               required
-              style={{ minHeight: "44px" }}
+              style={{ minHeight: "44px", width: "100%", maxWidth: "100%", boxSizing: "border-box" }}
             >
               {allowedAssets.map((a) => (
                 <option key={a} value={a}>
@@ -828,10 +832,16 @@ export function CreateStreamForm({
               aria-describedby={errors.assetCode ? "asset-error" : "asset-hint"}
               aria-invalid={!!errors.assetCode}
               required
-              style={{ minHeight: "44px" }}
+              style={{ minHeight: "44px", width: "100%", maxWidth: "100%", boxSizing: "border-box" }}
             />
           )}
-          <span id="asset-hint" className="field-hint" role="status" aria-live="polite">
+          <span
+            id="asset-hint"
+            className="field-hint"
+            role="status"
+            aria-live="polite"
+            style={{ wordBreak: "break-all", overflowWrap: "anywhere", display: "block" }}
+          >
             Selected asset: {values.assetCode || "None"}
           </span>
           {errors.assetCode && (
