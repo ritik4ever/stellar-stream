@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getStreamHistory, listAllEvents, StreamEvent } from "../services/api";
 
 interface StreamTimelineProps {
@@ -162,7 +162,11 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
     [events, activeFilters],
   );
 
+  const inFlightRef = useRef(false);
+
   const loadHistory = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
       setLoading(true);
       setError(null);
@@ -175,6 +179,7 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
       setError(err instanceof Error ? err.message : "Failed to load stream history.");
     } finally {
       setLoading(false);
+      inFlightRef.current = false;
     }
   }, [streamId]);
 
@@ -200,12 +205,30 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
 
   if (error) {
     return (
-      <div className="activity-error">
-        <h3>Unable to load activity</h3>
-        <p>{error}</p>
-        <button type="button" className="retry-btn" onClick={loadHistory}>
-          Try again
-        </button>
+      <div className="activity-error" role="alert" data-testid="timeline-error-state">
+        <h3 data-testid="timeline-error-title">Unable to load activity</h3>
+        <p data-testid="timeline-error-message">{error}</p>
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.75rem", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="retry-btn"
+            data-testid="timeline-retry-btn"
+            onClick={loadHistory}
+            disabled={loading}
+          >
+            {loading ? "Retrying…" : "Try again"}
+          </button>
+          {activeFilters.size > 0 && (
+            <button
+              type="button"
+              className="btn-ghost"
+              data-testid="timeline-reset-filter-btn"
+              onClick={() => setActiveFilters(clearFilters())}
+            >
+              Reset filters
+            </button>
+          )}
+        </div>
       </div>
     );
   }
