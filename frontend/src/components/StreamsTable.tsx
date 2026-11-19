@@ -464,12 +464,23 @@ export function StreamsTable({
           <label className="mobile-select-all">
             <input
               type="checkbox"
+              ref={(el) => {
+                if (el) {
+                  el.indeterminate =
+                    selectedStreamIds.size > 0 && !allSelectableSelected;
+                }
+              }}
               aria-label={
                 selectableStreams.length === 0
                   ? "No selectable streams on this page"
                   : allSelectableSelected
                   ? "Deselect all streams"
                   : "Select all streams"
+              }
+              aria-checked={
+                selectedStreamIds.size > 0 && !allSelectableSelected
+                  ? "mixed"
+                  : allSelectableSelected
               }
               checked={allSelectableSelected}
               onChange={handleSelectAllToggle}
@@ -562,12 +573,23 @@ export function StreamsTable({
                 <th>
                   <input
                     type="checkbox"
+                    ref={(el) => {
+                      if (el) {
+                        el.indeterminate =
+                          selectedStreamIds.size > 0 && !allSelectableSelected;
+                      }
+                    }}
                     aria-label={
                       selectableStreams.length === 0
                         ? "No selectable streams on this page"
                         : allSelectableSelected
                         ? "Deselect all streams"
                         : "Select all streams"
+                    }
+                    aria-checked={
+                      selectedStreamIds.size > 0 && !allSelectableSelected
+                        ? "mixed"
+                        : allSelectableSelected
                     }
                     checked={allSelectableSelected}
                     onChange={handleSelectAllToggle}
@@ -662,6 +684,17 @@ export function StreamsTable({
           buttonRef={cancelButtonRef}
         />
       )}
+      <div
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="bulk-selection-announcement"
+      >
+        {selectedStreamIds.size > 0
+          ? `${selectedStreamIds.size} stream${selectedStreamIds.size !== 1 ? "s" : ""} selected across view`
+          : ""}
+      </div>
     </>
   );
 }
@@ -684,9 +717,20 @@ function BulkActionBar({
   buttonRef,        // ← add this line to the destructured props
 }: BulkActionBarProps) {
   return (
-    <div className="bulk-action-bar" data-testid="bulk-action-bar">
+    <div
+      className="bulk-action-bar"
+      data-testid="bulk-action-bar"
+      role="region"
+      aria-label="Bulk actions"
+    >
       <div className="bulk-action-bar__content">
-        <span className="bulk-action-bar__count" data-testid="bulk-selection-count">
+        <span
+          className="bulk-action-bar__count"
+          data-testid="bulk-selection-count"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
           {selectedCount} stream{selectedCount !== 1 ? "s" : ""} selected
           {isFiltered && (
             <span
@@ -704,6 +748,12 @@ function BulkActionBar({
           onClick={onCancel}
           disabled={isCanceling}
           data-testid="bulk-cancel-action-btn"
+          aria-busy={isCanceling}
+          aria-label={
+            isCanceling
+              ? `Canceling ${progress.current} of ${progress.total} streams`
+              : `Cancel ${selectedCount} Stream${selectedCount !== 1 ? "s" : ""}`
+          }
         >
           {isCanceling
             ? `Canceling ${progress.current}/${progress.total}...`
@@ -766,6 +816,7 @@ const StreamRow = memo(function StreamRow({
             <input
               type="checkbox"
               aria-label={`Select stream ${stream.id}`}
+              aria-checked={isSelected}
               checked={isSelected}
               onChange={() => onCheckboxToggle(stream.id)}
               disabled={isFinalised}
