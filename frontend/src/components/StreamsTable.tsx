@@ -464,12 +464,25 @@ export function StreamsTable({
           <label className="mobile-select-all">
             <input
               type="checkbox"
-              aria-label="Select all streams"
+              aria-label={
+                selectableStreams.length === 0
+                  ? "No selectable streams on this page"
+                  : allSelectableSelected
+                  ? "Deselect all streams"
+                  : "Select all streams"
+              }
               checked={allSelectableSelected}
               onChange={handleSelectAllToggle}
-              disabled={loading}
+              disabled={loading || selectableStreams.length === 0}
+              data-testid="streams-table-select-all"
             />
-            <span>Select all streams</span>
+            <span>
+              {selectableStreams.length === 0
+                ? "No selectable streams"
+                : allSelectableSelected
+                ? `All ${selectableStreams.length} selected`
+                : "Select all streams"}
+            </span>
           </label>
           <h2 style={{ margin: 0 }}>Live Streams</h2>
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -549,10 +562,17 @@ export function StreamsTable({
                 <th>
                   <input
                     type="checkbox"
-                    aria-label="Select all streams"
+                    aria-label={
+                      selectableStreams.length === 0
+                        ? "No selectable streams on this page"
+                        : allSelectableSelected
+                        ? "Deselect all streams"
+                        : "Select all streams"
+                    }
                     checked={allSelectableSelected}
                     onChange={handleSelectAllToggle}
-                    disabled={loading}
+                    disabled={loading || selectableStreams.length === 0}
+                    data-testid="streams-table-header-select-all"
                   />
                 </th>
                 <th>ID</th>
@@ -635,6 +655,7 @@ export function StreamsTable({
       {selectedStreamIds.size > 0 && (
         <BulkActionBar
           selectedCount={selectedStreamIds.size}
+          isFiltered={Boolean(filters.status || filters.asset || filters.search || filters.sender || filters.recipient)}
           onCancel={handleBulkCancel}
           isCanceling={isBulkCanceling}
           progress={bulkCancelProgress}
@@ -647,6 +668,7 @@ export function StreamsTable({
 
 interface BulkActionBarProps {
   selectedCount: number;
+  isFiltered?: boolean;
   onCancel: () => void;
   isCanceling: boolean;
   progress: { current: number; total: number };
@@ -655,22 +677,33 @@ interface BulkActionBarProps {
 
 function BulkActionBar({
   selectedCount,
+  isFiltered = false,
   onCancel,
   isCanceling,
   progress,
   buttonRef,        // ← add this line to the destructured props
 }: BulkActionBarProps) {
   return (
-    <div className="bulk-action-bar">
+    <div className="bulk-action-bar" data-testid="bulk-action-bar">
       <div className="bulk-action-bar__content">
-        <span className="bulk-action-bar__count">
+        <span className="bulk-action-bar__count" data-testid="bulk-selection-count">
           {selectedCount} stream{selectedCount !== 1 ? "s" : ""} selected
+          {isFiltered && (
+            <span
+              className="badge"
+              data-testid="bulk-filtered-badge"
+              style={{ marginLeft: "0.5rem", fontSize: "0.75rem" }}
+            >
+              Filtered
+            </span>
+          )}
         </span>
         <button
           ref={buttonRef}
           className="bulk-action-bar__button"
           onClick={onCancel}
           disabled={isCanceling}
+          data-testid="bulk-cancel-action-btn"
         >
           {isCanceling
             ? `Canceling ${progress.current}/${progress.total}...`
