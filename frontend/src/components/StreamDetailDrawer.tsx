@@ -165,6 +165,17 @@ export function StreamDetailDrawer({
     return () => { abortRef.current?.abort(); };
   }, [streamId, fetchData]);
 
+  // Pause updates while document is hidden, refresh when tab becomes visible
+  useEffect(() => {
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        fetchData(streamId, true);
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [streamId, fetchData]);
+
   // Auto-focus close button when drawer opens
   useEffect(() => {
     closeButtonRef.current?.focus();
@@ -419,7 +430,7 @@ export function StreamDetailDrawer({
               <section className="drawer-section" aria-labelledby="drawer-progress-heading">
                 <h3 id="drawer-progress-heading" className="drawer-section-title">Progress</h3>
                 <div className="drawer-progress-header">
-                  <span className="drawer-progress-pct">{stream.progress.percentComplete}%</span>
+                  <span className="drawer-progress-pct">{Math.min(100, Math.max(0, stream.progress.percentComplete))}%</span>
                   <span className="muted">
                     {stream.progress.vestedAmount} / {stream.totalAmount} {stream.assetCode} vested
                   </span>
@@ -436,26 +447,39 @@ export function StreamDetailDrawer({
                   <div
                     className="progress-bar"
                     role="progressbar"
-                    aria-valuenow={stream.progress.percentComplete}
+                    aria-valuenow={Math.min(100, Math.max(0, stream.progress.percentComplete))}
                     aria-valuemin={0}
                     aria-valuemax={100}
                     aria-label="Stream progress"
+                    aria-valuetext={`${stream.progress.percentComplete}% complete, ${stream.progress.vestedAmount} ${stream.assetCode} vested, ${Math.max(0, stream.progress.remainingAmount)} ${stream.assetCode} remaining`}
                   >
-                    <div style={{ width: `${Math.min(stream.progress.percentComplete, 100)}%` }} />
+                    <div style={{ width: `${Math.min(100, Math.max(0, stream.progress.percentComplete))}%` }} />
                   </div>
                 </div>
+
+                {/* A11Y: Polite status announcement for screen readers */}
+                <div
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  className="sr-only"
+                  data-testid="stream-progress-live-announcer"
+                >
+                  {`Stream status: ${stream.progress.status}. ${stream.progress.percentComplete}% vested.`}
+                </div>
+
                 <dl className="drawer-dl" style={{ marginTop: "0.75rem" }}>
                   <div className="drawer-dl__row">
-                    <dt>Rate</dt>
-                    <dd>{stream.progress.ratePerSecond} {stream.assetCode}/s</dd>
+                    <dt id="label-stream-rate">Rate</dt>
+                    <dd aria-labelledby="label-stream-rate">{stream.progress.ratePerSecond} {stream.assetCode}/s</dd>
                   </div>
                   <div className="drawer-dl__row">
-                    <dt>Elapsed</dt>
-                    <dd>{stream.progress.elapsedSeconds}s</dd>
+                    <dt id="label-stream-elapsed">Elapsed</dt>
+                    <dd aria-labelledby="label-stream-elapsed">{stream.progress.elapsedSeconds}s</dd>
                   </div>
                   <div className="drawer-dl__row">
-                    <dt>Remaining</dt>
-                    <dd>{stream.progress.remainingAmount} {stream.assetCode}</dd>
+                    <dt id="label-stream-remaining">Remaining</dt>
+                    <dd aria-labelledby="label-stream-remaining">{Math.max(0, stream.progress.remainingAmount)} {stream.assetCode}</dd>
                   </div>
                 </dl>
               </section>
