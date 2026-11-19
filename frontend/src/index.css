@@ -612,6 +612,210 @@ td {
   margin-top: 0.25rem;
 }
 
+/* ── Stream detail drawer ───────────────────────────────── */
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: flex-end;
+  overflow: hidden;
+  background: var(--modal-backdrop);
+  backdrop-filter: blur(2px);
+}
+
+.drawer-panel {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 36rem);
+  height: 100vh;
+  height: 100dvh;
+  min-width: 0;
+  padding: 1.25rem;
+  overflow: hidden;
+  background: var(--bg-card);
+  color: var(--color-text);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.16);
+}
+
+.drawer-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-title {
+  min-width: 0;
+  margin: 0;
+  font-size: 1.2rem;
+  overflow-wrap: anywhere;
+}
+
+.drawer-header .modal-close {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.drawer-body {
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.drawer-section {
+  min-width: 0;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-section-title {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.drawer-dl {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+}
+
+.drawer-dl__row {
+  display: grid;
+  grid-template-columns: minmax(5rem, 0.35fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.drawer-dl__row dt {
+  color: var(--color-text-muted);
+}
+
+.drawer-dl__row dd {
+  min-width: 0;
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.drawer-code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.drawer-dl__row dd .copyable-address {
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.drawer-dl__row dd .truncate-address {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.drawer-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  min-width: 0;
+  margin: 1rem 0;
+  padding: 0.9rem;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff1f2;
+  color: #991b1b;
+}
+
+.drawer-error > :last-child {
+  min-width: 0;
+}
+
+.drawer-error__icon {
+  flex: 0 0 auto;
+}
+
+.drawer-error__title,
+.drawer-error__msg {
+  margin: 0 0 0.4rem;
+}
+
+.drawer-error__msg {
+  overflow-wrap: anywhere;
+}
+
+.drawer-error .retry-btn {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.drawer-skeleton {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem 0;
+}
+
+.drawer-progress-header {
+  min-width: 0;
+}
+
+.drawer-progress-pct {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.drawer-metadata-table {
+  table-layout: fixed;
+}
+
+.drawer-metadata-table td,
+.drawer-metadata-table th {
+  overflow-wrap: anywhere;
+}
+
+.drawer-history-list .activity-content {
+  min-width: 0;
+}
+
+.drawer-history-list .activity-meta {
+  flex-wrap: wrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+  .drawer-panel {
+    width: 100%;
+    padding: 0.75rem;
+  }
+
+  .drawer-dl__row {
+    grid-template-columns: minmax(4.5rem, 0.35fr) minmax(0, 1fr);
+    gap: 0.5rem;
+  }
+
+  .drawer-actions .action-cell > button {
+    flex: 1 1 100%;
+  }
+}
+
+.dark .drawer-error {
+  border-color: #7f1d1d;
+  background: #2b171b;
+  color: #fecaca;
+}
+
 .fee-preview-list {
   display: grid;
   gap: 0.75rem;

@@ -145,7 +145,7 @@ describe('StreamDetailDrawer', () => {
     server.use(
       http.get('/api/streams/:id', () => {
         streamRequests += 1;
-        if (streamRequests > 1) {
+        if (streamRequests === 2) {
           return HttpResponse.json({ error: 'Refresh failed' }, { status: 500 });
         }
         return HttpResponse.json({
@@ -186,8 +186,12 @@ describe('StreamDetailDrawer', () => {
 
     await waitFor(() => expect(screen.getByText('Unable to refresh stream')).toBeInTheDocument());
     expect(screen.getByText('Refresh failed')).toBeInTheDocument();
+    expect(screen.getByText('Stream created')).toBeInTheDocument();
     expect(screen.queryByText('Cancel Stream')).not.toBeInTheDocument();
     expect(screen.queryByText('⏸ Pause')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Retry'));
+    await waitFor(() => expect(screen.getByText('Cancel Stream')).toBeInTheDocument());
   });
 
   // ── Pause button visibility ───────────────────────────────────────────────
