@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import type { BatchClaimState } from "../hooks/useClaimBatch";
 
@@ -18,6 +19,16 @@ export function ClaimBatchModal({
   const isClaiming = state.phase === "claiming";
   const isComplete = state.phase === "complete";
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !isClaiming) {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isClaiming, onClose]);
+
   const claimableEntries = Object.entries(state.claimableByStreamId || {});
   const claimableStreamsCount = claimableEntries.filter(([, amount]) => amount > 0).length;
   const isZeroClaimable = state.totalClaimable <= 0;
@@ -33,6 +44,15 @@ export function ClaimBatchModal({
 
   const summaryLabel = `Claim ${state.totalClaimable.toFixed(4)} ${state.assetLabel} across ${streamCount} stream${streamCount !== 1 ? "s" : ""}`;
 
+  const a11yAnnouncement = (() => {
+    if (state.phase === "fetching") return "Loading claimable amounts.";
+    if (isClaiming) return `Claiming ${state.progress.current} of ${state.progress.total} streams.`;
+    if (isComplete) return `Batch claim complete. ${state.successCount} of ${state.progress.total} claims succeeded.`;
+    if (state.error) return `Error during claim: ${state.error}`;
+    if (state.phase === "ready") return `Claim preview ready: ${summaryLabel}`;
+    return "";
+  })();
+
   return (
     <div
       className="modal-backdrop"
@@ -46,7 +66,20 @@ export function ClaimBatchModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="claim-batch-title"
+        aria-describedby="claim-batch-summary"
+        tabIndex={-1}
       >
+        {/* Screen Reader Live Region Announcer */}
+        <div
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="sr-only"
+          data-testid="claim-a11y-announcer"
+        >
+          {a11yAnnouncement}
+        </div>
+
         <h2 id="claim-batch-title">Batch claim</h2>
 
         {state.phase === "fetching" && (
@@ -57,7 +90,7 @@ export function ClaimBatchModal({
 
         {(state.phase === "ready" || isClaiming || isComplete) && (
           <>
-            <p data-testid="claim-preview-summary">{summaryLabel}</p>
+            <p id="claim-batch-summary" data-testid="claim-preview-summary">{summaryLabel}</p>
 
             {state.phase === "ready" && isZeroClaimable && (
               <div
