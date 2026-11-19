@@ -62,12 +62,19 @@ export function ClaimBatchModal({
     >
       <div
         ref={panelRef}
-        className="modal-panel"
+        className="modal-panel claim-preview-modal-panel"
         role="dialog"
         aria-modal="true"
         aria-labelledby="claim-batch-title"
         aria-describedby="claim-batch-summary"
         tabIndex={-1}
+        data-testid="claim-preview-modal"
+        style={{
+          maxWidth: "100%",
+          boxSizing: "border-box",
+          overflowWrap: "anywhere",
+          wordBreak: "break-word",
+        }}
       >
         {/* Screen Reader Live Region Announcer */}
         <div
@@ -90,7 +97,16 @@ export function ClaimBatchModal({
 
         {(state.phase === "ready" || isClaiming || isComplete) && (
           <>
-            <p id="claim-batch-summary" data-testid="claim-preview-summary">{summaryLabel}</p>
+            <p
+              id="claim-batch-summary"
+              data-testid="claim-preview-summary"
+              style={{
+                wordBreak: "break-word",
+                overflowWrap: "anywhere",
+              }}
+            >
+              {summaryLabel}
+            </p>
 
             {state.phase === "ready" && isZeroClaimable && (
               <div
@@ -105,6 +121,8 @@ export function ClaimBatchModal({
                   color: "#92400e",
                   fontSize: "0.875rem",
                   marginBottom: "0.75rem",
+                  wordBreak: "break-word",
+                  overflowWrap: "anywhere",
                 }}
               >
                 <strong>No claimable balance.</strong> All selected streams currently have zero claimable balance. Funds will become available as streams vest.
@@ -124,6 +142,8 @@ export function ClaimBatchModal({
                   color: "#1e40af",
                   fontSize: "0.875rem",
                   marginBottom: "0.75rem",
+                  wordBreak: "break-word",
+                  overflowWrap: "anywhere",
                 }}
               >
                 <strong>Partial claim available.</strong> Only {claimableStreamsCount} of {streamCount} streams have vested funds ready to claim ({state.totalClaimable.toFixed(4)} {state.assetLabel}).
@@ -157,6 +177,8 @@ export function ClaimBatchModal({
                   borderRadius: "8px",
                   color: "#991b1b",
                   marginBottom: "0.75rem",
+                  wordBreak: "break-word",
+                  overflowWrap: "anywhere",
                 }}
               >
                 <div style={{ fontWeight: 600, marginBottom: "0.25rem" }}>
@@ -164,17 +186,35 @@ export function ClaimBatchModal({
                     ? "Wallet Signature Rejected"
                     : "Transaction Failed"}
                 </div>
-                <p style={{ margin: 0, fontSize: "0.875rem" }} data-testid="claim-error-message">
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: "0.875rem",
+                    wordBreak: "break-word",
+                    overflowWrap: "anywhere",
+                  }}
+                  data-testid="claim-error-message"
+                >
                   {failureMessage}
                 </p>
                 <p style={{ margin: "0.5rem 0 0", fontSize: "0.8rem", color: "#7f1d1d" }}>
                   Your claim input is preserved. Verify your wallet connection and click below to retry safely.
                 </p>
                 {state.failures.length > 1 && (
-                  <ul className="claim-batch-failures" style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
+                  <ul
+                    className="claim-batch-failures"
+                    aria-label="Failed stream claims"
+                    style={{
+                      marginTop: "0.5rem",
+                      fontSize: "0.8rem",
+                      paddingLeft: "1.25rem",
+                      wordBreak: "break-all",
+                      overflowWrap: "anywhere",
+                    }}
+                  >
                     {state.failures.map((f) => (
-                      <li key={f.streamId}>
-                        Stream {f.streamId}: {f.message}
+                      <li key={f.streamId} style={{ marginBottom: "0.25rem" }}>
+                        Stream <span style={{ fontFamily: "monospace" }}>{f.streamId}</span>: {f.message}
                       </li>
                     ))}
                   </ul>
@@ -184,7 +224,16 @@ export function ClaimBatchModal({
           </>
         )}
 
-        <div className="modal-actions">
+        <div
+          className="modal-actions"
+          data-testid="claim-modal-actions"
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "0.5rem",
+            alignItems: "center",
+          }}
+        >
           {hasFailure && !isClaiming ? (
             <>
               <button
@@ -211,7 +260,13 @@ export function ClaimBatchModal({
             <>
               {state.phase === "ready" && (
                 <>
-                  <button type="button" className="btn-ghost" onClick={onClose} data-testid="claim-cancel-btn">
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={onClose}
+                    data-testid="claim-cancel-btn"
+                    style={{ minHeight: "44px", minWidth: "44px" }}
+                  >
                     Cancel
                   </button>
                   {isZeroClaimable ? (
@@ -221,7 +276,12 @@ export function ClaimBatchModal({
                       disabled
                       aria-disabled="true"
                       data-testid="claim-confirm-btn"
-                      style={{ opacity: 0.6, cursor: "not-allowed" }}
+                      style={{
+                        minHeight: "44px",
+                        minWidth: "44px",
+                        opacity: 0.6,
+                        cursor: "not-allowed",
+                      }}
                     >
                       Nothing to claim
                     </button>
@@ -231,6 +291,7 @@ export function ClaimBatchModal({
                       className="btn-primary"
                       onClick={onConfirm}
                       data-testid="claim-confirm-btn"
+                      style={{ minHeight: "44px", minWidth: "44px" }}
                     >
                       {isPartialClaim ? "Confirm partial claim" : "Confirm claim"}
                     </button>
@@ -238,17 +299,35 @@ export function ClaimBatchModal({
                 </>
               )}
               {isClaiming && (
-                <button type="button" className="btn-primary" disabled aria-busy="true">
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled
+                  aria-busy="true"
+                  style={{ minHeight: "44px", minWidth: "44px" }}
+                >
                   Claiming…
                 </button>
               )}
               {isComplete && (
-                <button type="button" className="btn-primary" onClick={onClose} data-testid="claim-close-btn">
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={onClose}
+                  data-testid="claim-close-btn"
+                  style={{ minHeight: "44px", minWidth: "44px" }}
+                >
                   Close
                 </button>
               )}
               {state.phase === "fetching" && (
-                <button type="button" className="btn-ghost" onClick={onClose} data-testid="claim-cancel-btn">
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={onClose}
+                  data-testid="claim-cancel-btn"
+                  style={{ minHeight: "44px", minWidth: "44px" }}
+                >
                   Cancel
                 </button>
               )}
