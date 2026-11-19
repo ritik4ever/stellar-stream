@@ -210,6 +210,14 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
     handleClaimFailure,
   );
 
+  // Safely dismiss modals and pending operations if recipient switches account mid-request
+  useEffect(() => {
+    setBatchModalOpen(false);
+    setPendingBatchInputs([]);
+    resetBatch();
+    setToast(null);
+  }, [recipientAddress, resetBatch]);
+
   // Load streams on mount / address change
   useEffect(() => {
     if (!recipientAddress) {
@@ -381,6 +389,19 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
         />
       )}
 
+      {/* A11Y: Polite live region for changed recipient status without repeating alerts */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        data-testid="recipient-status-announcer"
+      >
+        {activeStreams.length > 0 && totalClaimable === 0
+          ? "No claimable balance yet. Streams are active, but funds have not vested yet."
+          : ""}
+      </div>
+
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Recipient Dashboard</h2>
         <p className="muted recipient-dashboard-subtitle">
@@ -471,16 +492,16 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
               )}
             </div>
             <div className="table-wrap">
-              <table>
+              <table aria-label="Active streams">
                 <thead>
                   <tr>
-                    <th>From</th>
-                    <th>Asset</th>
-                    <th>Claimable</th>
-                    <th>Total</th>
-                    <th>Status</th>
-                    <th>Progress</th>
-                    <th>Action</th>
+                    <th scope="col">From</th>
+                    <th scope="col">Asset</th>
+                    <th scope="col">Claimable</th>
+                    <th scope="col">Total</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Progress</th>
+                    <th scope="col">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -544,14 +565,14 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
           <section className="recipient-dashboard-section">
             <h3 className="recipient-dashboard-section-title">Completed streams</h3>
             <div className="table-wrap">
-              <table>
+              <table aria-label="Completed streams">
                 <thead>
                   <tr>
-                    <th>From</th>
-                    <th>Asset</th>
-                    <th>Claimed</th>
-                    <th>Total</th>
-                    <th>Status</th>
+                    <th scope="col">From</th>
+                    <th scope="col">Asset</th>
+                    <th scope="col">Claimed</th>
+                    <th scope="col">Total</th>
+                    <th scope="col">Status</th>
                   </tr>
                 </thead>
                 <tbody>
