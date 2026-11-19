@@ -11,6 +11,8 @@ export interface StatsPanelProps {
   streamsLoading?: boolean;
   className?: string;
   accountId?: string;
+  onPrimaryAction?: () => void;
+  primaryActionLabel?: string;
 }
 
 /**
@@ -29,11 +31,27 @@ export function StatsPanel({
   streamsLoading = false,
   className = "",
   accountId,
+  onPrimaryAction,
+  primaryActionLabel,
 }: StatsPanelProps) {
   const safeTotal = Number.isFinite(total) ? Math.max(0, total) : 0;
   const safeActive = Number.isFinite(active) ? Math.max(0, active) : 0;
   const safeCompleted = Number.isFinite(completed) ? Math.max(0, completed) : 0;
   const safeVested = Number.isFinite(vested) ? Math.max(0, vested) : 0;
+
+  const isAllZero =
+    !loading &&
+    !error &&
+    safeTotal === 0 &&
+    safeActive === 0 &&
+    safeCompleted === 0 &&
+    safeVested === 0;
+
+  const isPartial =
+    !loading &&
+    !error &&
+    !isAllZero &&
+    (safeTotal === 0 || safeActive === 0 || safeCompleted === 0 || safeVested === 0);
 
   const formattedVested = safeVested.toLocaleString("en-US", {
     minimumFractionDigits: 2,
@@ -45,6 +63,17 @@ export function StatsPanel({
       className={`stats-panel-container ${className}`}
       aria-label="Stream summary metrics"
       data-testid="stats-panel"
+      data-boundary-state={
+        error
+          ? streamsLoading
+            ? "stats-failed-streams-loading"
+            : "stats-failed"
+          : isAllZero
+          ? "all-zero"
+          : isPartial
+          ? "partial-totals"
+          : "ready"
+      }
     >
       {/* Account ID display if provided, formatted for narrow screen responsiveness */}
       {accountId && (
@@ -60,20 +89,80 @@ export function StatsPanel({
         </div>
       )}
 
+      {/* Boundary state indicators */}
+      {isAllZero && (
+        <div
+          className="stats-boundary-banner stats-boundary-all-zero"
+          data-testid="stats-all-zero-state"
+          data-boundary-case="all-zero"
+        >
+          <span
+            className="stats-boundary-badge"
+            data-testid="boundary-all-zero-badge"
+          >
+            All-zero activity
+          </span>
+          <span className="stats-boundary-text">
+            No stream activity recorded yet. Totals will populate once streams are initialized.
+          </span>
+        </div>
+      )}
+
+      {isPartial && (
+        <div
+          className="stats-boundary-banner stats-boundary-partial"
+          data-testid="stats-partial-state"
+          data-boundary-case="partial-totals"
+        >
+          <span
+            className="stats-boundary-badge stats-boundary-badge-partial"
+            data-testid="boundary-partial-badge"
+          >
+            Partially available totals
+          </span>
+          <span className="stats-boundary-text">
+            Some stream metrics are zero or awaiting contract confirmation.
+          </span>
+        </div>
+      )}
+
       {/* Failure State with Retry Action */}
       {error && (
         <div
           className="stats-error-banner"
           role="alert"
           data-testid="stats-error-banner"
+          data-boundary-case={
+            streamsLoading ? "stats-failed-streams-loading" : "stats-failed"
+          }
         >
           <div className="stats-error-content">
             <span className="stats-error-icon" aria-hidden="true">⚠️</span>
             <div className="stats-error-text">
-              <strong>Unable to load live statistics</strong>
+              <div className="stats-error-header-row">
+                <strong>Unable to load live statistics</strong>
+                {streamsLoading ? (
+                  <span
+                    className="stats-boundary-badge stats-boundary-badge-warning"
+                    data-testid="boundary-stats-failed-streams-loading"
+                  >
+                    Streams loading in background
+                  </span>
+                ) : (
+                  <span
+                    className="stats-boundary-badge stats-boundary-badge-error"
+                    data-testid="boundary-stats-failed"
+                  >
+                    Stats offline
+                  </span>
+                )}
+              </div>
               <p>{error.message || "An unexpected error occurred while fetching stats."}</p>
               {streamsLoading && (
-                <span className="stats-streams-loading-hint">
+                <span
+                  className="stats-streams-loading-hint"
+                  data-testid="stats-streams-loading-hint"
+                >
                   Streams are still loading in the background…
                 </span>
               )}
@@ -87,7 +176,11 @@ export function StatsPanel({
               disabled={loading}
               data-testid="stats-retry-button"
             >
-              {loading ? "Retrying…" : "Retry"}
+              {loading
+                ? "Retrying…"
+                : streamsLoading
+                ? "Retry Loading Stats"
+                : "Retry"}
             </button>
           )}
         </div>
@@ -135,6 +228,33 @@ export function StatsPanel({
           </strong>
         </article>
       </div>
+
+      {/* Primary Action Control (Reflects Actual State & Avoids Misleading Ready-to-Act) */}
+      {onPrimaryAction && (
+        <div className="stats-action-row" data-testid="stats-action-row">
+          <button
+            type="button"
+            className="stats-primary-action-btn"
+            data-testid="stats-primary-action-btn"
+            onClick={onPrimaryAction}
+            disabled={loading || isAllZero}
+            aria-disabled={loading || isAllZero}
+            title={
+              isAllZero
+                ? "No streams available to act on"
+                : isPartial
+                ? "Some totals are zero or pending"
+                : undefined
+            }
+          >
+            {isAllZero
+              ? "No Streams Available"
+              : isPartial
+              ? primaryActionLabel || "View Available Streams"
+              : primaryActionLabel || "View All Streams"}
+          </button>
+        </div>
+      )}
     </section>
   );
 }
