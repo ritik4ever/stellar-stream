@@ -23,6 +23,14 @@ export function ClaimBatchModal({
   const isZeroClaimable = state.totalClaimable <= 0;
   const isPartialClaim = !isZeroClaimable && claimableStreamsCount < streamCount && streamCount > 1;
 
+  const hasFailure = Boolean(state.error || (isComplete && state.failures.length > 0));
+  const failureMessage = state.error || (state.failures.length > 0 ? state.failures[0].message : "");
+
+  const handleRetry = () => {
+    if (isClaiming) return;
+    onConfirm();
+  };
+
   const summaryLabel = `Claim ${state.totalClaimable.toFixed(4)} ${state.assetLabel} across ${streamCount} stream${streamCount !== 1 ? "s" : ""}`;
 
   return (
@@ -95,14 +103,42 @@ export function ClaimBatchModal({
               </p>
             )}
 
-            {isComplete && (
+            {isComplete && !hasFailure && (
               <div role="status" aria-live="polite">
                 <p>
                   {state.successCount} of {state.progress.total} claim
                   {state.progress.total !== 1 ? "s" : ""} succeeded.
                 </p>
-                {state.failures.length > 0 && (
-                  <ul className="claim-batch-failures">
+              </div>
+            )}
+
+            {hasFailure && (
+              <div
+                className="claim-recovery-box"
+                role="alert"
+                data-testid="claim-error-recovery"
+                style={{
+                  padding: "0.75rem 1rem",
+                  backgroundColor: "#fef2f2",
+                  border: "1px solid #fecaca",
+                  borderRadius: "8px",
+                  color: "#991b1b",
+                  marginBottom: "0.75rem",
+                }}
+              >
+                <div style={{ fontWeight: 600, marginBottom: "0.25rem" }}>
+                  {failureMessage.toLowerCase().includes("reject") || failureMessage.toLowerCase().includes("decline")
+                    ? "Wallet Signature Rejected"
+                    : "Transaction Failed"}
+                </div>
+                <p style={{ margin: 0, fontSize: "0.875rem" }} data-testid="claim-error-message">
+                  {failureMessage}
+                </p>
+                <p style={{ margin: "0.5rem 0 0", fontSize: "0.8rem", color: "#7f1d1d" }}>
+                  Your claim input is preserved. Verify your wallet connection and click below to retry safely.
+                </p>
+                {state.failures.length > 1 && (
+                  <ul className="claim-batch-failures" style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
                     {state.failures.map((f) => (
                       <li key={f.streamId}>
                         Stream {f.streamId}: {f.message}
@@ -112,58 +148,78 @@ export function ClaimBatchModal({
                 )}
               </div>
             )}
-
-            {state.error && (
-              <p className="field-error" role="alert">
-                {state.error}
-              </p>
-            )}
           </>
         )}
 
         <div className="modal-actions">
-          {state.phase === "ready" && (
+          {hasFailure && !isClaiming ? (
             <>
-              <button type="button" className="btn-ghost" onClick={onClose} data-testid="claim-cancel-btn">
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={onClose}
+                data-testid="claim-cancel-btn"
+                style={{ minHeight: "44px", minWidth: "44px" }}
+              >
                 Cancel
               </button>
-              {isZeroClaimable ? (
-                <button
-                  type="button"
-                  className="btn-primary"
-                  disabled
-                  aria-disabled="true"
-                  data-testid="claim-confirm-btn"
-                  style={{ opacity: 0.6, cursor: "not-allowed" }}
-                >
-                  Nothing to claim
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleRetry}
+                data-testid="claim-retry-btn"
+                disabled={isClaiming}
+                style={{ minHeight: "44px", minWidth: "44px" }}
+              >
+                Retry claim
+              </button>
+            </>
+          ) : (
+            <>
+              {state.phase === "ready" && (
+                <>
+                  <button type="button" className="btn-ghost" onClick={onClose} data-testid="claim-cancel-btn">
+                    Cancel
+                  </button>
+                  {isZeroClaimable ? (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      disabled
+                      aria-disabled="true"
+                      data-testid="claim-confirm-btn"
+                      style={{ opacity: 0.6, cursor: "not-allowed" }}
+                    >
+                      Nothing to claim
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={onConfirm}
+                      data-testid="claim-confirm-btn"
+                    >
+                      {isPartialClaim ? "Confirm partial claim" : "Confirm claim"}
+                    </button>
+                  )}
+                </>
+              )}
+              {isClaiming && (
+                <button type="button" className="btn-primary" disabled aria-busy="true">
+                  Claiming…
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  className="btn-primary"
-                  onClick={onConfirm}
-                  data-testid="claim-confirm-btn"
-                >
-                  {isPartialClaim ? "Confirm partial claim" : "Confirm claim"}
+              )}
+              {isComplete && (
+                <button type="button" className="btn-primary" onClick={onClose} data-testid="claim-close-btn">
+                  Close
+                </button>
+              )}
+              {state.phase === "fetching" && (
+                <button type="button" className="btn-ghost" onClick={onClose} data-testid="claim-cancel-btn">
+                  Cancel
                 </button>
               )}
             </>
-          )}
-          {isClaiming && (
-            <button type="button" className="btn-primary" disabled aria-busy="true">
-              Claiming…
-            </button>
-          )}
-          {isComplete && (
-            <button type="button" className="btn-primary" onClick={onClose}>
-              Close
-            </button>
-          )}
-          {state.phase === "fetching" && (
-            <button type="button" className="btn-ghost" onClick={onClose}>
-              Cancel
-            </button>
           )}
         </div>
       </div>
