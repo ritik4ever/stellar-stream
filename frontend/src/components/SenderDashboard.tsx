@@ -561,7 +561,7 @@ export function SenderDashboard({
 
   if (streams.length === 0 && !showCreateForm) {
     return (
-      <div className="card recipient-dashboard-card">
+      <div className="card recipient-dashboard-card" data-testid="sender-zero-streams">
         <h2 className="recipient-dashboard-title">Sender Dashboard</h2>
         <div className="activity-empty">
           <span className="activity-empty-icon">📤</span>
@@ -871,6 +871,15 @@ export function SenderDashboard({
               >
                 <h3 id="active-scheduled-heading" className="recipient-dashboard-section-title">
                   Active &amp; Scheduled
+                  {streams.length >= 50 && (
+                    <span
+                      className="badge"
+                      data-testid="large-stream-list-badge"
+                      style={{ fontSize: "0.8rem", marginLeft: "0.5rem" }}
+                    >
+                      Large Volume ({streams.length})
+                    </span>
+                  )}
                 </h3>
                 <div className="table-wrap" style={{ maxHeight: "480px", overflowY: "auto" }}>
                   <table aria-labelledby="active-scheduled-heading">
