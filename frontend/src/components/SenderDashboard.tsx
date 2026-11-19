@@ -1185,23 +1185,53 @@ export function SenderDashboard({
                   </div>
                 ) : (
                   <>
-                    <p className="modal-stream-hint" data-testid="cancel-confirm-prompt">
+                    <p
+                      className="modal-stream-hint"
+                      data-testid="cancel-confirm-prompt"
+                      style={{
+                        wordBreak: "break-word",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
                       Are you sure you want to cancel stream{" "}
-                      <strong>#{cancelConfirmStreamId}</strong>? This irreversible action will terminate the stream immediately.
+                      <strong style={{ wordBreak: "break-all" }}>#{cancelConfirmStreamId}</strong>? This irreversible action will terminate the stream immediately.
                     </p>
                     {streamToCancel && (
-                      <p
-                        className="modal-refundable-amount"
-                        data-testid="cancel-refundable-amount"
-                        style={{ margin: "0.5rem 0", color: "#1f2937", fontSize: "0.9rem" }}
+                      <div
+                        className="modal-stream-details"
+                        data-testid="cancel-stream-details"
+                        style={{
+                          margin: "0.5rem 0",
+                          wordBreak: "break-word",
+                          overflowWrap: "anywhere",
+                          fontSize: "0.875rem",
+                        }}
                       >
-                        Refundable to sender: <strong>{formattedRemaining} {streamToCancel.assetCode}</strong>
-                      </p>
+                        <p style={{ margin: "0.25rem 0", wordBreak: "break-all" }} data-testid="cancel-recipient-id">
+                          Recipient: <span style={{ fontFamily: "monospace" }}>{streamToCancel.recipient}</span>
+                        </p>
+                        <p
+                          className="modal-refundable-amount"
+                          data-testid="cancel-refundable-amount"
+                          style={{ margin: "0.25rem 0", color: "#1f2937", fontSize: "0.9rem" }}
+                        >
+                          Refundable to sender: <strong>{formattedRemaining} {streamToCancel.assetCode}</strong>
+                        </p>
+                      </div>
                     )}
                   </>
                 )}
               </div>
-              <div className="modal-actions" data-testid="cancel-modal-actions">
+              <div
+                className="modal-actions"
+                data-testid="cancel-modal-actions"
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "0.5rem",
+                  alignItems: "center",
+                }}
+              >
                 <button
                   type="button"
                   className="btn-ghost"
