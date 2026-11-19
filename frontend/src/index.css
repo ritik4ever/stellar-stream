@@ -1859,5 +1859,63 @@ input {
   }
 }
 
+/* ── Mobile responsiveness for Wallet connection (SSB-2026-079) ── */
+@media (max-width: 768px) {
+  .wallet-status {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .wallet-btn,
+  .wallet-disconnect,
+  .wallet-retry-btn {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0.5rem 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .wallet-address {
+    min-height: 44px;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-all;
+    box-sizing: border-box;
+  }
+
+  .wallet-error {
+    max-width: 100%;
+    word-break: break-word;
+  }
+}
+
+@media (max-width: 320px) {
+  .wallet-status {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .wallet-btn,
+  .wallet-disconnect,
+  .wallet-retry-btn {
+    width: 100%;
+    min-height: 44px;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .wallet-address {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+
 
 
