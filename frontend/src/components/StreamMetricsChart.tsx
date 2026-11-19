@@ -262,11 +262,33 @@ export function StreamMetricsChart({
 
   if (data.length === 0) {
     return (
-      <div className="chart-empty-state">
+      <div
+        className="chart-empty-state"
+        data-testid="metrics-empty-state"
+        data-boundary-case="empty-data"
+      >
         <div className="chart-empty-state__content">
           <span className="chart-empty-state__icon">📊</span>
+          <span
+            className="badge"
+            data-testid="boundary-empty-badge"
+            style={{ marginBottom: "0.5rem", fontSize: "0.75rem" }}
+          >
+            Empty Data
+          </span>
           <h3>No Chart Data Yet</h3>
           <p>Metrics trends will appear here as data is collected over time.</p>
+          {onRetry && (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={onRetry}
+              data-testid="metrics-empty-retry-btn"
+              style={{ marginTop: "0.75rem", minHeight: "44px" }}
+            >
+              Check For Metrics
+            </button>
+          )}
         </div>
       </div>
     );
@@ -303,9 +325,27 @@ export function StreamMetricsChart({
             color: "#92400e",
             fontSize: "0.85rem",
             marginBottom: "0.75rem",
+            flexWrap: "wrap",
+            gap: "0.5rem",
           }}
         >
-          <span>Displaying cached metrics. Data may be stale.</span>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <span
+              className="badge"
+              data-testid="boundary-stale-badge"
+              style={{
+                backgroundColor: "#fef3c7",
+                color: "#92400e",
+                padding: "2px 6px",
+                borderRadius: "4px",
+                fontSize: "0.75rem",
+                fontWeight: 600,
+              }}
+            >
+              Stale Data
+            </span>
+            <span>Displaying cached metrics. Data may be stale.</span>
+          </div>
           {onRetry && (
             <button
               type="button"
@@ -325,6 +365,46 @@ export function StreamMetricsChart({
               Sync Latest
             </button>
           )}
+        </div>
+      )}
+
+      {data.length === 1 && (
+        <div
+          className="chart-single-point-banner"
+          data-testid="metrics-single-point-notice"
+          role="status"
+          style={{
+            backgroundColor: "#f0f9ff",
+            border: "1px solid #bae6fd",
+            borderRadius: "6px",
+            padding: "0.65rem 0.85rem",
+            color: "#0369a1",
+            fontSize: "0.85rem",
+            marginBottom: "0.75rem",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "0.5rem",
+          }}
+        >
+          <div>
+            <strong>Single Data Point:</strong> Recorded on {formatDate(data[0].timestamp)} (Active: {data[0].active}, Completed: {data[0].completed}). At least two snapshots are required to plot trend lines across a time range.
+          </div>
+          <span
+            className="badge"
+            data-testid="boundary-single-point-badge"
+            style={{
+              backgroundColor: "#e0f2fe",
+              color: "#0369a1",
+              padding: "2px 6px",
+              borderRadius: "4px",
+              fontSize: "0.75rem",
+              fontWeight: 600,
+            }}
+          >
+            Single Point
+          </span>
         </div>
       )}
       <div
@@ -353,15 +433,20 @@ export function StreamMetricsChart({
           <button
             type="button"
             onClick={() => setInteractionMode(prev => prev === "pan" ? "zoom" : "pan")}
+            disabled={data.length <= 1}
+            aria-disabled={data.length <= 1}
+            title={data.length <= 1 ? "Interaction modes require multiple data points" : undefined}
+            data-testid="metrics-mode-toggle-btn"
             style={{
               padding: "0.4rem 0.75rem",
-              backgroundColor: interactionMode === "zoom" ? "#10b981" : "#3b82f6",
+              backgroundColor: data.length <= 1 ? "#6b7280" : interactionMode === "zoom" ? "#10b981" : "#3b82f6",
               color: "#f9fafb",
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
-              cursor: "pointer",
+              cursor: data.length <= 1 ? "not-allowed" : "pointer",
               minHeight: "44px",
+              opacity: data.length <= 1 ? 0.6 : 1,
             }}
             aria-label={interactionMode === "pan" ? "Switch to Box Zoom mode" : "Switch to Pan mode"}
           >
@@ -370,6 +455,10 @@ export function StreamMetricsChart({
           <button
             type="button"
             onClick={() => zoomInOut(1.5)}
+            disabled={data.length <= 1}
+            aria-disabled={data.length <= 1}
+            title={data.length <= 1 ? "Zoom requires multiple data points" : undefined}
+            data-testid="metrics-zoom-in-btn"
             style={{
               padding: "0.4rem 0.75rem",
               backgroundColor: "#374151",
@@ -377,9 +466,10 @@ export function StreamMetricsChart({
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
-              cursor: "pointer",
+              cursor: data.length <= 1 ? "not-allowed" : "pointer",
               minHeight: "44px",
               minWidth: "44px",
+              opacity: data.length <= 1 ? 0.6 : 1,
             }}
             aria-label="Zoom in metrics chart"
           >
@@ -388,6 +478,10 @@ export function StreamMetricsChart({
           <button
             type="button"
             onClick={() => zoomInOut(0.67)}
+            disabled={data.length <= 1}
+            aria-disabled={data.length <= 1}
+            title={data.length <= 1 ? "Zoom requires multiple data points" : undefined}
+            data-testid="metrics-zoom-out-btn"
             style={{
               padding: "0.4rem 0.75rem",
               backgroundColor: "#374151",
@@ -395,9 +489,10 @@ export function StreamMetricsChart({
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
-              cursor: "pointer",
+              cursor: data.length <= 1 ? "not-allowed" : "pointer",
               minHeight: "44px",
               minWidth: "44px",
+              opacity: data.length <= 1 ? 0.6 : 1,
             }}
             aria-label="Zoom out metrics chart"
           >
@@ -406,6 +501,9 @@ export function StreamMetricsChart({
           <button
             type="button"
             onClick={() => setZoomRange(null)}
+            disabled={data.length <= 1 || zoomRange === null}
+            aria-disabled={data.length <= 1 || zoomRange === null}
+            data-testid="metrics-zoom-reset-btn"
             style={{
               padding: "0.4rem 0.75rem",
               backgroundColor: "#374151",
@@ -413,9 +511,10 @@ export function StreamMetricsChart({
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
-              cursor: "pointer",
+              cursor: data.length <= 1 || zoomRange === null ? "not-allowed" : "pointer",
               minHeight: "44px",
               minWidth: "44px",
+              opacity: data.length <= 1 || zoomRange === null ? 0.6 : 1,
             }}
             aria-label="Reset zoom on metrics chart"
           >
