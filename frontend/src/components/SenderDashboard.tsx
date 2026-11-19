@@ -439,6 +439,7 @@ export function SenderDashboard({
    * Prevents duplicate in-flight bulk requests.
    */
   const confirmBulkCancel = async () => {
+    if (isBulkCanceling || cancelingStreamId !== null) return;
     setBulkCancelConfirmPending(false);
     const selectedIds = Array.from(selectedStreamForBulkCancel);
     if (selectedIds.length === 0) return;
@@ -471,7 +472,7 @@ export function SenderDashboard({
       // Preserve safe input: retain failed IDs in selection for actionable retry
       setSelectedStreamForBulkCancel(new Set(failedIds));
       setActionError({
-        title: "Bulk Cancellation Failed",
+        title: "Cancellation Failed",
         message: `${failedIds.length} of ${selectedIds.length} stream(s) could not be canceled: ${lastErrorMsg}`,
         action: "bulk_cancel",
       });
@@ -655,6 +656,7 @@ export function SenderDashboard({
                 <button
                   type="button"
                   className="retry-btn"
+                  data-testid="bulk-cancel-retry-btn"
                   onClick={() => void confirmBulkCancel()}
                   disabled={isBulkCanceling || cancelingStreamId !== null}
                   aria-busy={isBulkCanceling}
