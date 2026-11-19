@@ -46,9 +46,16 @@ export function StreamMetricsChart({
   const [stats, setStats] = useState<StreamStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
   const [statsError, setStatsError] = useState<Error | null>(null);
+  const [a11yAnnouncement, setA11yAnnouncement] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startRange: [number, number]; active: boolean } | null>(null);
   const pinchRef = useRef<{ startDist: number; startRange: [number, number] } | null>(null);
+
+  useEffect(() => {
+    if (visibleDateRange) {
+      setA11yAnnouncement(`Metrics chart showing time range: ${visibleDateRange}.`);
+    }
+  }, [visibleDateRange]);
 
   useEffect(() => {
     let mounted = true;
@@ -308,7 +315,12 @@ export function StreamMetricsChart({
   ] : [];
 
   return (
-    <div className="chart-container" style={{ position: "relative" }}>
+    <div
+      className="chart-container"
+      role="region"
+      aria-label="Stream metrics charts and trends"
+      style={{ position: "relative" }}
+    >
       {isStale && (
         <div
           className="chart-stale-banner"
@@ -420,6 +432,9 @@ export function StreamMetricsChart({
       >
         <div
           className="chart-header-range"
+          id="metrics-chart-range-description"
+          tabIndex={0}
+          aria-label={`Time range: ${visibleDateRange || "All time"}. Y-axis displays vested amounts in asset units and stream counts.`}
           style={{ color: "#9ca3af", fontSize: "0.875rem", overflowWrap: "anywhere" }}
           data-testid="chart-date-range"
         >
@@ -432,7 +447,13 @@ export function StreamMetricsChart({
         >
           <button
             type="button"
-            onClick={() => setInteractionMode(prev => prev === "pan" ? "zoom" : "pan")}
+            onClick={() => {
+              setInteractionMode(prev => {
+                const next = prev === "pan" ? "zoom" : "pan";
+                setA11yAnnouncement(`Switched to ${next === "zoom" ? "Zoom" : "Pan"} mode.`);
+                return next;
+              });
+            }}
             disabled={data.length <= 1}
             aria-disabled={data.length <= 1}
             title={data.length <= 1 ? "Interaction modes require multiple data points" : undefined}
@@ -454,7 +475,10 @@ export function StreamMetricsChart({
           </button>
           <button
             type="button"
-            onClick={() => zoomInOut(1.5)}
+            onClick={() => {
+              zoomInOut(1.5);
+              setA11yAnnouncement("Zoomed in to narrower time range.");
+            }}
             disabled={data.length <= 1}
             aria-disabled={data.length <= 1}
             title={data.length <= 1 ? "Zoom requires multiple data points" : undefined}
@@ -477,7 +501,10 @@ export function StreamMetricsChart({
           </button>
           <button
             type="button"
-            onClick={() => zoomInOut(0.67)}
+            onClick={() => {
+              zoomInOut(0.67);
+              setA11yAnnouncement("Zoomed out to wider time range.");
+            }}
             disabled={data.length <= 1}
             aria-disabled={data.length <= 1}
             title={data.length <= 1 ? "Zoom requires multiple data points" : undefined}
@@ -500,7 +527,10 @@ export function StreamMetricsChart({
           </button>
           <button
             type="button"
-            onClick={() => setZoomRange(null)}
+            onClick={() => {
+              setZoomRange(null);
+              setA11yAnnouncement("Zoom reset to full time range.");
+            }}
             disabled={data.length <= 1 || zoomRange === null}
             aria-disabled={data.length <= 1 || zoomRange === null}
             data-testid="metrics-zoom-reset-btn"
@@ -521,6 +551,16 @@ export function StreamMetricsChart({
             Reset
           </button>
         </div>
+      </div>
+
+      <div
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="metrics-a11y-announcement"
+      >
+        {a11yAnnouncement}
       </div>
 
       {barChartData.length > 0 && (
