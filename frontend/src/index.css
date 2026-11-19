@@ -1729,6 +1729,100 @@ input {
   cursor: not-allowed;
 }
 
+/* ── Stats Panel Boundary State Enhancements (SSB-2026-086) ─────────────── */
+
+.stats-boundary-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.625rem 0.875rem;
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  margin-bottom: 0.75rem;
+}
+
+.stats-boundary-all-zero {
+  background-color: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  color: #4b5563;
+}
+
+.stats-boundary-partial {
+  background-color: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e40af;
+}
+
+.stats-boundary-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.2rem 0.5rem;
+  border-radius: 9999px;
+  background-color: #e5e7eb;
+  color: #374151;
+  white-space: nowrap;
+}
+
+.stats-boundary-badge-partial {
+  background-color: #dbeafe;
+  color: #1d4ed8;
+}
+
+.stats-boundary-badge-warning {
+  background-color: #fef3c7;
+  color: #b45309;
+}
+
+.stats-boundary-badge-error {
+  background-color: #fee2e2;
+  color: #b91c1c;
+}
+
+.stats-error-header-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  margin-bottom: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.stats-action-row {
+  margin-top: 0.75rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.stats-primary-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid #d1d5db;
+  background-color: #ffffff;
+  color: #374151;
+  cursor: pointer;
+  transition: all 0.2s;
+  min-height: 38px;
+}
+
+.stats-primary-action-btn:hover:not(:disabled) {
+  background-color: #f9fafb;
+  border-color: #9ca3af;
+}
+
+.stats-primary-action-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background-color: #f3f4f6;
+  color: #9ca3af;
+}
+
 .stats-metric-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
