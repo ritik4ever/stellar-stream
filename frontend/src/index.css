@@ -1809,4 +1809,29 @@ input {
   }
 }
 
+/* ── Claim preview modal mobile responsiveness (SSB-2026-064) ── */
+.claim-preview-modal-panel {
+  max-width: 440px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+@media (max-width: 480px) {
+  .claim-preview-modal-panel {
+    padding: 1rem;
+    max-width: 100%;
+  }
+
+  .claim-preview-modal-panel .modal-actions {
+    flex-direction: column-reverse;
+    width: 100%;
+  }
+
+  .claim-preview-modal-panel .modal-actions button {
+    width: 100%;
+    min-height: 44px;
+    justify-content: center;
+  }
+}
+
 
