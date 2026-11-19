@@ -2244,6 +2244,86 @@ input {
   }
 }
 
+/* ── Sender Dashboard mobile responsiveness (SSB-2026-024 / #966) ── */
+
+/*
+ * Ensure the streams table never clips amounts or actions.
+ * At narrow viewports the wrapper becomes a horizontal scroll container
+ * so the table can maintain its natural column widths.
+ */
+.sender-streams-table {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sender-streams-table table {
+  min-width: 480px; /* prevents clipping below natural column widths */
+}
+
+/* Account IDs break safely instead of overflowing */
+.sender-recipient-address {
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  display: inline-block;
+  max-width: 100%;
+}
+
+/* Action cell: keep buttons on a single row, allow wrap on smallest viewports */
+.sender-action-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+@media (max-width: 768px) {
+  /* Stats grid: 2 columns on tablet / narrow desktop */
+  .sender-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Touch-safe action buttons inside the table */
+  .sender-action-cell .btn-ghost,
+  .sender-action-cell .btn-primary {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0.5rem 0.75rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Retry / load-error buttons on the dashboard */
+  .retry-btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Zero-state CTA */
+  .activity-empty .btn-primary {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 320px) {
+  /* Stats grid: single column on the narrowest supported viewport */
+  .sender-stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Full-width action buttons on 320px so they remain tappable */
+  .sender-action-cell {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .sender-action-cell .btn-ghost,
+  .sender-action-cell .btn-primary {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 
 
 

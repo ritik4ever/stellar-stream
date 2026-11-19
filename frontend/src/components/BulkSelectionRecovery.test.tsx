@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from "vitest
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { http, HttpResponse } from "msw";
-import { setupServer } from "msw/node";
+import { server } from "../server";
 import { SenderDashboard } from "./SenderDashboard";
 import { Stream } from "../types/stream";
 
@@ -42,36 +42,36 @@ const mockCanceled = (id: string): Stream => ({
 let s2Fail = true;
 let cancelCalls: string[] = [];
 
-const server = setupServer(
-  http.get("/api/streams", () => HttpResponse.json({ data: [] })),
-  http.get("/api/streams/sender/:address", () =>
-    HttpResponse.json({
-      data: [mockActive("stream-rec-1"), mockActive("stream-rec-2")],
+function setupHandlers() {
+  server.use(
+    http.get("/api/streams", () => HttpResponse.json({ data: [] })),
+    http.get("/api/streams/sender/:address", () =>
+      HttpResponse.json({
+        data: [mockActive("stream-rec-1"), mockActive("stream-rec-2")],
+      })
+    ),
+    http.get("/api/streams/sender/:address/events", () => HttpResponse.json({ data: [] })),
+    http.get("/api/streams/:id/history", () => HttpResponse.json({ data: [] })),
+    http.post("/api/streams/:id/cancel", ({ params }) => {
+      const id = String(params.id);
+      cancelCalls.push(id);
+      if (id === "stream-rec-2" && s2Fail) {
+        return HttpResponse.json(
+          { message: "Timeout connecting to Soroban RPC node" },
+          { status: 504 }
+        );
+      }
+      return HttpResponse.json({ data: mockCanceled(id) });
     })
-  ),
-  http.get("/api/streams/sender/:address/events", () => HttpResponse.json({ data: [] })),
-  http.get("/api/streams/:id/history", () => HttpResponse.json({ data: [] })),
-  http.post("/api/streams/:id/cancel", ({ params }) => {
-    const id = String(params.id);
-    cancelCalls.push(id);
-    if (id === "stream-rec-2" && s2Fail) {
-      return HttpResponse.json(
-        { message: "Timeout connecting to Soroban RPC node" },
-        { status: 504 }
-      );
-    }
-    return HttpResponse.json({ data: mockCanceled(id) });
-  })
-);
+  );
+}
 
-beforeAll(() => server.listen({ onUnhandledRequest: "bypass" }));
-afterEach(() => {
+beforeEach(() => {
   cleanup();
-  server.resetHandlers();
   s2Fail = true;
   cancelCalls = [];
+  setupHandlers();
 });
-afterAll(() => server.close());
 
 describe("Bulk selection partial failure recovery path (SSB-2026-072)", () => {
   it("handles one action in a batch failing, displays useful message, and preserves safe input for retry", async () => {

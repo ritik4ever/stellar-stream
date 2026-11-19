@@ -140,7 +140,7 @@ export function StreamDetailDrawer({
       ]);
       if (ctrl.signal.aborted) return;
       setStream(s);
-      setHistory(h);
+      setHistory(Array.isArray(h) ? h : []);
     } catch (err) {
       if (ctrl.signal.aborted) return;
       const msg = err instanceof Error ? err.message : "Failed to load stream.";
@@ -578,7 +578,7 @@ export function StreamDetailDrawer({
               {/* Event history */}
               <section className="drawer-section" aria-labelledby="drawer-history-heading">
                 <h3 id="drawer-history-heading" className="drawer-section-title">Event History</h3>
-                {history.length === 0 ? (
+                {!history || history.length === 0 ? (
                   <div className="activity-empty" role="status">
                     <span className="activity-empty-icon" aria-hidden="true">📭</span>
                     <p>No events yet.</p>

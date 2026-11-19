@@ -15,6 +15,9 @@ export const handlers = [
   http.post('/api/streams', () => {
     return HttpResponse.json({ data: { id: '2', success: true } }, { status: 201 });
   }),
+  http.get('/api/streams/sender/:address', () => {
+    return new HttpResponse(null, { status: 404 });
+  }),
   http.get('/api/streams/:id', ({ params }) => {
     const { id } = params;
     if (id === 'missing') {

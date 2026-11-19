@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, waitFor, act, cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { http, HttpResponse } from "msw";
-import { setupServer } from "msw/node";
+import { server } from "../server";
 import { SenderDashboard } from "./SenderDashboard";
 import { Stream } from "../types/stream";
 
@@ -42,37 +42,39 @@ const mockCanceledStream = (id: string): Stream => ({
 let cancelPostCalls = 0;
 let cancelHandlerMode: "success" | "timeout" = "success";
 
-const server = setupServer(
-  http.get("/api/streams", () => HttpResponse.json({ data: [mockActiveStream("stream-edge-1")] })),
-  http.get("/api/streams/sender/:address", () => {
-    return HttpResponse.json({
-      data: cancelPostCalls > 0 && cancelHandlerMode === "success"
-        ? [mockCanceledStream("stream-edge-1")]
-        : [mockActiveStream("stream-edge-1")],
-    });
-  }),
-  http.get("/api/streams/sender/:address/events", () => HttpResponse.json({ data: [] })),
-  http.get("/api/streams/:id/history", () => HttpResponse.json({ data: [] })),
-  http.post("/api/streams/:id/cancel", () => {
-    cancelPostCalls++;
-    if (cancelHandlerMode === "timeout") {
-      return HttpResponse.json(
-        { message: "Gateway timeout: request to Horizon node timed out" },
-        { status: 504 }
-      );
-    }
-    return HttpResponse.json({ data: mockCanceledStream("stream-edge-1") });
-  })
-);
-
-beforeAll(() => server.listen({ onUnhandledRequest: "bypass" }));
-afterEach(() => {
-  cleanup();
-  server.resetHandlers();
+beforeEach(() => {
   cancelPostCalls = 0;
   cancelHandlerMode = "success";
+  server.use(
+    http.get("/api/streams", () => HttpResponse.json({ data: [mockActiveStream("stream-edge-1")] })),
+    http.get("/api/streams/sender/:address", () => {
+      return HttpResponse.json({
+        data: cancelPostCalls > 0 && cancelHandlerMode === "success"
+          ? [mockCanceledStream("stream-edge-1")]
+          : [mockActiveStream("stream-edge-1")],
+      });
+    }),
+    http.get("/api/streams/sender/:address/events", () => HttpResponse.json({ data: [] })),
+    http.get("/api/streams/:id/history", () => HttpResponse.json({ data: [] })),
+    http.post("/api/streams/:id/cancel", () => {
+      cancelPostCalls++;
+      if (cancelHandlerMode === "timeout") {
+        return HttpResponse.json(
+          { message: "Gateway timeout: request to Horizon node timed out" },
+          { status: 504 }
+        );
+      }
+      return HttpResponse.json({ data: mockCanceledStream("stream-edge-1") });
+    })
+  );
 });
-afterAll(() => server.close());
+
+afterEach(() => {
+  cleanup();
+  cancelPostCalls = 0;
+  cancelHandlerMode = "success";
+  vi.useRealTimers();
+});
 
 describe("Cancel confirmation edge and failure states (SSB-2026-070)", () => {
   describe("Already canceled versus active streams boundary", () => {
@@ -107,6 +109,9 @@ describe("Cancel confirmation edge and failure states (SSB-2026-070)", () => {
     });
 
     it("asserts already canceled boundary state and ensures non-actionable disabled control", async () => {
+      // Use fake setInterval so we can advance the poll cycle without real waiting
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
       let streamsData = [mockActiveStream("stream-edge-canceled")];
       server.use(
         http.get("/api/streams/sender/:address", () =>
@@ -114,7 +119,7 @@ describe("Cancel confirmation edge and failure states (SSB-2026-070)", () => {
         )
       );
 
-      const { rerender } = render(<SenderDashboard senderAddress={SENDER} />);
+      render(<SenderDashboard senderAddress={SENDER} />);
 
       await waitFor(() =>
         expect(screen.getByText("Active & Scheduled")).toBeInTheDocument()
@@ -123,11 +128,20 @@ describe("Cancel confirmation edge and failure states (SSB-2026-070)", () => {
       fireEvent.click(screen.getByRole("button", { name: /Cancel stream to/i }));
       await screen.findByRole("dialog");
 
-      // State transition to canceled
+      // State transition to canceled while modal is open
       streamsData = [mockCanceledStream("stream-edge-canceled")];
-      rerender(<SenderDashboard senderAddress={SENDER} />);
 
-      // Verify explicit boundary notice
+      // Advance poll interval to trigger background sync
+      await act(async () => {
+        vi.advanceTimersByTime(5100);
+      });
+
+      // Verify explicit boundary notice (async — sync'd via polling)
+      await waitFor(() => {
+        const title = screen.getByTestId("cancel-modal-title");
+        expect(title).toHaveTextContent("Stream already canceled");
+      });
+
       const title = screen.getByTestId("cancel-modal-title");
       expect(title).toHaveTextContent("Stream already canceled");
 
