@@ -96,6 +96,7 @@ export function WalletButton({ wallet }: WalletButtonProps) {
           className="btn-primary wallet-btn"
           type="button"
           onClick={connect}
+          disabled={status === "connecting"}
           title={
             !installed
               ? "Freighter extension not detected — install it from freighter.app"
@@ -103,6 +104,18 @@ export function WalletButton({ wallet }: WalletButtonProps) {
           }
         >
           {!installed ? "Install Freighter" : "Connect Wallet"}
+        </button>
+      )}
+      {(!installed || Boolean(error)) && (
+        <button
+          className="btn-ghost wallet-retry-btn"
+          type="button"
+          onClick={connect}
+          disabled={status === "connecting"}
+          data-testid="wallet-retry-btn"
+          aria-label="Retry wallet connection"
+        >
+          Retry Connection
         </button>
       )}
     </div>
