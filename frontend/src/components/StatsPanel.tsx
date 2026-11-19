@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 
 export interface StatsPanelProps {
   total?: number;
@@ -19,7 +19,7 @@ export interface StatsPanelProps {
 /**
  * StatsPanel displays aggregate streaming metrics including total streams,
  * active streams, completed streams, and vested amounts with resilient handling
- * for edge states, partial totals, and network failures.
+ * for edge states, partial totals, keyboard navigation, and screen reader announcements.
  */
 export function StatsPanel({
   total = 0,
@@ -62,6 +62,26 @@ export function StatsPanel({
     maximumFractionDigits: 2,
   });
 
+  // Accessible screen reader announcement without repeated alerts
+  const announcement = useMemo(() => {
+    if (loading) {
+      return "Loading stream statistics…";
+    }
+    if (error) {
+      if (streamsLoading) {
+        return "Unable to load live statistics. Streams are still loading in the background.";
+      }
+      return `Unable to load live statistics: ${error.message || "error occurred"}`;
+    }
+    if (isAllZero) {
+      return "Stream metrics: No stream activity recorded yet. All totals are zero.";
+    }
+    if (isPartial) {
+      return `Stream metrics updated: Partially available totals. Total streams: ${safeTotal}, Active: ${safeActive}, Completed: ${safeCompleted}, Total Vested: ${formattedVested}.`;
+    }
+    return `Stream metrics ready: ${safeTotal} total streams, ${safeActive} active, ${safeCompleted} completed, ${formattedVested} vested.`;
+  }, [loading, error, streamsLoading, isAllZero, isPartial, safeTotal, safeActive, safeCompleted, formattedVested]);
+
   const handleRetry = async () => {
     if (loading || isRetrying || !onRetry) return;
     setIsRetrying(true);
@@ -87,6 +107,7 @@ export function StatsPanel({
   return (
     <section
       className={`stats-panel-container ${className}`}
+      role="region"
       aria-label="Stream summary metrics"
       data-testid="stats-panel"
       data-boundary-state={
@@ -101,6 +122,17 @@ export function StatsPanel({
           : "ready"
       }
     >
+      {/* Polite Screen Reader Live Region for Status Announcements */}
+      <div
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="stats-a11y-announcement"
+      >
+        {announcement}
+      </div>
+
       {/* Account ID display if provided, preserved safely across failure and recovery */}
       {accountId && (
         <div className="stats-account-row" data-testid="stats-account-row">
@@ -227,9 +259,19 @@ export function StatsPanel({
         </div>
       )}
 
-      {/* Metrics Grid */}
-      <div className="stats-metric-grid" data-testid="stats-metric-grid">
-        <article className="metric-card" data-testid="metric-card-total">
+      {/* Metrics Grid with accessible keyboard navigation and unambiguous field labels */}
+      <div
+        className="stats-metric-grid"
+        data-testid="stats-metric-grid"
+        role="region"
+        aria-label="Stream summary totals"
+      >
+        <article
+          className="metric-card"
+          data-testid="metric-card-total"
+          tabIndex={0}
+          aria-label={`Total Streams: ${loading ? "Loading" : safeTotal}`}
+        >
           <span id="metric-total-label">Total Streams</span>
           <strong
             aria-labelledby="metric-total-label"
@@ -239,7 +281,12 @@ export function StatsPanel({
           </strong>
         </article>
 
-        <article className="metric-card" data-testid="metric-card-active">
+        <article
+          className="metric-card"
+          data-testid="metric-card-active"
+          tabIndex={0}
+          aria-label={`Active Streams: ${loading ? "Loading" : safeActive}`}
+        >
           <span id="metric-active-label">Active</span>
           <strong
             aria-labelledby="metric-active-label"
@@ -249,7 +296,12 @@ export function StatsPanel({
           </strong>
         </article>
 
-        <article className="metric-card" data-testid="metric-card-completed">
+        <article
+          className="metric-card"
+          data-testid="metric-card-completed"
+          tabIndex={0}
+          aria-label={`Completed Streams: ${loading ? "Loading" : safeCompleted}`}
+        >
           <span id="metric-completed-label">Completed</span>
           <strong
             aria-labelledby="metric-completed-label"
@@ -259,7 +311,12 @@ export function StatsPanel({
           </strong>
         </article>
 
-        <article className="metric-card" data-testid="metric-card-vested">
+        <article
+          className="metric-card"
+          data-testid="metric-card-vested"
+          tabIndex={0}
+          aria-label={`Total Vested Amount: ${loading ? "Loading" : formattedVested}`}
+        >
           <span id="metric-vested-label">Total Vested</span>
           <strong
             aria-labelledby="metric-vested-label"
