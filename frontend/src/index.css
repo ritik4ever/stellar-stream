@@ -1834,4 +1834,30 @@ input {
   }
 }
 
+/* ── Cancel confirmation modal mobile responsiveness (SSB-2026-069) ── */
+.cancel-modal-panel {
+  max-width: 440px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+@media (max-width: 480px) {
+  .cancel-modal-panel {
+    padding: 1rem;
+    max-width: 100%;
+  }
+
+  .cancel-modal-panel .modal-actions {
+    flex-direction: column-reverse;
+    width: 100%;
+  }
+
+  .cancel-modal-panel .modal-actions button {
+    width: 100%;
+    min-height: 44px;
+    justify-content: center;
+  }
+}
+
+
 
