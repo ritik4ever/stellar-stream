@@ -15,15 +15,22 @@ const signAction = vi.fn();
 const SENDER = "GBX5ZID6H4G365G7O4W6U4E6U4E6U4E6U4E6U4E6U4E6U4E6U4E6U4E6";
 const RECIPIENT = "GDBX5ZID6H4G365G7O4W6U4E6U4E6U4E6U4E6U4E6U4E6U4E6U4E6U4E";
 
-function mockStreamDetail(percentComplete: number, vestedAmount: number, remainingAmount: number, status = "active") {
+function mockStreamDetail(
+  percentComplete: number,
+  vestedAmount: number,
+  remainingAmount: number,
+  status = "active",
+  id = "stream-mobile-test-996",
+  totalAmount = 1000,
+) {
   return http.get("http://localhost:3000/api/streams/:id", () =>
     HttpResponse.json({
       data: {
-        id: "stream-mobile-test-996",
+        id,
         sender: SENDER,
         recipient: RECIPIENT,
         assetCode: "USDC",
-        totalAmount: 1000,
+        totalAmount,
         durationSeconds: 86400,
         startAt: 1700000000,
         createdAt: 1699990000,
@@ -45,7 +52,7 @@ describe("StreamProgressDisplay mobile responsiveness on narrow screens (SSB-202
     vi.clearAllMocks();
     server.use(
       http.get("http://localhost:3000/api/streams/:id/history", () =>
-        HttpResponse.json({ events: [] })
+        HttpResponse.json({ data: [] })
       )
     );
   });
@@ -136,5 +143,44 @@ describe("StreamProgressDisplay mobile responsiveness on narrow screens (SSB-202
     );
 
     expect(remaining).toHaveTextContent("250 USDC");
+  });
+
+  it("keeps a long stream ID, large amount, and canceled status available at 320px and 768px", async () => {
+    const streamId = `stream-${"account".repeat(14)}`;
+    const totalAmount = 987654321012345;
+    server.use(
+      mockStreamDetail(
+        12.5,
+        123456789012345,
+        864197532000000,
+        "canceled",
+        streamId,
+        totalAmount,
+      ),
+    );
+
+    const { container, rerender } = render(
+      <div style={{ width: "320px", overflowX: "hidden" }}>
+        <StreamDetailDrawer streamId={streamId} onClose={onClose} onCancel={onCancel} />
+      </div>,
+    );
+
+    const streamCode = await screen.findByText(streamId);
+    expect(streamCode).toHaveClass("drawer-code");
+    expect(screen.getByText(`${totalAmount} USDC`)).toBeInTheDocument();
+    expect(screen.getByText("canceled", { exact: true })).toBeInTheDocument();
+    expect(screen.getByLabelText("Canceled stream")).toBeInTheDocument();
+    expect(screen.queryByTestId("stream-cancel-btn")).not.toBeInTheDocument();
+    expect(container.querySelector(".drawer-panel")).toBeInTheDocument();
+
+    rerender(
+      <div style={{ width: "768px" }}>
+        <StreamDetailDrawer streamId={streamId} onClose={onClose} onCancel={onCancel} />
+      </div>,
+    );
+
+    expect(streamCode).toHaveTextContent(streamId);
+    expect(screen.getByText(`${totalAmount} USDC`)).toBeInTheDocument();
+    expect(screen.getByLabelText("Canceled stream")).toBeInTheDocument();
   });
 });

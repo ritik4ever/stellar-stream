@@ -508,7 +508,7 @@ export function StreamDetailDrawer({
 
               {/* Actions */}
               {hasActions && (
-                <section className="drawer-section" aria-labelledby="drawer-actions-heading" data-testid="stream-progress-actions">
+                <section className="drawer-section drawer-actions" aria-labelledby="drawer-actions-heading" data-testid="stream-progress-actions">
                   <h3 id="drawer-actions-heading" className="drawer-section-title">Actions</h3>
 
                   {cancelError && (
