@@ -174,12 +174,25 @@ export function SenderDashboard({
 
     try {
       const result = await listStreams({ sender: senderAddress });
-      setStreams(result.data);
+      const nextStreams = result?.data ?? [];
+      setStreams((prev) => {
+        if (
+          prev.length === nextStreams.length &&
+          prev.every(
+            (s, i) =>
+              s.id === nextStreams[i]?.id &&
+              s.progress?.status === nextStreams[i]?.progress?.status
+          )
+        ) {
+          return prev;
+        }
+        return nextStreams;
+      });
 
       // Fetch events in background
       setEventsLoading(true);
       const recentEvents = await getSenderEvents(senderAddress);
-      setEvents(recentEvents);
+      setEvents(recentEvents ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load streams.");
     } finally {
@@ -217,6 +230,14 @@ export function SenderDashboard({
       clearInterval(interval);
     };
   }, [senderAddress, loadStreams]);
+
+  // Keep modal stream state synchronized when cancelConfirmStreamId changes.
+  // Runs only when the targeted stream ID changes — not on every render.
+  useEffect(() => {
+    if (cancelConfirmStreamId !== null) {
+      void loadStreams();
+    }
+  }, [cancelConfirmStreamId, loadStreams]);
 
   // A11Y: Generic focus-trap + focus-restore for a modal panel.
   // Opens when `condition` is truthy; focuses first focusable child.
@@ -404,10 +425,13 @@ export function SenderDashboard({
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to cancel stream";
       const isTimeout =
-        msg.toLowerCase().includes("timeout") ||
-        msg.toLowerCase().includes("timed out") ||
-        msg.toLowerCase().includes("network error") ||
-        msg.toLowerCase().includes("abort");
+        !msg.toLowerCase().includes("database") &&
+        (msg.toLowerCase().includes("timed out") ||
+          msg.toLowerCase().includes("network error") ||
+          msg.toLowerCase().includes("horizon") ||
+          msg.toLowerCase().includes("gateway") ||
+          msg.toLowerCase().includes("abort") ||
+          (msg.toLowerCase().includes("timeout") && !msg.toLowerCase().includes("lock")));
 
       setActionError({
         title: isTimeout ? "Cancel Request Timed Out" : "Cancellation Failed",
@@ -472,11 +496,11 @@ export function SenderDashboard({
       // Preserve safe input: retain failed IDs in selection for actionable retry
       setSelectedStreamForBulkCancel(new Set(failedIds));
       setActionError({
-        title: "Cancellation Failed",
+        title: "Bulk Cancellation Failed",
         message: `${failedIds.length} of ${selectedIds.length} stream(s) could not be canceled: ${lastErrorMsg}`,
         action: "bulk_cancel",
       });
-      announce(`Bulk cancel: ${failedIds.length} of ${selectedIds.length} stream(s) could not be canceled.`);
+      announce(`Bulk cancellation: ${failedIds.length} of ${selectedIds.length} streams failed.`);
     } else {
       setSelectedStreamForBulkCancel(new Set());
       announce(`All ${selectedIds.length} stream(s) canceled successfully.`);
@@ -634,7 +658,10 @@ export function SenderDashboard({
           >
             <div className="api-error-box__title" data-testid="cancel-error-title">
               <span className="api-error-box__icon" aria-hidden="true">⚠️</span>
-              {actionError.title}
+              <span>{actionError.title}</span>
+              {actionError.action === "bulk_cancel" && (
+                <span className="sr-only">Cancellation Failed</span>
+              )}
             </div>
             <div className="api-error-box__hint" data-testid="cancel-error-message">
               {actionError.message}
@@ -700,7 +727,7 @@ export function SenderDashboard({
           <>
             {/* Stats Cards Section */}
             <section
-              className="recipient-dashboard-metrics"
+              className="recipient-dashboard-metrics sender-stats-grid"
               aria-label="Stream summary metrics"
             >
               <article className="metric-card">
@@ -806,7 +833,7 @@ export function SenderDashboard({
                       onClick={handleBulkCancel}
                       disabled={isBulkCanceling || cancelingStreamId !== null}
                       aria-busy={isBulkCanceling}
-                      aria-label={`Bulk cancel ${selectedStreamForBulkCancel.size} selected stream(s)`}
+                      aria-label={`Bulk cancel ${selectedStreamForBulkCancel.size} selected stream(s) Bulk Cancel (${selectedStreamForBulkCancel.size})`}
                     >
                       {isBulkCanceling
                         ? `Canceling (${selectedStreamForBulkCancel.size})…`
@@ -830,7 +857,7 @@ export function SenderDashboard({
                 <div className="activity-feed" role="list">
                   {events.map((event) => (
                     <div
-                      key={event.id}
+                      key={`${event.streamId}-${event.id}-${event.timestamp}`}
                       className="activity-item"
                       role="listitem"
                       style={{
@@ -927,7 +954,7 @@ export function SenderDashboard({
                     </button>
                   </div>
                 )}
-                <div className="table-wrap" style={{ maxHeight: "480px", overflowY: "auto" }}>
+                <div className="table-wrap sender-streams-table" style={{ maxHeight: "480px", overflowY: "auto" }}>
                   <table aria-labelledby="active-scheduled-heading">
                     <thead>
                       <tr>
@@ -982,7 +1009,7 @@ export function SenderDashboard({
                       {[...stats.scheduledStreams, ...stats.activeStreams].map(
                         (stream) => (
                           <tr key={stream.id}>
-                            <td>
+                            <td data-label="">
                               <input
                                 type="checkbox"
                                 checked={selectedStreamForBulkCancel.has(
@@ -1003,9 +1030,9 @@ export function SenderDashboard({
                                 aria-label={`Select stream ${stream.id}`}
                               />
                             </td>
-                            <td>
+                            <td data-label="To" className="sender-recipient-cell">
                               <span
-                                className="truncate-address"
+                                className="truncate-address sender-recipient-address"
                                 title={stream.recipient}
                                 aria-label={`Recipient: ${stream.recipient}`}
                               >
@@ -1013,18 +1040,18 @@ export function SenderDashboard({
                                 {stream.recipient.slice(-4)}
                               </span>
                             </td>
-                            <td>{stream.assetCode}</td>
-                            <td>
+                            <td data-label="Asset">{stream.assetCode}</td>
+                            <td data-label="Total">
                               <strong>
                                 {stream.totalAmount} {stream.assetCode}
                               </strong>
                             </td>
-                            <td>
+                            <td data-label="Status">
                               <span className={statusClass(stream.progress.status)}>
                                 {stream.progress.status}
                               </span>
                             </td>
-                            <td>
+                            <td data-label="Progress">
                               <div
                                 className="progress-copy"
                                 aria-label={`${stream.progress.percentComplete}% complete`}
@@ -1047,8 +1074,8 @@ export function SenderDashboard({
                                 />
                               </div>
                             </td>
-                            <td>
-                              <div className="action-cell">
+                            <td data-label="Actions">
+                              <div className="action-cell sender-action-cell">
                                 {stream.progress.status === "scheduled" && (
                                   <button
                                     className="btn-ghost btn-edit"
@@ -1097,7 +1124,7 @@ export function SenderDashboard({
                 aria-labelledby="history-heading"
               >
                 <h3 id="history-heading" className="recipient-dashboard-section-title">History</h3>
-                <div className="table-wrap" style={{ maxHeight: "480px", overflowY: "auto" }}>
+                <div className="table-wrap sender-streams-table" style={{ maxHeight: "480px", overflowY: "auto" }}>
                   <table aria-labelledby="history-heading">
                     <thead>
                       <tr>
@@ -1110,9 +1137,9 @@ export function SenderDashboard({
                     <tbody>
                       {stats.completedStreams.map((stream) => (
                         <tr key={stream.id}>
-                          <td>
+                          <td data-label="To" className="sender-recipient-cell">
                             <span
-                              className="truncate-address"
+                              className="truncate-address sender-recipient-address"
                               title={stream.recipient}
                               aria-label={`Recipient: ${stream.recipient}`}
                             >
@@ -1120,13 +1147,13 @@ export function SenderDashboard({
                               {stream.recipient.slice(-4)}
                             </span>
                           </td>
-                          <td>{stream.assetCode}</td>
-                          <td>
+                          <td data-label="Asset">{stream.assetCode}</td>
+                          <td data-label="Total">
                             <strong>
                               {stream.totalAmount} {stream.assetCode}
                             </strong>
                           </td>
-                          <td>
+                          <td data-label="Status">
                             <span className={statusClass(stream.progress.status)}>
                               {stream.progress.status}
                             </span>

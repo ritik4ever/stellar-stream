@@ -52,12 +52,6 @@ export function StreamMetricsChart({
   const pinchRef = useRef<{ startDist: number; startRange: [number, number] } | null>(null);
 
   useEffect(() => {
-    if (visibleDateRange) {
-      setA11yAnnouncement(`Metrics chart showing time range: ${visibleDateRange}.`);
-    }
-  }, [visibleDateRange]);
-
-  useEffect(() => {
     let mounted = true;
 
     async function loadStats() {
@@ -113,6 +107,12 @@ export function StreamMetricsChart({
     if (currentData.length === 1) return formatDate(currentData[0].timestamp);
     return `${formatDate(currentData[0].timestamp)} – ${formatDate(currentData[currentData.length - 1].timestamp)}`;
   }, [currentData]);
+
+  useEffect(() => {
+    if (visibleDateRange) {
+      setA11yAnnouncement(`Metrics chart showing time range: ${visibleDateRange}.`);
+    }
+  }, [visibleDateRange]);
 
   const zoomInOut = useCallback((factor: number) => {
     setZoomRange((prev) => {

@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, waitFor, act, cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { http, HttpResponse } from "msw";
-import { setupServer } from "msw/node";
+import { server } from "../server";
 import { SenderDashboard } from "./SenderDashboard";
 import { Stream } from "../types/stream";
 
@@ -51,24 +51,24 @@ const mockCompleted = (id: string): Stream => ({
   },
 });
 
-const server = setupServer(
-  http.get("/api/streams", () => HttpResponse.json({ data: [mockActive("stream-active-1")] })),
-  http.get("/api/streams/sender/:address", () =>
-    HttpResponse.json({ data: [mockActive("stream-active-1")] })
-  ),
-  http.get("/api/streams/sender/:address/events", () => HttpResponse.json({ data: [] })),
-  http.get("/api/streams/:id/history", () => HttpResponse.json({ data: [] })),
-  http.post("/api/streams/:id/cancel", () =>
-    HttpResponse.json({ data: mockCanceled("stream-active-1") })
-  )
-);
+beforeEach(() => {
+  server.use(
+    http.get("/api/streams", () => HttpResponse.json({ data: [mockActive("stream-active-1")] })),
+    http.get("/api/streams/sender/:address", () =>
+      HttpResponse.json({ data: [mockActive("stream-active-1")] })
+    ),
+    http.get("/api/streams/sender/:address/events", () => HttpResponse.json({ data: [] })),
+    http.get("/api/streams/:id/history", () => HttpResponse.json({ data: [] })),
+    http.post("/api/streams/:id/cancel", () =>
+      HttpResponse.json({ data: mockCanceled("stream-active-1") })
+    )
+  );
+});
 
-beforeAll(() => server.listen({ onUnhandledRequest: "bypass" }));
 afterEach(() => {
   cleanup();
-  server.resetHandlers();
+  vi.useRealTimers();
 });
-afterAll(() => server.close());
 
 describe("Cancel confirmation boundary state handling (SSB-2026-066)", () => {
   it("renders active ready-to-act confirmation modal for active streams", async () => {
@@ -100,6 +100,9 @@ describe("Cancel confirmation boundary state handling (SSB-2026-066)", () => {
   });
 
   it("renders explicit boundary notice and disabled non-actionable control for already canceled stream", async () => {
+    // Use fake timers so we can advance the 5-second polling interval
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
     // Initial load has active stream, then switches to canceled when modal is invoked
     let currentStreams = [mockActive("stream-boundary-canceled")];
     server.use(
@@ -108,7 +111,7 @@ describe("Cancel confirmation boundary state handling (SSB-2026-066)", () => {
       )
     );
 
-    const { rerender } = render(<SenderDashboard senderAddress={SENDER} />);
+    render(<SenderDashboard senderAddress={SENDER} />);
 
     await waitFor(() =>
       expect(screen.getByText("Active & Scheduled")).toBeInTheDocument()
@@ -119,11 +122,20 @@ describe("Cancel confirmation boundary state handling (SSB-2026-066)", () => {
 
     await screen.findByRole("dialog");
 
-    // Simulate backend state transition to canceled while stream is targeted
+    // Simulate backend state transition: stream canceled while modal is open
     currentStreams = [mockCanceled("stream-boundary-canceled")];
-    rerender(<SenderDashboard senderAddress={SENDER} />);
+
+    // Advance poll interval (setInterval is faked, setTimeout is real so waitFor still works)
+    await act(async () => {
+      vi.advanceTimersByTime(5100);
+    });
 
     // Asserts explicit boundary state
+    await waitFor(() => {
+      const title = screen.getByTestId("cancel-modal-title");
+      expect(title).toHaveTextContent("Stream already canceled");
+    });
+
     const title = screen.getByTestId("cancel-modal-title");
     expect(title).toHaveTextContent("Stream already canceled");
 
@@ -148,6 +160,9 @@ describe("Cancel confirmation boundary state handling (SSB-2026-066)", () => {
   });
 
   it("renders explicit boundary notice and disabled non-actionable control for already completed stream", async () => {
+    // Use fake timers so we can advance the 5-second polling interval
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
     let currentStreams = [mockActive("stream-boundary-completed")];
     server.use(
       http.get("/api/streams/sender/:address", () =>
@@ -155,7 +170,7 @@ describe("Cancel confirmation boundary state handling (SSB-2026-066)", () => {
       )
     );
 
-    const { rerender } = render(<SenderDashboard senderAddress={SENDER} />);
+    render(<SenderDashboard senderAddress={SENDER} />);
 
     await waitFor(() =>
       expect(screen.getByText("Active & Scheduled")).toBeInTheDocument()
@@ -166,9 +181,17 @@ describe("Cancel confirmation boundary state handling (SSB-2026-066)", () => {
 
     await screen.findByRole("dialog");
 
-    // Stream completes
+    // Stream completes while modal is open
     currentStreams = [mockCompleted("stream-boundary-completed")];
-    rerender(<SenderDashboard senderAddress={SENDER} />);
+
+    // Advance poll interval to trigger background sync
+    await act(async () => {
+      vi.advanceTimersByTime(5100);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("cancel-modal-title")).toHaveTextContent("Stream already completed");
+    });
 
     expect(screen.getByTestId("cancel-modal-title")).toHaveTextContent("Stream already completed");
 

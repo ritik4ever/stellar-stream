@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { http, HttpResponse } from "msw";
-import { setupServer } from "msw/node";
+import { server } from "../server";
 import { SenderDashboard } from "./SenderDashboard";
 import { Stream } from "../types/stream";
 
@@ -42,35 +42,36 @@ const mockCanceledStream = (id: string): Stream => ({
 let cancelAttempts = 0;
 let shouldTimeout = true;
 
-const server = setupServer(
-  http.get("/api/streams", () => HttpResponse.json({ data: [mockActiveStream("stream-timeout-1")] })),
-  http.get("/api/streams/sender/:address", () => {
-    return HttpResponse.json({
-      data: cancelAttempts > 1 ? [mockCanceledStream("stream-timeout-1")] : [mockActiveStream("stream-timeout-1")],
-    });
-  }),
-  http.get("/api/streams/sender/:address/events", () => HttpResponse.json({ data: [] })),
-  http.get("/api/streams/:id/history", () => HttpResponse.json({ data: [] })),
-  http.post("/api/streams/:id/cancel", () => {
-    cancelAttempts++;
-    if (shouldTimeout) {
-      return HttpResponse.json(
-        { message: "Cancel submission timed out while contacting Horizon RPC" },
-        { status: 504 }
-      );
-    }
-    return HttpResponse.json({ data: mockCanceledStream("stream-timeout-1") });
-  })
-);
+beforeEach(() => {
+  cancelAttempts = 0;
+  shouldTimeout = true;
+  server.use(
+    http.get("/api/streams", () => HttpResponse.json({ data: [mockActiveStream("stream-timeout-1")] })),
+    http.get("/api/streams/sender/:address", () => {
+      return HttpResponse.json({
+        data: cancelAttempts > 1 ? [mockCanceledStream("stream-timeout-1")] : [mockActiveStream("stream-timeout-1")],
+      });
+    }),
+    http.get("/api/streams/sender/:address/events", () => HttpResponse.json({ data: [] })),
+    http.get("/api/streams/:id/history", () => HttpResponse.json({ data: [] })),
+    http.post("/api/streams/:id/cancel", () => {
+      cancelAttempts++;
+      if (shouldTimeout) {
+        return HttpResponse.json(
+          { message: "Cancel submission timed out while contacting Horizon RPC" },
+          { status: 504 }
+        );
+      }
+      return HttpResponse.json({ data: mockCanceledStream("stream-timeout-1") });
+    })
+  );
+});
 
-beforeAll(() => server.listen({ onUnhandledRequest: "bypass" }));
 afterEach(() => {
   cleanup();
-  server.resetHandlers();
   cancelAttempts = 0;
   shouldTimeout = true;
 });
-afterAll(() => server.close());
 
 describe("Cancel confirmation timeout and recovery path (SSB-2026-067)", () => {
   it("displays actionable recovery error when cancel submission times out", async () => {

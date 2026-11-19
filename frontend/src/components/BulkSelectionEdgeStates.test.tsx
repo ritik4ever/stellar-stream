@@ -1,9 +1,9 @@
 import React from "react";
-import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { http, HttpResponse } from "msw";
-import { setupServer } from "msw/node";
+import { server } from "../server";
 import { StreamsTable } from "./StreamsTable";
 import { SenderDashboard } from "./SenderDashboard";
 import { Stream } from "../types/stream";
@@ -44,45 +44,45 @@ const mockCompletedStream = (id: string): Stream => ({
 let failStreamId: string | null = "stream-edge-2";
 let executedCancelIds: string[] = [];
 
-const server = setupServer(
-  http.get("/api/streams", () => HttpResponse.json({ data: [] })),
-  http.get("/api/streams/sender/:address", () =>
-    HttpResponse.json({
-      data: [
-        mockActiveStream("stream-edge-1"),
-        mockActiveStream("stream-edge-2"),
-        mockActiveStream("stream-edge-3"),
-      ],
+function setupHandlers() {
+  server.use(
+    http.get("/api/streams", () => HttpResponse.json({ data: [] })),
+    http.get("/api/streams/sender/:address", () =>
+      HttpResponse.json({
+        data: [
+          mockActiveStream("stream-edge-1"),
+          mockActiveStream("stream-edge-2"),
+          mockActiveStream("stream-edge-3"),
+        ],
+      })
+    ),
+    http.get("/api/streams/sender/:address/events", () => HttpResponse.json({ data: [] })),
+    http.get("/api/streams/:id/history", () => HttpResponse.json({ data: [] })),
+    http.post("/api/streams/:id/cancel", ({ params }) => {
+      const id = String(params.id);
+      executedCancelIds.push(id);
+      if (id === failStreamId) {
+        return HttpResponse.json(
+          { message: "Simulated Horizon timeout on batch item" },
+          { status: 504 }
+        );
+      }
+      return HttpResponse.json({
+        data: {
+          ...mockActiveStream(id),
+          progress: { status: "canceled", ratePerSecond: 0, elapsedSeconds: 1800, vestedAmount: 500, remainingAmount: 500, percentComplete: 50 },
+        },
+      });
     })
-  ),
-  http.get("/api/streams/sender/:address/events", () => HttpResponse.json({ data: [] })),
-  http.get("/api/streams/:id/history", () => HttpResponse.json({ data: [] })),
-  http.post("/api/streams/:id/cancel", ({ params }) => {
-    const id = String(params.id);
-    executedCancelIds.push(id);
-    if (id === failStreamId) {
-      return HttpResponse.json(
-        { message: "Simulated Horizon timeout on batch item" },
-        { status: 504 }
-      );
-    }
-    return HttpResponse.json({
-      data: {
-        ...mockActiveStream(id),
-        progress: { status: "canceled", ratePerSecond: 0, elapsedSeconds: 1800, vestedAmount: 500, remainingAmount: 500, percentComplete: 50 },
-      },
-    });
-  })
-);
+  );
+}
 
-beforeAll(() => server.listen({ onUnhandledRequest: "bypass" }));
-afterEach(() => {
+beforeEach(() => {
   cleanup();
-  server.resetHandlers();
   failStreamId = "stream-edge-2";
   executedCancelIds = [];
+  setupHandlers();
 });
-afterAll(() => server.close());
 
 describe("Bulk selection edge and failure states (SSB-2026-075)", () => {
   describe("Select-all across a filtered page", () => {
