@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { FreighterState } from "../hooks/useFreighter";
 
 interface WalletButtonProps {
@@ -11,30 +12,74 @@ function truncateAddress(addr: string): string {
 
 export function WalletButton({ wallet }: WalletButtonProps) {
   const { installed, address, status, error, connect, disconnect } = wallet;
+  const prevAddressRef = useRef<string | null>(address);
+  const [announcement, setAnnouncement] = useState<string>("");
+
+  useEffect(() => {
+    if (status === "connected" && address) {
+      if (prevAddressRef.current && prevAddressRef.current !== address) {
+        setAnnouncement(`Wallet account switched to ${truncateAddress(address)}`);
+      } else if (!prevAddressRef.current) {
+        setAnnouncement(`Wallet connected: ${truncateAddress(address)}`);
+      }
+      prevAddressRef.current = address;
+    } else if (status === "idle" && prevAddressRef.current) {
+      setAnnouncement("Wallet disconnected");
+      prevAddressRef.current = null;
+    } else if (status === "connecting") {
+      setAnnouncement("Connecting to wallet…");
+    }
+  }, [status, address]);
 
   if (status === "connected" && address) {
     return (
       <div className="wallet-status">
-        <span className="wallet-address" title={address}>
-          <span className="wallet-dot wallet-dot--connected" aria-hidden />
+        <span
+          className="wallet-address"
+          title={address}
+          aria-label={`Connected wallet address: ${address}`}
+          tabIndex={0}
+        >
+          <span className="wallet-dot wallet-dot--connected" aria-hidden="true" />
           {truncateAddress(address)}
         </span>
         <button
           className="btn-ghost wallet-disconnect"
           type="button"
           onClick={disconnect}
+          aria-label={`Disconnect wallet ${truncateAddress(address)}`}
         >
           Disconnect
         </button>
+        <div
+          className="sr-only"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          data-testid="wallet-status-announcement"
+        >
+          {announcement}
+        </div>
       </div>
     );
   }
 
   if (status === "connecting") {
     return (
-      <button className="btn-primary wallet-btn" type="button" disabled aria-busy>
-        Connecting…
-      </button>
+      <div className="wallet-status">
+        <button className="btn-primary wallet-btn" type="button" disabled aria-busy="true">
+          Connecting…
+        </button>
+        <div
+          className="sr-only"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          data-testid="wallet-status-announcement"
+        >
+          {announcement}
+        </div>
+      </div>
     );
   }
 
@@ -118,6 +163,15 @@ export function WalletButton({ wallet }: WalletButtonProps) {
           Retry Connection
         </button>
       )}
+      <div
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="wallet-status-announcement"
+      >
+        {announcement}
+      </div>
     </div>
   );
 }
