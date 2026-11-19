@@ -648,6 +648,29 @@ td {
   .field-group input,
   .field-group select {
     min-height: 44px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .field-group select#stream-asset,
+  .field-group input#stream-asset {
+    min-height: 44px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    word-break: break-all;
+  }
+
+  #asset-hint {
+    word-break: break-all;
+    overflow-wrap: anywhere;
+    display: block;
+  }
+
+  .asset-boundary-tag {
+    word-break: break-word;
+    max-width: 100%;
   }
 
   .fee-preview-list div {
