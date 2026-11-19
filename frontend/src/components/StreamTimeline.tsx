@@ -54,7 +54,11 @@ export const FILTER_BUTTONS: Array<{ type: EventType; label: string }> = [
 
 export function FilterBar({ activeFilters, onToggle, onClear }: FilterBarProps) {
   return (
-    <div className="flex flex-wrap gap-2 items-center p-3 bg-white border border-gray-200 rounded-lg">
+    <div
+      role="group"
+      aria-label="Filter events by type"
+      className="flex flex-wrap gap-2 items-center p-3 bg-white border border-gray-200 rounded-lg"
+    >
       <span className="text-sm font-medium text-gray-700">Filter by:</span>
       {FILTER_BUTTONS.map(({ type, label }) => {
         const isActive = activeFilters.has(type);
@@ -63,6 +67,7 @@ export function FilterBar({ activeFilters, onToggle, onClear }: FilterBarProps) 
             key={type}
             onClick={() => onToggle(type)}
             aria-pressed={isActive}
+            aria-label={`Filter by ${label}`}
             className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
               isActive
                 ? "bg-blue-600 text-white hover:bg-blue-700"
@@ -76,6 +81,7 @@ export function FilterBar({ activeFilters, onToggle, onClear }: FilterBarProps) 
       {activeFilters.size > 0 && (
         <button
           onClick={onClear}
+          aria-label="Clear all active event filters"
           className="ml-2 px-3 py-1.5 text-sm font-medium text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors"
         >
           Clear filters
@@ -259,14 +265,30 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
   }
 
   return (
-    <div className="activity-feed">
+    <div className="activity-feed" role="feed" aria-label="Stream event timeline">
+      {/* Polite Screen Reader Live Announcement */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        data-testid="timeline-a11y-announcer"
+      >
+        {`Showing ${filteredEvents.length} events.${activeFilters.size > 0 ? ` Filtered by ${Array.from(activeFilters).join(", ")}.` : ""}`}
+      </div>
+
       {isGlobalFeed && (
         <div className="activity-meta" style={{ justifyContent: "space-between" }}>
           <span>
             Latest across all streams
             {lastUpdatedAt ? ` · updated ${timeAgo(Math.floor(lastUpdatedAt / 1000))}` : ""}
           </span>
-          <button type="button" className="btn-ghost" onClick={loadHistory}>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={loadHistory}
+            aria-label="Refresh stream event history"
+          >
             Refresh
           </button>
         </div>
@@ -276,18 +298,29 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
         onToggle={(type) => setActiveFilters((prev) => toggleFilter(prev, type))}
         onClear={() => setActiveFilters(clearFilters())}
       />
-      {filteredEvents.map((event) => {
+      {filteredEvents.map((event, index) => {
         const isConcurrent = isConcurrentEvent(event, filteredEvents);
         return (
-          <div key={event.id} className="activity-item" data-testid={`activity-item-${event.id}`}>
-            <div className="activity-icon">{getEventIcon(event.eventType)}</div>
+          <article
+            key={event.id}
+            className="activity-item"
+            data-testid={`activity-item-${event.id}`}
+            aria-labelledby={`event-title-${event.id}`}
+            tabIndex={0}
+            aria-posinset={index + 1}
+            aria-setsize={filteredEvents.length}
+          >
+            <div className="activity-icon" aria-hidden="true">{getEventIcon(event.eventType)}</div>
             <div className="activity-content">
               <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.5rem" }}>
-                <p className="activity-title" style={{ margin: 0 }}>{formatEventTitle(event.eventType)}</p>
+                <p id={`event-title-${event.id}`} className="activity-title" style={{ margin: 0 }}>
+                  {formatEventTitle(event.eventType)}
+                </p>
                 {isConcurrent && (
                   <span
                     className="concurrent-event-badge"
                     data-testid="concurrent-event-badge"
+                    aria-label="Simultaneous event occurred at the same ledger timestamp"
                     style={{
                       display: "inline-block",
                       fontSize: "0.75rem",
@@ -305,7 +338,11 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
               <div className="activity-meta">
                 <span>{timeAgo(event.timestamp)}</span>
                 {isGlobalFeed && (
-                  <a href={`#stream-${event.streamId}`} className="muted">
+                  <a
+                    href={`#stream-${event.streamId}`}
+                    className="muted"
+                    aria-label={`Navigate to Stream ${event.streamId}`}
+                  >
                     Stream {event.streamId}
                   </a>
                 )}
@@ -319,7 +356,7 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
                 </div>
               )}
             </div>
-          </div>
+          </article>
         );
       })}
     </div>
