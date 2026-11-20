@@ -1,0 +1,28 @@
+name: Security Audit
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly on Monday
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - name: Run npm audit
+        run: npm audit --audit-level=high
+        continue-on-error: true
+      - name: Install cargo-audit
+        run: cargo install cargo-audit 2>/dev/null || true
+      - name: Run cargo audit
+        if: hashFiles('contracts/Cargo.lock') != ''
+        working-directory: contracts
+        run: cargo audit
+        continue-on-error: true
