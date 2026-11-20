@@ -17,4 +17,10 @@ backend/data/
 # See docs/CONTRACT_BINDINGS.md for the full workflow.
 
 # Deployed contract ID (changes per deployment, not committed)
-contracts/contract_id.txt
+contracts/contract_id.txt.vscode/
+.idea/
+*.swp
+dist/
+build/
+.DS_Store
+.env.local
