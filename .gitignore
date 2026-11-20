@@ -11,6 +11,11 @@ contracts/.stellar/
 backend/data/
 .current_bench.tmp
 .bench_results.tmp
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!deployment/terraform/env/*.example
 
 # Generated Soroban contract bindings are committed to the repository
 # Regenerate with: CONTRACT_ID=$(cat contracts/contract_id.txt) npm run gen:bindings
