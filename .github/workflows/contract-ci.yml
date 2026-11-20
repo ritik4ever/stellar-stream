@@ -25,9 +25,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
+        # No explicit toolchain input: the pin in contracts/rust-toolchain.toml
+        # (nightly-2024-12-01) is the source of truth. Keep in sync with
+        # contract-smoke.yml and bindings-drift.yml.
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown,wasm32v1-none
 
       - name: Cache cargo registry and build artifacts
         uses: actions/cache@v4
@@ -68,10 +71,19 @@ jobs:
           RUSTFLAGS: "-D warnings"
         run: cargo test --locked
 
+      - name: Install Soroban CLI
+        # Pinned to the soroban-sdk major used in contracts/Cargo.toml so the
+        # CI build uses the same toolchain as scripts/deploy.sh.
+        run: cargo install --locked soroban-cli --version 21.0.0
+
       - name: Build WASM binary and report size
         run: |
-          cargo build --target wasm32-unknown-unknown --release
-          SIZE=$(wc -c < target/wasm32-unknown-unknown/release/stellar_stream.wasm)
-          echo "WASM Binary Size: ${SIZE} bytes ($(numfmt --to=iec ${SIZE}))"
+          soroban contract build
+          WASM_FILE="target/wasm32v1-none/release/stellar_stream.wasm"
+          if [ ! -f "$WASM_FILE" ]; then
+            WASM_FILE="target/wasm32-unknown-unknown/release/stellar_stream.wasm"
+          fi
+          SIZE=$(wc -c < "$WASM_FILE")
+          echo "WASM Binary Size: ${SIZE} bytes ($(numfmt --to=iec ${SIZE})) ($WASM_FILE)"
           echo "## WASM Binary Size" >> $GITHUB_STEP_SUMMARY
           echo "**$(numfmt --to=iec ${SIZE})** (${SIZE} bytes)" >> $GITHUB_STEP_SUMMARY

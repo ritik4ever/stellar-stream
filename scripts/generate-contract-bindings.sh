@@ -55,9 +55,22 @@ echo "RPC URL     : $RPC_URL"
 echo "Output      : $OUTPUT_DIR"
 echo ""
 
+# Preserve the tracked README.md across the wipe so the drift check only
+# reports real binding changes (see .github/workflows/bindings-drift.yml).
+README_BACKUP=""
+if [ -f "$OUTPUT_DIR/README.md" ]; then
+    README_BACKUP="$(mktemp)"
+    cp "$OUTPUT_DIR/README.md" "$README_BACKUP"
+fi
+
 # Wipe previous output so stale files don't linger
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
+
+if [ -n "$README_BACKUP" ]; then
+    cp "$README_BACKUP" "$OUTPUT_DIR/README.md"
+    rm -f "$README_BACKUP"
+fi
 
 soroban contract bindings typescript \
     --contract-id "$CONTRACT_ID" \

@@ -150,8 +150,11 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Profile WASM binary size
-WASM_FILE="target/wasm32-unknown-unknown/release/stellar_stream.wasm"
+# Profile WASM binary size (informational only; prefers the deployed artifact)
+WASM_FILE="target/wasm32v1-none/release/stellar_stream.wasm"
+if [ ! -f "$WASM_FILE" ]; then
+    WASM_FILE="target/wasm32-unknown-unknown/release/stellar_stream.wasm"
+fi
 if [ -f "$WASM_FILE" ]; then
     SIZE_BYTES=$(stat -f%z "$WASM_FILE" 2>/dev/null || stat -c%s "$WASM_FILE" 2>/dev/null || echo "0")
     SIZE_KB=$(echo "scale=2; $SIZE_BYTES / 1024" | bc 2>/dev/null || echo "unknown")

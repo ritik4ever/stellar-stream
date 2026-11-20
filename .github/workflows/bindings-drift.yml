@@ -5,7 +5,7 @@ name: CI - Contract Bindings Drift Check
 
 on:
   workflow_run:
-    workflows: ["CI - Build Checks"]
+    workflows: ["Soroban Contract CI"]
     types:
       - completed
 
@@ -29,10 +29,32 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Install Rust toolchain (pinned by contracts/rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Soroban CLI
+        # Pinned to the soroban-sdk major used in contracts/Cargo.toml (21.0.0;
+        # Cargo.lock resolves the 21.x minor). Keep in sync with contract-smoke.yml.
+        run: cargo install --locked soroban-cli --version 21.0.0
+
       - name: Generate contract bindings
+        # GitHub expressions cannot read files, so resolve CONTRACT_ID in the
+        # run step: prefer secrets.CONTRACT_ID, fall back to the tracked
+        # contracts/contract_id.txt present in a fresh checkout.
         env:
-          CONTRACT_ID: ${{ secrets.CONTRACT_ID || format('cat contracts/contract_id.txt') }}
-        run: npm run gen:bindings
+          CONTRACT_ID_SECRET: ${{ secrets.CONTRACT_ID }}
+        run: |
+          CONTRACT_ID="${CONTRACT_ID_SECRET:-}"
+          if [ -z "$CONTRACT_ID" ] && [ -f contracts/contract_id.txt ]; then
+            CONTRACT_ID=$(cat contracts/contract_id.txt)
+          fi
+          if [ -z "$CONTRACT_ID" ]; then
+            echo "::error::CONTRACT_ID is not set and contracts/contract_id.txt is missing."
+            exit 1
+          fi
+          CONTRACT_ID="$CONTRACT_ID" npm run gen:bindings
 
       - name: Check for uncommitted changes in generated bindings
         run: |
