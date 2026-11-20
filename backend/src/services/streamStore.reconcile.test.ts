@@ -27,6 +27,7 @@ const mockState = vi.hoisted(() => ({
   streamFailures: new Map<number, Error>(),
   streamTransientFailures: new Map<number, number>(),
   eventInsertionFailure: false,
+  readBackCreatedAt: undefined as number | undefined,
 }));
 
 const dbMocks = vi.hoisted(() => ({
@@ -149,6 +150,33 @@ vi.mock("@stellar/stellar-sdk", () => {
 function createDbMock() {
   return {
     prepare(sql: string) {
+      if (sql.includes("SELECT * FROM streams WHERE id = ?")) {
+        return {
+          get: (id: string) => {
+            const stream = mockState.upsertedStreams.find((item) => item.id === id);
+            if (!stream) return undefined;
+            return {
+              id: stream.id,
+              sender: stream.sender,
+              recipient: stream.recipient,
+              asset_code: stream.assetCode,
+              total_amount: stream.totalAmount,
+              duration_seconds: stream.durationSeconds,
+              start_at: stream.startAt,
+              created_at: mockState.readBackCreatedAt ?? stream.createdAt,
+              canceled_at: stream.canceledAt ?? null,
+              completed_at: stream.completedAt ?? null,
+              refunded_amount: null,
+              archived_at: null,
+              paused_at: null,
+              paused_duration: 0,
+              cliff_seconds: 0,
+              metadata: null,
+            };
+          },
+        };
+      }
+
       if (sql.includes("SELECT id FROM streams")) {
         return {
           all: () =>
@@ -222,6 +250,7 @@ describe("reconcileMissingStreams – sync correctness", () => {
     mockState.streamFailures = new Map<number, Error>();
     mockState.streamTransientFailures = new Map<number, number>();
     mockState.eventInsertionFailure = false;
+    mockState.readBackCreatedAt = undefined;
 
     dbMocks.getDb.mockReturnValue(createDbMock());
     dbMocks.initDb.mockImplementation(() => undefined);
@@ -536,5 +565,48 @@ describe("reconcileMissingStreams – sync correctness", () => {
     expect(stored[0].canceledAt).toBeDefined();
     // Created event must not be duplicated
     expect(eventHistoryMocks.recordEventWithDb).not.toHaveBeenCalled();
+  });
+
+  it("returns the committed local record rather than the fetched RPC object", async () => {
+    mockState.chainStreams.set(1, {
+      sender: "GSENDER1",
+      recipient: "GRECIPIENT1",
+      token: "USDC",
+      total_amount: 100,
+      start_time: 10,
+      end_time: 20,
+      canceled: false,
+    });
+    mockState.readBackCreatedAt = 99;
+
+    const { initSoroban, reconcileStream } = await import("./streamStore");
+    await initSoroban();
+
+    const updated = await reconcileStream("1");
+
+    expect(updated.createdAt).toBe(99);
+    expect(mockState.upsertedStreams[0].createdAt).toBe(10);
+  });
+
+  it("does not report a successful reconciliation when its transaction fails", async () => {
+    mockState.chainStreams.set(1, {
+      sender: "GSENDER1",
+      recipient: "GRECIPIENT1",
+      token: "USDC",
+      total_amount: 100,
+      start_time: 10,
+      end_time: 20,
+      canceled: false,
+    });
+    mockState.eventInsertionFailure = true;
+
+    const { initSoroban, reconcileStream } = await import("./streamStore");
+    await initSoroban();
+
+    await expect(reconcileStream("1")).rejects.toThrow(
+      "simulated event insertion failure",
+    );
+    expect(mockState.existingStreamIds.has("1")).toBe(false);
+    expect(mockState.upsertedStreams).toHaveLength(0);
   });
 });
