@@ -316,17 +316,35 @@ public method:
 
 ## CI / automated regeneration
 
-To regenerate bindings in a CI pipeline, add a step after deployment:
+Automated contract binding regeneration runs in CI after testnet contract deployment (`.github/workflows/contract-deploy.yml` and `.github/workflows/contract-smoke.yml`).
+
+Workflow steps after contract deployment:
+
+1. **Auto-generate contract bindings:**
+   Runs `npm run gen:bindings` using the deployed `CONTRACT_ID` (either from environment variable or automatically read from `contracts/contract_id.txt`).
+
+2. **Frontend TypeScript compilation check:**
+   Validates that the generated TypeScript bindings compile cleanly without errors using `npx tsc --noEmit` in `frontend/`.
+
+3. **Automated Pull Request creation:**
+   If generated bindings differ from repository state, CI automatically creates a pull request (branch: `auto-update-contract-bindings`) containing the updated bindings.
 
 ```yaml
-- name: Generate contract bindings
-  env:
-    CONTRACT_ID: ${{ steps.deploy.outputs.contract_id }}
+- name: Auto-Regenerate Contract Bindings
   run: npm run gen:bindings
-```
 
-The generated files do not need to be committed they can be regenerated from
-the deployed contract ID on every CI run.
+- name: Validate Frontend TypeScript Compilation
+  working-directory: frontend
+  run: npx tsc --noEmit
+
+- name: Create PR with Updated Bindings
+  uses: peter-evans/create-pull-request@v6
+  with:
+    token: ${{ secrets.GITHUB_TOKEN }}
+    commit-message: "chore(contracts): auto-regenerate contract bindings after testnet deploy"
+    title: "chore(contracts): update contract bindings after deploy"
+    branch: auto-update-contract-bindings
+```
 
 ---
 
