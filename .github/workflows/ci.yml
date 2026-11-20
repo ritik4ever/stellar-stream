@@ -23,6 +23,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash scripts/compose-up.test.sh
+  deployment-config-smoke:
+    name: Deployment Config Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/verify-deployment.test.sh
   e2e-run-script:
     name: E2E Run Script
     runs-on: ubuntu-latest
