@@ -1,0 +1,10 @@
+project_name        = "stellar-stream"
+environment         = "production"
+aws_region          = "us-east-1"
+frontend_bucket_name = "stellar-stream-production-frontend-0001"
+backend_image       = "123456789012.dkr.ecr.us-east-1.amazonaws.com/stellar-stream-backend:production"
+backend_desired_count = 2
+jwt_secret_arn      = "arn:aws:secretsmanager:us-east-1:123456789012:secret:stellar-stream/production/jwt-secret"
+admin_api_key_arn   = "arn:aws:secretsmanager:us-east-1:123456789012:secret:stellar-stream/production/admin-api-key"
+webhook_signing_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:stellar-stream/production/webhook-signing-secret"
+allowed_origins     = ["https://app.example.com"]
