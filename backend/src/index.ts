@@ -917,8 +917,10 @@ app.get("/api/events", readLimiter, (req: Request, res: Response) => {
   const eventType = query.eventType as StreamEventType | undefined;
   const streamId = query.streamId;
   const since = query.since;
+  const actor = query.actor;
+  const to = query.to;
 
-  const total = countAllEvents(eventType, streamId, since);
+  const total = countAllEvents(eventType, streamId, since, actor, to);
 
   const page = query.page ?? PAGINATION_DEFAULT_PAGE;
   const pageSize = query.pageSize ?? query.limit ?? PAGINATION_DEFAULT_LIMIT;
@@ -931,6 +933,8 @@ app.get("/api/events", readLimiter, (req: Request, res: Response) => {
     query.cursor,
     streamId,
     since,
+    actor,
+    to,
   );
 
   res.json({ data, total, page, pageSize, limit: pageSize });
