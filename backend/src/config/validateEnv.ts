@@ -355,29 +355,31 @@ export function validateEnv(): ValidatedConfig {
   const network = resolveStellarNetwork();
   validateNetworkConsistency(network.name);
 
+  // Derive effective values on a copy. process.env is only updated once every
+  // check has passed (see commit step below), so a failed validation never
+  // leaves legacy consumers reading half-applied configuration.
+  const effective: NodeJS.ProcessEnv = { ...process.env };
+
   // Keep legacy consumers that read process.env directly on the same profile
   // as the validated config. In particular, the previous static defaults sent
   // mainnet deployments to testnet when RPC_URL was omitted.
-  const configuredRpcUrl = process.env.SOROBAN_RPC_URL || process.env.RPC_URL;
-  process.env.RPC_URL =
+  const configuredRpcUrl = effective.SOROBAN_RPC_URL || effective.RPC_URL;
+  effective.RPC_URL =
     configuredRpcUrl || NETWORK_PROFILES[network.name].rpcUrl;
-  process.env.SOROBAN_RPC_URL = process.env.RPC_URL;
-  process.env.NETWORK_PASSPHRASE ||=
+  effective.SOROBAN_RPC_URL = effective.RPC_URL;
+  effective.NETWORK_PASSPHRASE ||=
     NETWORK_PROFILES[network.name].networkPassphrase;
 
   // Support backwards compatibility: map old variables to new ones if new ones are not set
-  if (!process.env.STELLAR_CONTRACT_ID && process.env.CONTRACT_ID) {
-    process.env.STELLAR_CONTRACT_ID = process.env.CONTRACT_ID;
+  if (!effective.STELLAR_CONTRACT_ID && effective.CONTRACT_ID) {
+    effective.STELLAR_CONTRACT_ID = effective.CONTRACT_ID;
   }
-  if (!process.env.SOROBAN_RPC_URL && process.env.RPC_URL) {
-    process.env.SOROBAN_RPC_URL = process.env.RPC_URL;
-  }
-  if (!process.env.STELLAR_NETWORK && process.env.NETWORK_PASSPHRASE) {
-    process.env.STELLAR_NETWORK = process.env.NETWORK_PASSPHRASE;
+  if (!effective.STELLAR_NETWORK && effective.NETWORK_PASSPHRASE) {
+    effective.STELLAR_NETWORK = effective.NETWORK_PASSPHRASE;
   }
 
   // Parse environment variables
-  const parsed = envSchema.safeParse(process.env);
+  const parsed = envSchema.safeParse(effective);
 
   if (!parsed.success) {
     logger.error(
@@ -407,6 +409,8 @@ export function validateEnv(): ValidatedConfig {
     process.exit(1);
     throw new Error('Environment validation failed');
   }
+
+  let reportSorobanOutcome: () => void = () => undefined;
 
   if (!sorobanDisabled) {
     // CONTRACT_ID and SERVER_PRIVATE_KEY are required for Soroban operations
@@ -482,9 +486,9 @@ export function validateEnv(): ValidatedConfig {
     }
 
     // Now validate their formats if present
-    if (process.env.STELLAR_CONTRACT_ID) {
+    if (effective.STELLAR_CONTRACT_ID) {
       const contractIdValidation = stellarAccountIdSchema.safeParse(
-        process.env.STELLAR_CONTRACT_ID,
+        effective.STELLAR_CONTRACT_ID,
       );
       if (!contractIdValidation.success) {
         logger.error('❌ STELLAR_CONTRACT_ID validation failed:');
@@ -495,37 +499,43 @@ export function validateEnv(): ValidatedConfig {
           );
         });
         process.exit(1);
+        throw new Error('Environment validation failed');
       }
     }
 
-    logger.info('Soroban configuration validated');
-    logger.info(
-      {
-        outcome: 'success',
-        outcomeCode: 0,
-        detail: 'Required Soroban configuration is present and valid.',
-        network: network.name,
-      },
-      'deployment configuration outcome',
-    );
+    // Success is only reported after the whole validation has passed.
+    reportSorobanOutcome = () => {
+      logger.info('Soroban configuration validated');
+      logger.info(
+        {
+          outcome: 'success',
+          outcomeCode: 0,
+          detail: 'Required Soroban configuration is present and valid.',
+          network: network.name,
+        },
+        'deployment configuration outcome',
+      );
+    };
   } else {
     if (env.SERVER_PRIVATE_KEY) {
       logger.warn(
         '⚠️  SOROBAN_DISABLED=true is set and SERVER_PRIVATE_KEY is configured. The private key will not be used or logged in disabled mode.',
       );
     }
-    logger.info(
-      'Soroban disabled (SOROBAN_DISABLED=true) — local development mode',
-    );
-    logger.info(
-      {
-        outcome: 'success',
-        outcomeCode: 0,
-        detail: 'Soroban is intentionally disabled.',
-        network: network.name,
-      },
-      'deployment configuration outcome',
-    );
+    reportSorobanOutcome = () => {
+      logger.info(
+        'Soroban disabled (SOROBAN_DISABLED=true) — local development mode',
+      );
+      logger.info(
+        {
+          outcome: 'success',
+          outcomeCode: 0,
+          detail: 'Soroban is intentionally disabled.',
+          network: network.name,
+        },
+        'deployment configuration outcome',
+      );
+    };
   }
 
   // Validate optional webhook URL if provided
@@ -610,6 +620,21 @@ export function validateEnv(): ValidatedConfig {
     );
   }
 
+  // Commit step: every check passed, so publish the derived values to
+  // process.env for legacy consumers and only now report success.
+  for (const key of [
+    'RPC_URL',
+    'SOROBAN_RPC_URL',
+    'NETWORK_PASSPHRASE',
+    'STELLAR_CONTRACT_ID',
+    'STELLAR_NETWORK',
+  ] as const) {
+    if (effective[key] !== undefined) {
+      process.env[key] = effective[key];
+    }
+  }
+  reportSorobanOutcome();
+
   logger.info(
     {
       port: env.PORT,
@@ -638,16 +663,16 @@ export function validateEnv(): ValidatedConfig {
     port: env.PORT || 3001,
     stellarNetwork: network.name,
     sorobanEnabled: !sorobanDisabled,
-    contractId: process.env.STELLAR_CONTRACT_ID || null,
+    contractId: effective.STELLAR_CONTRACT_ID || null,
     serverPrivateKey: sorobanDisabled
       ? null
-      : process.env.SERVER_PRIVATE_KEY || null,
+      : effective.SERVER_PRIVATE_KEY || null,
     rpcUrl:
-      process.env.SOROBAN_RPC_URL ||
+      effective.SOROBAN_RPC_URL ||
       env.RPC_URL ||
       NETWORK_PROFILES[network.name].rpcUrl,
     networkPassphrase:
-      process.env.NETWORK_PASSPHRASE ||
+      effective.NETWORK_PASSPHRASE ||
       env.NETWORK_PASSPHRASE ||
       NETWORK_PROFILES[network.name].networkPassphrase,
     allowedAssets,
