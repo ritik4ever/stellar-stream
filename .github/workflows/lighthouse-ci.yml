@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - 'frontend/**'
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
 
 jobs:
   lighthouse:
