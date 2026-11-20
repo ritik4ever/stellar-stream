@@ -75,6 +75,7 @@ import {
 import { emitCreateStreamSignal } from "./services/createStreamOutcome";
 import {
   archiveOldStreams,
+  calculateMilestones,
   calculateProgress,
   compareStreams,
   MAX_COMPARE_STREAMS,
@@ -2395,6 +2396,27 @@ app.get(
         { code: normalizedError.code ?? "HISTORY_READ_FAILED" },
       );
     }
+  },
+);
+
+app.get(
+  "/api/streams/:id/milestones",
+  readLimiter,
+  (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    const stream = getStream(parsedId.value);
+    if (!stream) {
+      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+      return;
+    }
+
+    const milestones = calculateMilestones(stream);
+    res.json({ data: milestones });
   },
 );
 
