@@ -1381,12 +1381,53 @@ describe("Backend Integration Tests", () => {
           kind: "error",
         });
 
+        const db = getDb();
+        const cursorBefore = (db
+          .prepare("SELECT last_ledger_sequence FROM indexer_cursor WHERE id = 1")
+          .get() as { last_ledger_sequence: number } | undefined)?.last_ledger_sequence ?? null;
+        const streamBefore = db
+          .prepare("SELECT canceled_at FROM streams WHERE id = ?")
+          .get(reconcileStreamId) as { canceled_at: number | null };
+
         const response = await request(app)
           .post(`/api/streams/${reconcileStreamId}/reconcile`)
           .set("Authorization", `Bearer ${senderToken}`);
 
-        expect(response.status).toBe(500);
-        expect(response.body.code).toBe("INTERNAL_ERROR");
+        expect(response.status).toBe(404);
+        expect(response.body.code).toBe("STREAM_NOT_FOUND_ON_CHAIN");
+        expect((db
+          .prepare("SELECT last_ledger_sequence FROM indexer_cursor WHERE id = 1")
+          .get() as { last_ledger_sequence: number } | undefined)?.last_ledger_sequence ?? null).toBe(cursorBefore);
+        expect((db
+          .prepare("SELECT canceled_at FROM streams WHERE id = ?")
+          .get(reconcileStreamId) as { canceled_at: number | null }).canceled_at).toBe(streamBefore.canceled_at);
+      });
+
+      it("should return 503 on RPC outage without changing local state or indexer cursor", async () => {
+        mockSimulateTransaction.mockRejectedValue(
+          new Error("timeout: RPC server did not respond"),
+        );
+
+        const db = getDb();
+        const cursorBefore = (db
+          .prepare("SELECT last_ledger_sequence FROM indexer_cursor WHERE id = 1")
+          .get() as { last_ledger_sequence: number } | undefined)?.last_ledger_sequence ?? null;
+        const streamBefore = db
+          .prepare("SELECT canceled_at FROM streams WHERE id = ?")
+          .get(reconcileStreamId) as { canceled_at: number | null };
+
+        const response = await request(app)
+          .post(`/api/streams/${reconcileStreamId}/reconcile`)
+          .set("Authorization", `Bearer ${senderToken}`);
+
+        expect(response.status).toBe(503);
+        expect(response.body.code).toBe("RPC_UNAVAILABLE");
+        expect((db
+          .prepare("SELECT last_ledger_sequence FROM indexer_cursor WHERE id = 1")
+          .get() as { last_ledger_sequence: number } | undefined)?.last_ledger_sequence ?? null).toBe(cursorBefore);
+        expect((db
+          .prepare("SELECT canceled_at FROM streams WHERE id = ?")
+          .get(reconcileStreamId) as { canceled_at: number | null }).canceled_at).toBe(streamBefore.canceled_at);
       });
 
       it("should enforce rate limit (5 calls per stream per minute)", async () => {
