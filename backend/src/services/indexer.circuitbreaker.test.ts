@@ -15,6 +15,7 @@ vi.mock("./metrics", () => ({
   indexerCircuitState: { set: vi.fn() },
   indexerEventsDedupedTotal: { inc: vi.fn() },
   indexerPollDurationMs: { set: vi.fn() },
+  indexerLastSuccessTimestampSeconds: { set: vi.fn() },
 }));
 
 import { CircuitBreaker } from "./indexer";
