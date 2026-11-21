@@ -17,7 +17,7 @@ export function DarkModeToggle({ theme, onToggle }: DarkModeToggleProps) {
       aria-pressed={isDark}
       title={isDark ? "Switch to light mode" : "Switch to dark mode"}
     >
-      <span aria-hidden="true">{isDark ? "☀️" : "🌙"}</span>
+      <span aria-hidden="true">{isDark ? "☀" : "🌙"}</span>
     </button>
   );
 }

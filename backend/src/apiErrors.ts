@@ -57,6 +57,19 @@ export function sendValidationError(
   });
 }
 
+
+export function sendConflictError(
+  req: Request,
+  res: Response,
+  message: string,
+  options: ApiErrorOptions = {},
+) {
+  return sendApiError(req, res, 409, message, {
+    code: options.code || "STATE_CONFLICT",
+    details: options.details,
+  });
+}
+
 export function sendError(
   res: Response,
   status: number,

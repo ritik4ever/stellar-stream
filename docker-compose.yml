@@ -34,7 +34,9 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    restart: on-failure
+    # Bounded retry: give up after 5 crash restarts instead of looping forever.
+    # scripts/compose-up.sh detects the loop earlier and rolls back.
+    restart: "on-failure:5"
     # Health check: polls /api/health every 30s, 3 retries, 10s start grace period
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health"]

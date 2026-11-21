@@ -5,6 +5,7 @@ import { app } from "../index";
 import { initDb, getDb } from "./db";
 import { getStreamHistory } from "./eventHistory";
 import { getJwtSecret } from "./auth";
+import { initCache } from "./cache";
 import path from "path";
 import fs from "fs";
 
@@ -21,6 +22,7 @@ describe("POST /api/streams/:id/pause and /api/streams/:id/resume Integration Te
     vi.stubEnv('JWT_SECRET', TEST_SECRET);
     process.env.DB_PATH = TEST_DB_PATH;
     initDb();
+    initCache();
 
     authToken = jwt.sign({ accountId: mockSender }, getJwtSecret(), { expiresIn: '1h' });
     recipientToken = jwt.sign({ accountId: mockRecipient }, getJwtSecret(), { expiresIn: '1h' });
@@ -233,7 +235,7 @@ describe("POST /api/streams/:id/pause and /api/streams/:id/resume Integration Te
         .set("Authorization", `Bearer ${authToken}`);
       expect(resumeRes.status).toBe(200);
 
-      history = getStreamHistory("8");
+      history = getStreamHistory("8", 20, 0, "asc");
       expect(history.filter(e => e.eventType === "paused")).toHaveLength(1);
       expect(history.filter(e => e.eventType === "resumed")).toHaveLength(1);
       expect(history.map(e => e.eventType)).toEqual(["paused", "resumed"]);

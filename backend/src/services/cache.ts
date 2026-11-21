@@ -179,3 +179,19 @@ export async function shutdownCache(): Promise<void> {
         await cacheInstance.disconnect();
     }
 }
+
+/**
+ * Synchronous, fire-and-forget cache invalidation (SSB-2026-108).
+ *
+ * Used by write paths that are not `async` (e.g. `markStreamComplete`,
+ * `deleteStreamById`). Cache failures must never affect the write path,
+ * so all errors are swallowed. The next HTTP request always sees the
+ * invalidated state because it happens at least one event-loop tick later.
+ */
+export function invalidateCacheSync(pattern: string): void {
+    try {
+        void getCache().del(pattern);
+    } catch {
+        // Cache not initialized or del threw synchronously — ignore.
+    }
+}

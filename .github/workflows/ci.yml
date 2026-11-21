@@ -1,66 +1,31 @@
-name: CI - Build Checks
-
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-
-
+name: CI
+on: [push, pull_request]
 jobs:
   backend-build:
     name: Backend Build
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: "npm"
-          cache-dependency-path: backend/package-lock.json
-
-      - name: Install backend dependencies
-        working-directory: backend
-        run: npm ci
-
-      - name: Build backend
-        working-directory: backend
-        run: npm run build|| npx tsc --noEmit || echo "No build script found - typecheck passed"
-
-
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 20}
+      - run: cd backend && npm ci --legacy-peer-deps && (npm run build || npx tsc --noEmit || true)
   frontend-build:
     name: Frontend Build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Build frontend
-        working-directory: frontend
-        run: npm run build
-
-
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 20}
+      - run: cd frontend && npm ci --legacy-peer-deps && npm run build
+  compose-startup-script:
+    name: Compose Startup Script
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-
+      - uses: actions/checkout@v4
+      - run: bash scripts/compose-up.test.sh
+  e2e-run-script:
+    name: E2E Run Script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/e2e-run.test.sh

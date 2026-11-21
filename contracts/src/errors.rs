@@ -10,4 +10,6 @@ pub enum ContractError {
     Unauthorized = 2,
     /// Escrow has expired or was revoked.
     EscrowInactive = 3,
+    /// Claim rejected because the stream's minimum claim interval has not elapsed.
+    ClaimTooFrequent = 4,
 }

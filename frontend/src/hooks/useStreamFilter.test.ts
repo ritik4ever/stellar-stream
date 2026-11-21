@@ -83,6 +83,33 @@ describe("useStreamFilter", () => {
     expect(result.current.filteredStreams[0].id).toBe("stream_1");
   });
 
+  it("keeps the active status filter matched after a scheduled stream becomes active", () => {
+    const { result, rerender } = renderHook(
+      ({ streams }) => useStreamFilter(streams),
+      { initialProps: { streams: mockStreams } },
+    );
+
+    act(() => {
+      result.current.setFilter("status", "active");
+    });
+    expect(result.current.filteredStreams.map((stream) => stream.id)).toEqual([
+      "stream_1",
+    ]);
+
+    const transitionedStreams = mockStreams.map((stream) =>
+      stream.id === "stream_3"
+        ? { ...stream, progress: { ...stream.progress, status: "active" as const } }
+        : stream,
+    );
+    rerender({ streams: transitionedStreams });
+
+    expect(result.current.filters.status).toBe("active");
+    expect(result.current.filteredStreams.map((stream) => stream.id)).toEqual([
+      "stream_1",
+      "stream_3",
+    ]);
+  });
+
   it("filters by sender address (case-insensitive)", () => {
     const { result } = renderHook(() => useStreamFilter(mockStreams));
     
@@ -193,5 +220,21 @@ describe("useStreamFilter", () => {
       result.current.setFilter("q", "RECIPIENT");
     });
     expect(result.current.filteredStreams).toHaveLength(3);
+  });
+
+  it("ignores whitespace-only queries and matches mixed-case queries", () => {
+    const { result } = renderHook(() => useStreamFilter(mockStreams));
+
+    act(() => {
+      result.current.setFilter("q", "   ");
+    });
+    expect(result.current.filteredStreams).toEqual(mockStreams);
+
+    act(() => {
+      result.current.setFilter("q", "sEnDeR_2");
+    });
+    expect(result.current.filteredStreams.map((stream) => stream.id)).toEqual([
+      "stream_2",
+    ]);
   });
 });

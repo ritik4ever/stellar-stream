@@ -1,0 +1,23 @@
+[package]
+name = "stellar-stream-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Isolate this crate from the parent workspace so it does not participate in
+# normal `cargo test` / `cargo build` runs.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+stellar-stream = { path = ".." }
+soroban-sdk = { version = "21.0.0", features = ["testutils"] }
+
+[[bin]]
+name = "fuzz_stream_lifecycle"
+path = "fuzz_targets/fuzz_stream_lifecycle.rs"
+test = false
+doc = false

@@ -81,6 +81,23 @@ We need event history storage that:
 - Simpler backup and restore
 - Easier cross-checks between state and history
 - Good fit for SQLite-backed deployments
+- Stream lifecycle changes and their history entries commit or roll back together.
+- Lifecycle writers acquire the database write lock before reading the current row, so
+  later writers validate against the latest committed state rather than replacing it
+  with a stale snapshot.
+
+### Write failure and contention semantics
+
+- A stream persistence or event-history insert failure rolls back the full transaction.
+  The API responds with HTTP `500`, code `STREAM_WRITE_FAILED`, and message
+  `Failed to persist stream and event.`; it does not report success or leave only one
+  of the stream and event rows committed.
+- Lifecycle validation continues to use its existing client error status (normally
+  HTTP `400` for an invalid transition, and `404` when the stream is absent). When
+  competing writers race, each validates under the write lock; an invalidated
+  transition returns that same validation error rather than overwriting newer state.
+- Cancel remains idempotent: if another writer has already canceled the stream, a
+  repeated cancel returns the current stream without recording a second event.
 
 ### Negative
 

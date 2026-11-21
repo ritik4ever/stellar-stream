@@ -1,6 +1,13 @@
 import Database from "better-sqlite3";
 import path from "path";
 import { runMigrations } from "./migrations";
+import {
+  getLiveRestoreOutcomeSignal,
+  recordRestoreOutcome,
+  refreshRestoreMetrics,
+} from "./dbRestoreOutcome";
+import { evaluateAssetAllowlistConfig } from "./assetAllowlistOutcome";
+import { logger } from "../logger";
 
 const DB_PATH =
   process.env.DB_PATH || path.join(__dirname, "..", "..", "data", "streams.db");
@@ -308,6 +315,58 @@ class PostgresDatabase {
   }
 }
 
+export function syncFtsIndex(id: string, sender: string, recipient: string, assetCode: string): void {
+  if (isPostgres()) return;
+  // FTS index sync is currently a no-op; the streams_fts virtual table
+  // is only created for SQLite and is handled separately if needed.
+}
+
+/**
+ * Adds a column to a table if it doesn't already exist.
+ * Safe for both SQLite and Postgres.
+ */
+function addColumnIfMissing(database: any, table: string, column: string, typeDef: string): void {
+  try {
+    const cols = database
+      .prepare(`PRAGMA table_info(${table})`)
+      .all() as Array<{ name: string }>;
+    if (cols.some((c) => c.name === column)) return;
+  } catch {
+    // If PRAGMA fails (e.g. table does not exist), skip.
+    return;
+  }
+  database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeDef}`);
+}
+
+/**
+ * Records the schema check performed when the database is opened — the point
+ * at which a restore from a prior point in time takes effect. Counts and state
+ * only: the signal never carries the database path, migration names, or user
+ * data, so it is safe to log, scrape, and paste into an incident channel.
+ *
+ * A database with no recorded schema yet (fresh install or empty volume) is
+ * recorded as `transient_delay`, because startup still has migrations to
+ * apply. This makes a fresh Compose volume observable without exposing paths
+ * or configuration values.
+ */
+function recordSqliteRestoreOutcome(database: any): void {
+  try {
+    const signal = getLiveRestoreOutcomeSignal(database);
+    recordRestoreOutcome(signal);
+    refreshRestoreMetrics(signal);
+    if (signal.outcome === "blocked") {
+      logger.warn(
+        { restoreOutcome: signal },
+        "SQLite restore outcome: schema is ahead of the running code",
+      );
+    } else {
+      logger.info({ restoreOutcome: signal }, "SQLite restore outcome recorded");
+    }
+  } catch (error) {
+    logger.warn({ err: error }, "failed to record SQLite restore outcome");
+  }
+}
+
 export function initDb(): void {
   if (isPostgres()) {
     db = new PostgresDatabase(process.env.DATABASE_URL!);
@@ -318,13 +377,147 @@ export function initDb(): void {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    db = new Database(DB_PATH);
+    const resolvedDbPath = process.env.DB_PATH || DB_PATH;
+    db = new Database(resolvedDbPath);
     db.pragma("journal_mode = WAL");
     db.pragma("foreign_keys = ON");
     db.pragma("synchronous = NORMAL");
     db.pragma("busy_timeout = 5000");
     db.pragma("cache_size = -64000");
+
+    // Capture the restored schema before any pending migration runs, so the
+    // recorded outcome describes the snapshot the operator actually restored.
+    recordSqliteRestoreOutcome(db);
   }
 
   runMigrations(db);
+
+  // Incremental schema patches for columns added after the baseline.
+  addColumnIfMissing(db, "streams", "cliff_seconds", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "stream_archive", "cliff_seconds", "INTEGER NOT NULL DEFAULT 0");
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS allowed_assets (
+      code TEXT PRIMARY KEY
+    );
+  `);
+
+  if (!isPostgres()) {
+    try {
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS streams_fts USING fts5(
+          stream_id UNINDEXED,
+          sender,
+          recipient,
+          asset_code,
+          content=streams,
+          content_rowid=rowid
+        );
+      `);
+    } catch {
+      // FTS table may already exist or not supported in environment
+    }
+  }
+
+  seedAllowedAssets(db);
+}
+
+function seedAllowedAssets(database: any): void {
+  if (process.env.NODE_ENV === "test") {
+    database.exec("DELETE FROM allowed_assets");
+  }
+  const countRow = database.prepare("SELECT COUNT(*) as count FROM allowed_assets").get() as { count?: number } | undefined;
+  const count = Number(countRow?.count ?? 0);
+  if (count === 0) {
+    const rawEnv = process.env.ALLOWED_ASSETS ?? "USDC,XLM";
+    const { validAssets, signal } = evaluateAssetAllowlistConfig(rawEnv, { allowEmpty: false });
+    if (signal.outcome === "blocked") {
+      throw new Error(signal.detail);
+    }
+    const insert = database.prepare("INSERT OR IGNORE INTO allowed_assets (code) VALUES (?)");
+    database.transaction((assets: string[]) => {
+      for (const asset of assets) {
+        insert.run(asset);
+      }
+    })(validAssets);
+  }
+}
+
+/**
+ * Returns the committed allowed asset list in canonical normalized sorted order:
+ * trimmed, uppercased, deduplicated, and sorted lexicographically (`A–Z`, `0–9`).
+ *
+ * Consistency rule:
+ * - Returned results always reflect the committed state in `allowed_assets`.
+ * - Duplicate or mixed-case rows (even if inserted outside the normal write path)
+ *   are collapsed to a single uppercase entry and sorted deterministically.
+ */
+export function getAllowedAssets(): string[] {
+  try {
+    const database = getDb();
+    const rows = database.prepare("SELECT code FROM allowed_assets ORDER BY UPPER(TRIM(code)) ASC").all() as Array<{ code: string }>;
+    return Array.from(
+      new Set(
+        rows
+          .map((r) => (typeof r.code === "string" ? r.code.trim().toUpperCase() : ""))
+          .filter((code) => code.length > 0),
+      ),
+    ).sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Validates and persists a normalized asset code into `allowed_assets`, returning
+ * the committed normalized sorted asset list.
+ *
+ * Consistency rule:
+ * - Rejects empty or malformed asset codes before touching the database so a failed
+ *   write never mutates committed state.
+ * - Normalizes `code` via `trim().toUpperCase()` and inserts with `INSERT OR IGNORE`
+ *   so duplicate or mixed-case additions are idempotent no-ops.
+ * - Returns `getAllowedAssets()` after the statement commits so callers only ever
+ *   observe committed state.
+ */
+export function addAllowedAsset(code: string): string[] {
+  const cleanCode = typeof code === "string" ? code.trim().toUpperCase() : "";
+  if (!/^[A-Za-z0-9]{1,12}$/.test(cleanCode)) {
+    throw new Error("Asset code must be 1–12 alphanumeric characters.");
+  }
+  const database = getDb();
+  database.prepare("INSERT OR IGNORE INTO allowed_assets (code) VALUES (?)").run(cleanCode);
+  return getAllowedAssets();
+}
+
+/**
+ * Removes a normalized asset code (case-insensitive) from `allowed_assets` and
+ * returns the committed normalized sorted asset list.
+ *
+ * Consistency rule:
+ * - Rejects empty or malformed asset codes before touching the database.
+ * - Deletes any matching row (`UPPER(TRIM(code)) = ?`) so legacy mixed-case rows
+ *   cannot survive a delete and reappear in subsequent reads.
+ * - Returns `getAllowedAssets()` after the statement commits.
+ */
+export function removeAllowedAsset(code: string): string[] {
+  const cleanCode = typeof code === "string" ? code.trim().toUpperCase() : "";
+  if (!/^[A-Za-z0-9]{1,12}$/.test(cleanCode)) {
+    throw new Error("Asset code must be 1–12 alphanumeric characters.");
+  }
+  const database = getDb();
+  database.prepare("DELETE FROM allowed_assets WHERE UPPER(TRIM(code)) = ?").run(cleanCode);
+  return getAllowedAssets();
+}
+
+export function searchStreamsFts(query: string): string[] {
+  try {
+    const database = getDb();
+    const rows = database.prepare(
+      `SELECT stream_id FROM streams_fts WHERE streams_fts MATCH ? ORDER BY rank`
+    ).all(query) as Array<{ stream_id: string }>;
+    return rows.map((row) => row.stream_id);
+  } catch {
+    return [];
+  }
 }

@@ -1,0 +1,17 @@
+feat(SSB-2026-002): Add recovery path for Create stream amount
+
+Add retry mechanisms and error recovery for fee estimation and stream creation failures.
+
+- Add isConfirming flag to prevent duplicate confirmations
+- Add retryFeeEstimation() function for fee retry path
+- Keep modal open on stream creation error with retry buttons
+- Preserve form input through error cycles
+- Add 5 new test cases for all failure modes
+- Update JSDoc documentation
+
+All acceptance criteria met:
+✅ Simulated failures show useful messages
+✅ Retry works without duplicate actions  
+✅ Form input is preserved
+✅ Tests added for all failure modes
+✅ Documentation updated

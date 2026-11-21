@@ -3,6 +3,7 @@
 [![English](https://img.shields.io/badge/lang-en-red.svg)](README.md)
 [![Español](https://img.shields.io/badge/lang-es-green.svg)](docs/README.es.md)
 [![Português](https://img.shields.io/badge/lang-pt--br-blue.svg)](docs/README.pt.md)
+![Coverage](https://img.shields.io/badge/coverage-80%25-brightgreen.svg)
 
 > **Translation lag notice:** Translations are community-contributed and may lag behind the English version by up to one release cycle. The English [`README.md`](README.md) is the authoritative source.
 
@@ -219,6 +220,14 @@ Retries: 3
 
 Start Period: 10s
 
+Backend restart policy: on-failure:5 (bounded; stops after 5 crash restarts)
+
+Guarded startup: `npm run compose:up` waits for backend then frontend health, retries the backend once, and rolls back with `docker compose down` (volumes kept) if they never become healthy. See [RUNBOOK.md](RUNBOOK.md#docker-compose-startup-failure).
+
+Configuration preflight: before starting anything, `compose:up` validates `backend/.env` and exits `2` (no partial rollout) when the settings cannot produce a healthy backend — an empty environment, missing/invalid `CONTRACT_ID` or `SERVER_PRIVATE_KEY` (unless `SOROBAN_DISABLED=true`), malformed URLs, an empty `ALLOWED_ASSETS`, or a `PORT` that does not match the Compose healthcheck port (`3001`). Errors name the variable and rule and never print credential values.
+
+SQLite persistence: inside the Compose stack the database lives at `/app/data/streams.db` in the named `backend-data` volume. On a fresh volume the file is created and migrated automatically; keep `DB_PATH` inside `/app/data` so data survives container recreation.
+
 GET /api/streams
 Purpose: List streams sorted by newest first, with optional filtering and pagination
 
@@ -238,9 +247,11 @@ page: number (integer >= 1)
 
 limit: number (integer 1..100)
 
-Search behavior: The q parameter performs case-insensitive partial matching across stream ID, sender, recipient, and asset code. Search combines with other filters (all filters are applied together). Empty or whitespace-only search terms are ignored.
+Search behavior: The q parameter performs case-insensitive partial matching across stream ID, sender, recipient, and asset code. Search combines with other filters (all filters are applied together). Empty or whitespace-only search terms are ignored. The dashboard preserves the entered query if a search request fails and offers a Retry action; only the latest query response is applied.
 
 Pagination behavior: If both page and limit are omitted, legacy mode applies and all matching rows are returned. If either page or limit is provided, pagination mode applies with defaults page=1 and limit=20.
+
+The dashboard stream table loads 20 streams at a time. More streams load on scroll or with the keyboard-operable “Load more streams” button. Loading, results, end-of-results, and page-load failures are announced politely; a failed page can be retried without losing the loaded rows.
 
 Validation: Invalid status, page, or limit returns 400.
 
@@ -379,6 +390,10 @@ Build
 
 npm run build
 
+### Testing
+
+Backend unit tests cover stream lifecycle, indexer, webhook delivery, and auth middleware. Branch coverage is enforced at >= 80%; CI fails if coverage drops below this threshold.
+
 7) Deploy Contract
 Deploy the Soroban contract to Stellar testnet.
 
@@ -468,7 +483,7 @@ Copy `backend/.env.example` to `backend/.env` and `frontend/.env.example` to `fr
 
 4. **`ADMIN_API_KEY` & Production Environment**:
    - In production (`NODE_ENV=production`), `ADMIN_API_KEY` is enforced to be at least 32 characters (`z.string().min(32)`).
-   - If `ADMIN_API_KEY` is omitted in production, admin management endpoints (`/api/admin/*`) are disabled and return `401 Unauthorized`. In development, shorter keys emit a warning log.
+   - If `ADMIN_API_KEY` is omitted in production, `validateEnv` throws at startup and the server refuses to boot. This is intentional: silently starting with admin endpoints returning 401 is impossible to diagnose. In development, the key is optional; when unset, admin endpoints return `401` with `code: ADMIN_KEY_NOT_CONFIGURED`. Short keys still emit a warning log in development.
 
 ---
 
@@ -500,6 +515,30 @@ When rotating sensitive operational credentials in production, follow these proc
    - Generate a new random string of at least 32 characters.
    - Update `ADMIN_API_KEY` in backend environment config and restart backend services.
    - Update API key headers in administrative scripts, deployment pipelines, and internal tools calling `/api/admin/*`.
+
+#### Admin API key boundary contract
+
+Admin endpoints (`X-Admin-Key` header on routes using `adminAuth`, and the
+`POST /api/admin/auth` / `POST /api/auth/admin` token exchange accepting `X-Admin-Key` or `body.apiKey`) return a stable `code` for every
+boundary input:
+
+| Input | Status | `code` |
+|---|---|---|
+| `X-Admin-Key` header (and `body.apiKey` on `/api/admin/auth`) absent | `401` | `ADMIN_KEY_MISSING` |
+| Key present but empty, whitespace-only, non-string, or containing internal whitespace/comma/control chars | `401` | `ADMIN_KEY_MALFORMED` |
+| Header present but repeated (`string[]` or duplicate `X-Admin-Key` headers) or conflicting with `body.apiKey` | `401` | `ADMIN_KEY_MALFORMED` |
+| `ADMIN_API_KEY` env unset or blank | `401` | `ADMIN_KEY_NOT_CONFIGURED` |
+| Key present and well-formed, does not match configured key (including rotated-out keys) | `401` | `ADMIN_KEY_INVALID` |
+| Key present, matches configured key | `2xx` | - |
+
+All error bodies follow the standard `sendApiError` shape
+(`{ error, statusCode, requestId, correlationId, code }`). Authorized requests attach the admin caller identity (`{ role: "admin", accountId: "admin", isAdmin: true }`) to `req.user`, while denied requests leave `req.user` unset and perform no state mutations.
+
+**Concurrent rotation**: `ADMIN_API_KEY` is read from `process.env` on every
+request, never cached at startup. Rotation therefore requires a process
+restart; requests already in-flight under the old process complete under the
+old key, and new requests hit the new process with the new key. No request is
+ever valid against both.
 
 ---
 
@@ -613,3 +652,13 @@ Wire frontend application to call the contract client directly.
 Add automated contract integration pipelines.
 
 Add real-time event notifications via WebSockets.
+2. **Rotating `JWT_SECRET` (zero-downtime)**
+   - Generate a new secret: `openssl rand -hex 32`.
+   - Move the current value to `JWT_SECRET_PREVIOUS`, put the new value in `JWT_SECRET`, and set
+     `JWT_ROTATION_CUTOVER_AT` to a future ISO 8601 time (e.g. `2026-10-15T00:00:00Z`).
+   - Restart backend instances. New tokens are signed with the new secret; tokens signed with the
+     old secret still verify until the cutover time.
+   - After the cutover time, remove `JWT_SECRET_PREVIOUS` and `JWT_ROTATION_CUTOVER_AT`.
+   - The server refuses to start (no partial rollout) if only one of the two variables is set, the
+     previous secret is shorter than 32 characters or equals `JWT_SECRET`, or the cutover time is not a
+     valid date. Errors name the variable only and never print secret values.

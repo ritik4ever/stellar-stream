@@ -8,6 +8,8 @@ import Database from "better-sqlite3";
 const mockEventsIndexedTotal = vi.hoisted(() => ({ inc: vi.fn() }));
 const mockLedgersScannedTotal = vi.hoisted(() => ({ inc: vi.fn() }));
 const mockLastIndexedLedger = vi.hoisted(() => ({ set: vi.fn() }));
+const mockIndexerLatestLedger = vi.hoisted(() => ({ set: vi.fn() }));
+const mockIndexerLedgerLag = vi.hoisted(() => ({ set: vi.fn() }));
 const mockIndexerErrorsTotal = vi.hoisted(() => ({ inc: vi.fn() }));
 const mockIndexerCircuitState = vi.hoisted(() => ({ set: vi.fn() }));
 
@@ -15,8 +17,12 @@ vi.mock("./metrics", () => ({
   eventsIndexedTotal: mockEventsIndexedTotal,
   ledgersScannedTotal: mockLedgersScannedTotal,
   lastIndexedLedger: mockLastIndexedLedger,
+  indexerLatestLedger: mockIndexerLatestLedger,
+  indexerLedgerLag: mockIndexerLedgerLag,
   indexerErrorsTotal: mockIndexerErrorsTotal,
   indexerCircuitState: mockIndexerCircuitState,
+  indexerEventsDedupedTotal: { inc: vi.fn() },
+  indexerPollDurationMs: { set: vi.fn() },
 }));
 
 let db: InstanceType<typeof Database>;
@@ -31,17 +37,30 @@ let mockGetEvents = vi.fn();
 vi.mock("@stellar/stellar-sdk", () => ({
   Contract: vi.fn(),
   rpc: {
-    Server: vi.fn().mockImplementation(() => ({
-      getLatestLedger: mockGetLatestLedger,
-      getEvents: mockGetEvents,
-    })),
+    Server: vi.fn().mockImplementation(function () {
+      return {
+        getLatestLedger: mockGetLatestLedger,
+        getEvents: mockGetEvents,
+      };
+    }),
   },
   TransactionBuilder: vi.fn(),
   Networks: { TESTNET: "Test SDF Network ; September 2015" },
   scValToNative: (v: any) => v,
 }));
 
-import { initIndexer, startIndexer, stopIndexer } from "./indexer";
+import {
+  initIndexer,
+  startIndexer,
+  stopIndexer,
+  resetIndexerState,
+  getIndexerMonitoringSnapshot,
+  classifyRpcFailure,
+} from "./indexer";
+
+beforeEach(() => {
+  resetIndexerState();
+});
 
 function makeClaimedEvent(opts: {
   streamId?: string | number;
@@ -385,5 +404,254 @@ describe("indexer duplicate prevention", () => {
     // INSERT OR IGNORE prevents actual duplicates on the stream_events table.
     const callsAfterSecond = mockRecordEventWithDb.mock.calls.length;
     expect(callsAfterSecond).toBeGreaterThanOrEqual(callsAfterFirst);
+  });
+});
+
+describe("indexer additional coverage", () => {
+  let ledgerSeq = 800;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ledgerSeq += 200;
+    mockGetLatestLedger.mockResolvedValue({ sequence: ledgerSeq });
+  });
+
+  it("calls recordEventWithDb for StreamCreated lifecycle events", async () => {
+    const cid = nextContractId();
+    setupDb(cid, ledgerSeq - 100);
+    const created = makeCreatedEvent(ledgerSeq);
+    mockGetEvents.mockResolvedValue({ events: [created] });
+
+    await runOnePoll(cid);
+
+    const createdCall = mockRecordEventWithDb.mock.calls.find((c: any[]) => c[2] === "created");
+    expect(createdCall).toBeDefined();
+    expect(createdCall[1]).toBe("1");
+    expect(createdCall[3]).toBe(Math.floor(new Date(created.ledgerClosedAt).getTime() / 1000));
+  });
+
+  it("does not record a malformed StreamCreated event", async () => {
+    const cid = nextContractId();
+    setupDb(cid, ledgerSeq - 100);
+    const badEvent = {
+      topic: ["Stream", "Created"],
+      value: null,
+      ledgerClosedAt: new Date().toISOString(),
+      ledger: ledgerSeq,
+    };
+    mockGetEvents.mockResolvedValue({ events: [badEvent] });
+
+    await runOnePoll(cid);
+
+    const createdCall = mockRecordEventWithDb.mock.calls.find((c: any[]) => c[2] === "created");
+    expect(createdCall).toBeUndefined();
+  });
+
+  it("does not record events from non-Stream topics", async () => {
+    const cid = nextContractId();
+    setupDb(cid, ledgerSeq - 100);
+    const otherEvent = {
+      topic: ["Other", "Created"],
+      value: { stream_id: BigInt(1) },
+      ledgerClosedAt: new Date().toISOString(),
+      ledger: ledgerSeq,
+    };
+    mockGetEvents.mockResolvedValue({ events: [otherEvent] });
+
+    await runOnePoll(cid);
+
+    expect(mockRecordEventWithDb).not.toHaveBeenCalled();
+  });
+
+  it("initializes checkpoint to zero when no cursor row exists", async () => {
+    const cid = nextContractId();
+    db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE stream_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        stream_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        ledger_sequence INTEGER,
+        timestamp INTEGER NOT NULL,
+        actor TEXT,
+        amount REAL,
+        metadata TEXT
+      );
+      CREATE TABLE indexer_cursor (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        last_ledger_sequence INTEGER NOT NULL
+      );
+    `);
+    const event = makeClaimedEvent({ streamId: "1", ledger: 1 });
+    mockGetEvents.mockResolvedValue({ events: [event] });
+    mockGetLatestLedger.mockResolvedValue({ sequence: 1 });
+
+    await runOnePoll(cid);
+
+    expect(mockGetEvents).toHaveBeenCalled();
+    expect(mockRecordEventWithDb).toHaveBeenCalled();
+  });
+
+  it("loads checkpoint from database and starts at the next ledger", async () => {
+    const cid = nextContractId();
+    setupDb(cid, 500);
+    const event = makeClaimedEvent({ streamId: "1", ledger: 501 });
+    mockGetEvents.mockResolvedValue({ events: [event] });
+
+    await runOnePoll(cid);
+
+    expect(mockGetEvents).toHaveBeenCalledWith(expect.objectContaining({ startLedger: 501 }));
+    expect(mockRecordEventWithDb).toHaveBeenCalled();
+  });
+
+  it("does not query events when the latest ledger is not ahead of the checkpoint", async () => {
+    const cid = nextContractId();
+    setupDb(cid, ledgerSeq);
+    mockGetLatestLedger.mockResolvedValue({ sequence: ledgerSeq });
+
+    await runOnePoll(cid);
+
+    expect(mockGetEvents).not.toHaveBeenCalled();
+  });
+
+  it("does not crash when getLatestLedger rejects", async () => {
+    const cid = nextContractId();
+    setupDb(cid, ledgerSeq - 100);
+    mockGetLatestLedger.mockRejectedValue(new Error("latest ledger error"));
+
+    await runOnePoll(cid);
+
+    expect(mockGetEvents).not.toHaveBeenCalled();
+  });
+});
+
+describe("indexer monitoring snapshot", () => {
+  let ledgerSeq = 1100;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ledgerSeq += 200;
+    mockGetLatestLedger.mockResolvedValue({ sequence: ledgerSeq });
+  });
+
+  it("reports a current checkpoint and no failures after a successful poll", async () => {
+    const cid = nextContractId();
+    setupDb(cid, ledgerSeq - 100);
+    mockGetEvents.mockResolvedValue({ events: [] });
+
+    await runOnePoll(cid);
+
+    const snapshot = getIndexerMonitoringSnapshot();
+    expect(snapshot.rpcConfigured).toBe(true);
+    expect(snapshot.latestLedger).toBe(ledgerSeq);
+    expect(snapshot.indexedLedger).toBe(ledgerSeq);
+    expect(snapshot.ledgerLag).toBe(0);
+    expect(snapshot.consecutiveFailures).toBe(0);
+    expect(snapshot.circuitState).toBe("CLOSED");
+    expect(snapshot.lastFailureKind).toBeNull();
+  });
+
+  it("records a rate-limited failure without tripping the circuit", async () => {
+    const cid = nextContractId();
+    setupDb(cid, ledgerSeq - 100);
+    mockGetEvents.mockRejectedValue(
+      new Error("429 Too Many Requests: rate limit exceeded"),
+    );
+
+    await runOnePoll(cid);
+
+    const snapshot = getIndexerMonitoringSnapshot();
+    expect(snapshot.lastFailureKind).toBe("rate_limited");
+    expect(snapshot.consecutiveFailures).toBeGreaterThan(0);
+    // runOnePoll fires at most three polls, below the 5-failure threshold.
+    expect(snapshot.circuitState).toBe("CLOSED");
+  });
+
+  it("classifies a connection failure as disconnected", async () => {
+    const cid = nextContractId();
+    setupDb(cid, ledgerSeq - 100);
+    mockGetEvents.mockRejectedValue(
+      Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), {
+        code: "ECONNREFUSED",
+      }),
+    );
+
+    await runOnePoll(cid);
+
+    expect(getIndexerMonitoringSnapshot().lastFailureKind).toBe("disconnected");
+  });
+
+  it("opens the circuit after the failure threshold and keeps it reported", async () => {
+    const cid = nextContractId();
+    setupDb(cid, ledgerSeq - 100);
+    mockGetEvents.mockRejectedValue(new Error("503 Service Unavailable"));
+
+    await new Promise<void>((resolve) => {
+      initIndexer(
+        "https://rpc.example.com",
+        cid,
+        "Test SDF Network ; September 2015",
+      );
+      // 10 ms interval: comfortably more than the 5-failure threshold.
+      startIndexer(10);
+      setTimeout(() => {
+        stopIndexer();
+        resolve();
+      }, 250);
+    });
+
+    const snapshot = getIndexerMonitoringSnapshot();
+    expect(snapshot.circuitState).toBe("OPEN");
+    expect(snapshot.consecutiveFailures).toBe(5);
+    expect(snapshot.lastFailureKind).toBe("disconnected");
+  });
+
+  it("exposes only enumerated failure kinds, never the provider message", async () => {
+    const cid = nextContractId();
+    setupDb(cid, ledgerSeq - 100);
+    mockGetEvents.mockRejectedValue(
+      new Error("RPC failure at https://rpc.example.com/SECRET"),
+    );
+
+    await runOnePoll(cid);
+
+    const snapshot = getIndexerMonitoringSnapshot();
+    expect([
+      "rate_limited",
+      "disconnected",
+      "provider_error",
+      "unknown",
+    ]).toContain(snapshot.lastFailureKind);
+    expect(JSON.stringify(snapshot)).not.toMatch(/https?:\/\/|SECRET/);
+  });
+});
+
+describe("classifyRpcFailure", () => {
+  it("maps rate limits to rate_limited", () => {
+    expect(classifyRpcFailure({ status: 429 })).toBe("rate_limited");
+    expect(classifyRpcFailure(new Error("429 Too Many Requests"))).toBe(
+      "rate_limited",
+    );
+    expect(classifyRpcFailure(new Error("provider rate limit reached"))).toBe(
+      "rate_limited",
+    );
+  });
+
+  it("maps connection failures to disconnected", () => {
+    expect(
+      classifyRpcFailure(
+        Object.assign(new Error("connect ECONNREFUSED"), {
+          code: "ECONNREFUSED",
+        }),
+      ),
+    ).toBe("disconnected");
+    expect(classifyRpcFailure(new Error("socket hang up"))).toBe("disconnected");
+    expect(classifyRpcFailure({ statusCode: 503 })).toBe("disconnected");
+  });
+
+  it("maps provider responses and unknown failures without leaking messages", () => {
+    expect(classifyRpcFailure({ status: 500 })).toBe("provider_error");
+    expect(classifyRpcFailure(new Error("weird failure"))).toBe("unknown");
+    expect(classifyRpcFailure(undefined)).toBe("unknown");
   });
 });

@@ -190,6 +190,29 @@ cargo build -p stellar-stream-contract --release
 
 ## PR Checklist
 
+### Dependency update verification
+
+After changing the Stellar SDK, frontend dependencies, or an npm lockfile, run this from the repository root:
+
+```bash
+npm run verify:dependencies
+```
+
+The command checks the backend and frontend manifest/lockfile pairs. For each valid pair it runs `npm ci`, the CI typecheck, lint and test commands (including coverage), the build, and `npm audit --package-lock-only --audit-level=high`. It prints `PASS`, `FAIL`, or `SKIP` for each check and exits with code 1 if any check fails. `npm ci` removes the corresponding `node_modules`, so save any local changes there first. An npm registry connection is needed for a fresh install and the audit.
+
+Treat a failed clean install, typecheck, lint, test, build, or high/critical audit as a failed verification report. An audit service error is also a failure, but it is not evidence of a vulnerability. If the manifest and lockfile disagree, the command still audits the existing lockfile; those findings describe locked packages and may differ from the intended manifest.
+
+#### Recovering a failed dependency update
+
+Start an update on a clean branch and record its starting commit with `git rev-parse HEAD`. Run `npm run verify:dependencies` **before** editing dependencies. Record baseline failures. Continue only if this update is meant to repair one of them; otherwise stop and report them. The verifier checks both backend and frontend, so an unrelated failure in either area still makes the full report fail.
+
+For an attempted update, use the following sequence for only the affected `backend/` or `frontend/` package pair:
+
+1. **Detect.** Run `npm run verify:dependencies` and read each `FAIL` or `SKIP`. A manifest/lockfile mismatch or `npm ci` `EUSAGE` is drift. For an audit failure, run `npm audit` in the affected directory and `npm explain <package>` to identify the vulnerable dependency and its parent. A registry timeout or audit service error is an unknown result, not a clean audit.
+2. **Repair one cause.** For drift, decide whether the intended change is in `package.json` or the lockfile, then run `npm install --package-lock-only --ignore-scripts` in that directory and review `git diff` for its two dependency files. For a confirmed advisory with a compatible fix, use `npm audit fix --package-lock-only --ignore-scripts`, inspect the diff, and add focused compatibility tests if an SDK or API changes. If the only fix requires a major upgrade, a new Node runtime, or `--force`, stop and plan that compatibility change separately; do not apply it as an automatic retry.
+3. **Verify.** Run `npm ci` in the affected directory, then `npm run verify:dependencies` from the repository root. Accept the update only when the verifier exits zero, the relevant SDK/frontend tests pass, and the manifest and lockfile are committed together. Do not treat an audit of a stale lockfile, a skipped check, or a passing install alone as a healthy result.
+4. **Stop or roll back.** Do not rerun a deterministic drift, advisory, test, or build failure without changing its cause. For `ECONNRESET`, registry 5xx, or an audit service outage, retry the *same command* at most once after the service recovers, with no dependency-file edits between attempts. If it fails again, stop. For an uncommitted attempt that changed only the dependency pair, restore just those files with `git restore --source=<starting-commit> -- <area>/package.json <area>/package-lock.json`. If the attempt also changed tests or code, review `git diff` and restore only its files; do not discard another contributor's edits. For a committed attempt, use `git revert <update-commit>`. Never use `git reset --hard` or `npm audit fix --force` as a recovery shortcut. Run `npm ci` again after rollback and report any baseline failures that remain.
+
 Before submitting a pull request, ensure your changes meet the following criteria:
 
 ### Code Quality

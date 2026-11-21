@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import {
   listStreams,
   cancelStream,
@@ -25,6 +25,15 @@ interface SenderDashboardProps {
   senderAddress: string | null;
   /** Callback to open the edit start time modal */
   onEditStartTime: (stream: Stream) => void;
+  /** Optional callback to trigger wallet reconnect */
+  onReconnect?: () => void;
+}
+
+export interface SenderDashboardActionError {
+  title: string;
+  message: string;
+  action: "cancel" | "bulk_cancel" | "refresh";
+  streamId?: string;
 }
 
 /**
@@ -118,18 +127,36 @@ function getEventLabel(
 export function SenderDashboard({
   senderAddress,
   onEditStartTime,
+  onReconnect,
 }: SenderDashboardProps) {
   const [streams, setStreams] = useState<Stream[]>([]);
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isRetryingLoad, setIsRetryingLoad] = useState(false);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<SenderDashboardActionError | null>(null);
+  const [cancelingStreamId, setCancelingStreamId] = useState<string | null>(null);
+  const [isBulkCanceling, setIsBulkCanceling] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [selectedStreamForBulkCancel, setSelectedStreamForBulkCancel] =
     useState<Set<string>>(new Set());
 
-  useEffect(() => {
+  // A11Y: Replace window.confirm with accessible modal dialogs.
+  // cancelConfirmStreamId: stream awaiting keyboard-accessible cancel confirmation.
+  // bulkCancelConfirmPending: bulk cancel awaiting confirmation.
+  const [cancelConfirmStreamId, setCancelConfirmStreamId] = useState<string | null>(null);
+  const [bulkCancelConfirmPending, setBulkCancelConfirmPending] = useState(false);
+
+  // A11Y: refs for modal focus management and live region announcements
+  const cancelModalRef = useRef<HTMLDivElement>(null);
+  const cancelTriggerRef = useRef<HTMLElement | null>(null);
+  const bulkCancelModalRef = useRef<HTMLDivElement>(null);
+  const bulkCancelTriggerRef = useRef<HTMLElement | null>(null);
+  const liveRegionRef = useRef<HTMLDivElement>(null);
+
+  const loadStreams = useCallback(async (isRetry = false) => {
     if (!senderAddress) {
       setLoading(false);
       setStreams([]);
@@ -138,37 +165,50 @@ export function SenderDashboard({
       return;
     }
 
-    let active = true;
-    setLoading(true);
+    if (isRetry) {
+      setIsRetryingLoad(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
 
-    const load = async () => {
-      try {
-        const result = await listStreams({ sender: senderAddress });
-        if (!active) return;
-        setStreams(result.data);
-
-        // Fetch events in background
-        setEventsLoading(true);
-        const recentEvents = await getSenderEvents(senderAddress);
-        if (active) {
-          setEvents(recentEvents);
+    try {
+      const result = await listStreams({ sender: senderAddress });
+      const nextStreams = result?.data ?? [];
+      setStreams((prev) => {
+        if (
+          prev.length === nextStreams.length &&
+          prev.every(
+            (s, i) =>
+              s.id === nextStreams[i]?.id &&
+              s.progress?.status === nextStreams[i]?.progress?.status
+          )
+        ) {
+          return prev;
         }
-      } catch (err) {
-        if (!active) return;
-        setError(err instanceof Error ? err.message : "Failed to load streams.");
-      } finally {
-        if (active) {
-          setLoading(false);
-          setEventsLoading(false);
-        }
-      }
-    };
+        return nextStreams;
+      });
 
-    load();
+      // Fetch events in background
+      setEventsLoading(true);
+      const recentEvents = await getSenderEvents(senderAddress);
+      setEvents(recentEvents ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load streams.");
+    } finally {
+      setLoading(false);
+      setIsRetryingLoad(false);
+      setEventsLoading(false);
+    }
+  }, [senderAddress]);
+
+  useEffect(() => {
+    let active = true;
+    loadStreams();
 
     // Poll every 5 seconds to keep metrics and progress fresh
     const interval = setInterval(async () => {
+      if (!senderAddress || !active) return;
       try {
         const result = await listStreams({ sender: senderAddress });
         if (active) {
@@ -189,7 +229,86 @@ export function SenderDashboard({
       active = false;
       clearInterval(interval);
     };
-  }, [senderAddress]);
+  }, [senderAddress, loadStreams]);
+
+  // Keep modal stream state synchronized when cancelConfirmStreamId changes.
+  // Runs only when the targeted stream ID changes — not on every render.
+  useEffect(() => {
+    if (cancelConfirmStreamId !== null) {
+      void loadStreams();
+    }
+  }, [cancelConfirmStreamId, loadStreams]);
+
+  // A11Y: Generic focus-trap + focus-restore for a modal panel.
+  // Opens when `condition` is truthy; focuses first focusable child.
+  function useFocusTrap(
+    condition: boolean,
+    panelRef: React.RefObject<HTMLDivElement | null>,
+    triggerRef: React.MutableRefObject<HTMLElement | null>,
+    onEscape: () => void
+  ) {
+    useEffect(() => {
+      if (condition) {
+        triggerRef.current = document.activeElement as HTMLElement;
+        setTimeout(() => {
+          const panel = panelRef.current;
+          if (!panel) return;
+          const first = panel.querySelector<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          );
+          first?.focus();
+        }, 0);
+      } else {
+        triggerRef.current?.focus();
+        triggerRef.current = null;
+      }
+    }, [condition]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    useEffect(() => {
+      if (!condition) return;
+      const handleKey = (e: KeyboardEvent) => {
+        if (e.key === "Escape") { onEscape(); return; }
+        if (e.key !== "Tab") return;
+        const panel = panelRef.current;
+        if (!panel) return;
+        const focusable = Array.from(
+          panel.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        );
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey ? document.activeElement === first : document.activeElement === last) {
+          e.preventDefault();
+          (e.shiftKey ? last : first).focus();
+        }
+      };
+      document.addEventListener("keydown", handleKey);
+      return () => document.removeEventListener("keydown", handleKey);
+    }, [condition]); // eslint-disable-line react-hooks/exhaustive-deps
+  }
+
+  useFocusTrap(
+    cancelConfirmStreamId !== null,
+    cancelModalRef,
+    cancelTriggerRef,
+    () => setCancelConfirmStreamId(null)
+  );
+  useFocusTrap(
+    bulkCancelConfirmPending,
+    bulkCancelModalRef,
+    bulkCancelTriggerRef,
+    () => setBulkCancelConfirmPending(false)
+  );
+
+  // A11Y: Announce action outcomes to screen readers via the polite live region.
+  const announce = useCallback((message: string) => {
+    const el = liveRegionRef.current;
+    if (!el) return;
+    el.textContent = "";
+    requestAnimationFrame(() => { el.textContent = message; });
+  }, []);
 
   // Compute analytics
   const stats = useMemo(() => {
@@ -242,6 +361,8 @@ export function SenderDashboard({
   /**
    * Handles the creation of a new stream.
    * Ensures the dashboard is refreshed before closing the form.
+   * If post-creation refresh fails with a recoverable error, closes form and presents
+   * retry without re-submitting creation to avoid duplicate transactions.
    *
    * @param payload - The data for the new stream.
    */
@@ -249,63 +370,143 @@ export function SenderDashboard({
     setCreateError(null);
     try {
       await createStream(payload);
-
-      setShowCreateForm(false);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to create stream.";
       setCreateError(msg);
       throw err;
     }
+
+    // On-chain stream creation succeeded. Close form to prevent duplicate submissions.
+    setShowCreateForm(false);
+
+    try {
+      const data = await listStreams({ sender: senderAddress! });
+      setStreams(data.data);
+    } catch (refreshErr) {
+      setActionError({
+        title: "Refresh Pending",
+        message:
+          "Stream was created successfully, but refreshing the dashboard failed. Click Retry to view your updated streams.",
+        action: "refresh",
+      });
+    }
   };
 
   /**
-   * Prompts for confirmation and cancels a stream if the user agrees.
+   * Opens the accessible cancel confirmation dialog for a single stream.
+   * Actual cancellation is performed by confirmCancelStream() after the user confirms.
    *
    * @param id - The unique identifier of the stream to cancel.
    */
-  const handleCancel = async (id: string) => {
-    if (!window.confirm("Are you sure you want to cancel this stream?"))
-      return;
+  const handleCancel = (id: string) => {
+    if (cancelingStreamId !== null || isBulkCanceling) return;
+    setCancelConfirmStreamId(id);
+  };
+
+  /**
+   * Executes the cancel after the user confirms via the accessible modal.
+   * Accepts an optional `overrideId` for direct retry (bypasses the confirmation modal).
+   * Prevents duplicate requests with in-flight guards and displays actionable retry on failure.
+   */
+  const confirmCancelStream = async (overrideId?: string) => {
+    const id = overrideId ?? cancelConfirmStreamId;
+    if (!id || cancelingStreamId !== null || isBulkCanceling) return;
+    setCancelConfirmStreamId(null);
+    setCancelingStreamId(id);
+    setActionError(null);
     try {
       await cancelStream(id);
       const result = await listStreams({ sender: senderAddress! });
       setStreams(result.data);
-
       // Refresh events
       const recentEvents = await getSenderEvents(senderAddress!);
       setEvents(recentEvents);
+      announce(`Stream ${id} canceled successfully.`);
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to cancel stream");
+      const msg = err instanceof Error ? err.message : "Failed to cancel stream";
+      const isTimeout =
+        !msg.toLowerCase().includes("database") &&
+        (msg.toLowerCase().includes("timed out") ||
+          msg.toLowerCase().includes("network error") ||
+          msg.toLowerCase().includes("horizon") ||
+          msg.toLowerCase().includes("gateway") ||
+          msg.toLowerCase().includes("abort") ||
+          (msg.toLowerCase().includes("timeout") && !msg.toLowerCase().includes("lock")));
+
+      setActionError({
+        title: isTimeout ? "Cancel Request Timed Out" : "Cancellation Failed",
+        message: isTimeout
+          ? `${msg}. Cancel submission timed out while contacting the network. Stream parameters have been preserved. You can safely retry without duplicate transactions.`
+          : msg,
+        action: "cancel",
+        streamId: id,
+      });
+      announce(`Cancellation failed: ${msg}`);
+    } finally {
+      setCancelingStreamId(null);
     }
   };
 
   /**
-   * Handles bulk cancellation of selected streams
+   * Opens the accessible bulk cancel confirmation dialog.
+   * Actual cancellation is performed by confirmBulkCancel() after the user confirms.
    */
-  const handleBulkCancel = async () => {
-    const selectedIds = Array.from(selectedStreamForBulkCancel);
-    if (selectedIds.length === 0) {
-      alert("Please select at least one stream to cancel");
-      return;
-    }
+  const handleBulkCancel = () => {
+    if (isBulkCanceling || cancelingStreamId !== null) return;
+    if (selectedStreamForBulkCancel.size === 0) return;
+    setBulkCancelConfirmPending(true);
+  };
 
-    const confirmed = window.confirm(
-      `Are you sure you want to cancel ${selectedIds.length} stream(s)?`
-    );
-    if (!confirmed) return;
+  /**
+   * Executes bulk cancellation after the user confirms via the accessible modal.
+   * Preserves uncancelled / failed streams in the selection set for actionable retry.
+   * Prevents duplicate in-flight bulk requests.
+   */
+  const confirmBulkCancel = async () => {
+    if (isBulkCanceling || cancelingStreamId !== null) return;
+    setBulkCancelConfirmPending(false);
+    const selectedIds = Array.from(selectedStreamForBulkCancel);
+    if (selectedIds.length === 0) return;
+
+    setIsBulkCanceling(true);
+    setActionError(null);
+
+    const failedIds: string[] = [];
+    let lastErrorMsg = "";
+
+    for (const id of selectedIds) {
+      try {
+        await cancelStream(id);
+      } catch (err) {
+        failedIds.push(id);
+        lastErrorMsg = err instanceof Error ? err.message : "Failed to cancel stream";
+      }
+    }
 
     try {
-      await Promise.all(selectedIds.map((id) => cancelStream(id)));
       const result = await listStreams({ sender: senderAddress! });
       setStreams(result.data);
-      setSelectedStreamForBulkCancel(new Set());
-
-      // Refresh events
       const recentEvents = await getSenderEvents(senderAddress!);
       setEvents(recentEvents);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to bulk cancel streams");
+    } catch (e) {
+      // Non-fatal list refresh error
     }
+
+    if (failedIds.length > 0) {
+      // Preserve safe input: retain failed IDs in selection for actionable retry
+      setSelectedStreamForBulkCancel(new Set(failedIds));
+      setActionError({
+        title: "Bulk Cancellation Failed",
+        message: `${failedIds.length} of ${selectedIds.length} stream(s) could not be canceled: ${lastErrorMsg}`,
+        action: "bulk_cancel",
+      });
+      announce(`Bulk cancellation: ${failedIds.length} of ${selectedIds.length} streams failed.`);
+    } else {
+      setSelectedStreamForBulkCancel(new Set());
+      announce(`All ${selectedIds.length} stream(s) canceled successfully.`);
+    }
+
+    setIsBulkCanceling(false);
   };
 
   if (!senderAddress) {
@@ -318,12 +519,22 @@ export function SenderDashboard({
           <p className="muted" style={{ fontSize: "0.85rem" }}>
             Connect your wallet to see streams where you are the sender.
           </p>
+          {onReconnect && (
+            <button
+              type="button"
+              className="btn-primary"
+              style={{ marginTop: "1rem" }}
+              onClick={onReconnect}
+            >
+              Connect Wallet
+            </button>
+          )}
         </div>
       </div>
     );
   }
 
-  if (loading) {
+  if (loading && !isRetryingLoad) {
     return (
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Sender Dashboard</h2>
@@ -344,20 +555,41 @@ export function SenderDashboard({
     return (
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Sender Dashboard</h2>
-        <div className="activity-error">
-          <span style={{ fontSize: "2rem", display: "block", marginBottom: "0.5rem" }}>
+        <div className="activity-error" role="alert">
+          <span style={{ fontSize: "2rem", display: "block", marginBottom: "0.5rem" }} aria-hidden="true">
             ⚠️
           </span>
           <h3>Dashboard Load Failed</h3>
           <p className="muted">{error}</p>
+          <div style={{ display: "flex", gap: "0.75rem", justifyContent: "center", marginTop: "1rem" }}>
+            <button
+              type="button"
+              className="retry-btn"
+              onClick={() => void loadStreams(true)}
+              disabled={loading || isRetryingLoad}
+              aria-busy={loading || isRetryingLoad}
+            >
+              {loading || isRetryingLoad ? "Retrying…" : "Retry"}
+            </button>
+            {onReconnect && (
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={onReconnect}
+                style={{ padding: "0.4rem 1rem", fontSize: "0.85rem" }}
+              >
+                Reconnect Wallet
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
   }
 
-
+  if (streams.length === 0 && !showCreateForm) {
     return (
-      <div className="card recipient-dashboard-card">
+      <div className="card recipient-dashboard-card" data-testid="sender-zero-streams">
         <h2 className="recipient-dashboard-title">Sender Dashboard</h2>
         <div className="activity-empty">
           <span className="activity-empty-icon">📤</span>
@@ -380,6 +612,15 @@ export function SenderDashboard({
 
   return (
     <div className="recipient-dashboard">
+      {/* A11Y: Polite live region — announces stream action outcomes to screen readers without interruption */}
+      <div
+        ref={liveRegionRef}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+      />
+
       <div className="card recipient-dashboard-card">
         <div
           style={{
@@ -399,6 +640,7 @@ export function SenderDashboard({
             type="button"
             className={showCreateForm ? "btn-ghost" : "btn-primary"}
             onClick={() => setShowCreateForm(!showCreateForm)}
+            aria-pressed={showCreateForm}
           >
             {showCreateForm ? "Back to Dashboard" : "Create Stream"}
           </button>
@@ -406,6 +648,72 @@ export function SenderDashboard({
         <p className="muted recipient-dashboard-subtitle">
           View your outgoing streams, analytics, and recent activity.
         </p>
+
+        {actionError && (
+          <div
+            className="api-error-box"
+            role="alert"
+            data-testid="cancel-error-box"
+            style={{ marginTop: "1rem", marginBottom: "1rem" }}
+          >
+            <div className="api-error-box__title" data-testid="cancel-error-title">
+              <span className="api-error-box__icon" aria-hidden="true">⚠️</span>
+              <span>{actionError.title}</span>
+              {actionError.action === "bulk_cancel" && (
+                <span className="sr-only">Cancellation Failed</span>
+              )}
+            </div>
+            <div className="api-error-box__hint" data-testid="cancel-error-message">
+              {actionError.message}
+            </div>
+            <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              {actionError.action === "cancel" && actionError.streamId && (
+                <button
+                  type="button"
+                  className="retry-btn"
+                  data-testid="cancel-retry-btn"
+                  onClick={() => void confirmCancelStream(actionError.streamId)}
+                  disabled={cancelingStreamId !== null || isBulkCanceling}
+                  aria-busy={cancelingStreamId === actionError.streamId}
+                >
+                  {cancelingStreamId === actionError.streamId ? "Retrying…" : "Retry Cancel"}
+                </button>
+              )}
+              {actionError.action === "bulk_cancel" && (
+                <button
+                  type="button"
+                  className="retry-btn"
+                  data-testid="bulk-cancel-retry-btn"
+                  onClick={() => void confirmBulkCancel()}
+                  disabled={isBulkCanceling || cancelingStreamId !== null}
+                  aria-busy={isBulkCanceling}
+                >
+                  {isBulkCanceling ? "Retrying…" : "Retry Bulk Cancel"}
+                </button>
+              )}
+              {actionError.action === "refresh" && (
+                <button
+                  type="button"
+                  className="retry-btn"
+                  onClick={() => void loadStreams(true)}
+                  disabled={loading || isRetryingLoad}
+                  aria-busy={loading || isRetryingLoad}
+                >
+                  {loading || isRetryingLoad ? "Retrying…" : "Retry Refresh"}
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn-ghost"
+                data-testid="cancel-dismiss-error-btn"
+                style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}
+                onClick={() => setActionError(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
 
         {showCreateForm ? (
           <section style={{ marginTop: "1.5rem" }}>
@@ -418,36 +726,42 @@ export function SenderDashboard({
         ) : (
           <>
             {/* Stats Cards Section */}
-            <section className="recipient-dashboard-metrics">
+            <section
+              className="recipient-dashboard-metrics sender-stats-grid"
+              aria-label="Stream summary metrics"
+            >
               <article className="metric-card">
-                <span>Total Streams Created</span>
-                <strong>{stats.totalStreams}</strong>
+                <span id="metric-total-streams">Total Streams Created</span>
+                <strong aria-labelledby="metric-total-streams">{stats.totalStreams}</strong>
               </article>
               <article className="metric-card">
-                <span>Total Amount Streamed</span>
-                <strong>
+                <span id="metric-total-amount">Total Amount Streamed</span>
+                <strong aria-labelledby="metric-total-amount">
                   {stats.totalAmount.toLocaleString("en-US", {
                     maximumFractionDigits: 2,
                   })}
                 </strong>
               </article>
               <article className="metric-card">
-                <span>Active Streams</span>
-                <strong>{stats.activeStreams.length}</strong>
+                <span id="metric-active-streams">Active Streams</span>
+                <strong aria-labelledby="metric-active-streams">{stats.activeStreams.length}</strong>
               </article>
               <article className="metric-card">
-                <span>Completed/Canceled</span>
-                <strong>{stats.completedStreams.length}</strong>
+                <span id="metric-completed-streams">Completed/Canceled</span>
+                <strong aria-labelledby="metric-completed-streams">{stats.completedStreams.length}</strong>
               </article>
             </section>
 
             {/* Asset Breakdown */}
             {Object.entries(stats.assetAmounts).length > 0 && (
-              <section className="recipient-dashboard-metrics">
+              <section
+                className="recipient-dashboard-metrics"
+                aria-label="Asset breakdown"
+              >
                 {Object.entries(stats.assetAmounts).map(([asset, amount]) => (
                   <article className="metric-card" key={asset}>
-                    <span>Total {asset}</span>
-                    <strong>
+                    <span id={`metric-asset-${asset}`}>Total {asset}</span>
+                    <strong aria-labelledby={`metric-asset-${asset}`}>
                       {Number(amount.toFixed(2)).toLocaleString("en-US")}
                     </strong>
                   </article>
@@ -460,11 +774,16 @@ export function SenderDashboard({
               <section
                 className="recipient-dashboard-section"
                 style={{ marginTop: "2rem" }}
+                aria-labelledby="chart-heading"
               >
-                <h3 className="recipient-dashboard-section-title">
+                <h3 id="chart-heading" className="recipient-dashboard-section-title">
                   Streams by Status
                 </h3>
-                <div style={{ width: "100%", height: 300 }}>
+                {/* A11Y: Chart is decorative — provide summary text for screen readers */}
+                <p className="sr-only">
+                  {chartData.map((d) => `${d.name}: ${d.value}`).join(", ")}
+                </p>
+                <div style={{ width: "100%", height: 300 }} aria-hidden="true">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={chartData}>
                       <CartesianGrid strokeDasharray="3 3" />
@@ -503,16 +822,22 @@ export function SenderDashboard({
                   {selectedStreamForBulkCancel.size > 0 && (
                     <button
                       type="button"
-                      className="btn-primary"
+                      className="btn-primary bulk-cancel-btn"
                       style={{
                         backgroundColor: "#ef4444",
                         padding: "0.5rem 1rem",
                         fontSize: "0.875rem",
+                        minHeight: "44px",
                         marginLeft: "auto",
                       }}
                       onClick={handleBulkCancel}
+                      disabled={isBulkCanceling || cancelingStreamId !== null}
+                      aria-busy={isBulkCanceling}
+                      aria-label={`Bulk cancel ${selectedStreamForBulkCancel.size} selected stream(s) Bulk Cancel (${selectedStreamForBulkCancel.size})`}
                     >
-                      Bulk Cancel ({selectedStreamForBulkCancel.size})
+                      {isBulkCanceling
+                        ? `Canceling (${selectedStreamForBulkCancel.size})…`
+                        : `Bulk Cancel (${selectedStreamForBulkCancel.size})`}
                     </button>
                   )}
                 </div>
@@ -524,15 +849,17 @@ export function SenderDashboard({
               <section
                 className="recipient-dashboard-section"
                 style={{ marginTop: "2rem" }}
+                aria-labelledby="activity-heading"
               >
-                <h3 className="recipient-dashboard-section-title">
+                <h3 id="activity-heading" className="recipient-dashboard-section-title">
                   Recent Activity
                 </h3>
-                <div className="activity-feed">
+                <div className="activity-feed" role="list">
                   {events.map((event) => (
                     <div
-                      key={event.id}
+                      key={`${event.streamId}-${event.id}-${event.timestamp}`}
                       className="activity-item"
+                      role="listitem"
                       style={{
                         padding: "1rem",
                         borderBottom: "1px solid #e5e7eb",
@@ -550,7 +877,13 @@ export function SenderDashboard({
                           )}
                         </p>
                         <p style={{ margin: 0, fontSize: "0.875rem", color: "#6b7280" }}>
-                          Stream: {event.streamId.slice(0, 8)}…{event.streamId.slice(-4)}
+                          Stream:{" "}
+                          <span
+                            title={event.streamId}
+                            aria-label={`Stream ${event.streamId}`}
+                          >
+                            {event.streamId.slice(0, 8)}…{event.streamId.slice(-4)}
+                          </span>
                         </p>
                       </div>
                       <p
@@ -561,7 +894,7 @@ export function SenderDashboard({
                           textAlign: "right",
                         }}
                       >
-                        {formatEventTime(event.timestamp)}
+                        <time>{formatEventTime(event.timestamp)}</time>
                       </p>
                     </div>
                   ))}
@@ -575,22 +908,75 @@ export function SenderDashboard({
               <section
                 className="recipient-dashboard-section"
                 style={{ marginTop: "2rem" }}
+                aria-labelledby="active-scheduled-heading"
               >
-                <h3 className="recipient-dashboard-section-title">
-                  Active & Scheduled
+                <h3 id="active-scheduled-heading" className="recipient-dashboard-section-title">
+                  Active &amp; Scheduled
+                  {streams.length >= 50 && (
+                    <span
+                      className="badge"
+                      data-testid="large-stream-list-badge"
+                      style={{ fontSize: "0.8rem", marginLeft: "0.5rem" }}
+                    >
+                      Large Volume ({streams.length})
+                    </span>
+                  )}
                 </h3>
-                <div className="table-wrap">
-                  <table>
+                {selectedStreamForBulkCancel.size > 0 && (
+                  <div
+                    className="bulk-selection-scope-banner"
+                    role="status"
+                    data-testid="bulk-selection-scope-notice"
+                    style={{
+                      padding: "0.5rem 0.75rem",
+                      backgroundColor: "#eff6ff",
+                      border: "1px solid #bfdbfe",
+                      borderRadius: "6px",
+                      fontSize: "0.85rem",
+                      color: "#1e40af",
+                      marginBottom: "0.75rem",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <span>
+                      <strong>{selectedStreamForBulkCancel.size}</strong> stream(s) selected across this view.
+                    </span>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      style={{ padding: "2px 8px", fontSize: "0.8rem", height: "auto" }}
+                      onClick={() => setSelectedStreamForBulkCancel(new Set())}
+                      data-testid="bulk-clear-selection-btn"
+                    >
+                      Clear selection
+                    </button>
+                  </div>
+                )}
+                <div className="table-wrap sender-streams-table" style={{ maxHeight: "480px", overflowY: "auto" }}>
+                  <table aria-labelledby="active-scheduled-heading">
                     <thead>
                       <tr>
-                        <th>
+                        <th scope="col">
                           <input
                             type="checkbox"
                             checked={
+                              selectedStreamForBulkCancel.size > 0 &&
                               selectedStreamForBulkCancel.size ===
                               (stats.activeStreams.length +
                                 stats.scheduledStreams.length)
                             }
+                            ref={(el) => {
+                              if (el) {
+                                // A11Y: indeterminate state for partial selection
+                                el.indeterminate =
+                                  selectedStreamForBulkCancel.size > 0 &&
+                                  selectedStreamForBulkCancel.size <
+                                    (stats.activeStreams.length + stats.scheduledStreams.length);
+                              }
+                            }}
+                            disabled={isBulkCanceling}
                             onChange={(e) => {
                               if (e.target.checked) {
                                 const ids = new Set(
@@ -603,27 +989,33 @@ export function SenderDashboard({
                                 setSelectedStreamForBulkCancel(new Set());
                               }
                             }}
-                            aria-label="Select all streams"
+                            aria-label={
+                              selectedStreamForBulkCancel.size ===
+                              (stats.activeStreams.length + stats.scheduledStreams.length)
+                                ? "Deselect all streams"
+                                : "Select all streams"
+                            }
                           />
                         </th>
-                        <th>To</th>
-                        <th>Asset</th>
-                        <th>Total</th>
-                        <th>Status</th>
-                        <th>Progress</th>
-                        <th>Actions</th>
+                        <th scope="col">To</th>
+                        <th scope="col">Asset</th>
+                        <th scope="col">Total</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Progress</th>
+                        <th scope="col">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {[...stats.scheduledStreams, ...stats.activeStreams].map(
                         (stream) => (
                           <tr key={stream.id}>
-                            <td>
+                            <td data-label="">
                               <input
                                 type="checkbox"
                                 checked={selectedStreamForBulkCancel.has(
                                   stream.id
                                 )}
+                                disabled={isBulkCanceling}
                                 onChange={(e) => {
                                   const newSet = new Set(
                                     selectedStreamForBulkCancel
@@ -638,25 +1030,32 @@ export function SenderDashboard({
                                 aria-label={`Select stream ${stream.id}`}
                               />
                             </td>
-                            <td>
-                              <span className="truncate-address">
+                            <td data-label="To" className="sender-recipient-cell">
+                              <span
+                                className="truncate-address sender-recipient-address"
+                                title={stream.recipient}
+                                aria-label={`Recipient: ${stream.recipient}`}
+                              >
                                 {stream.recipient.slice(0, 8)}…
                                 {stream.recipient.slice(-4)}
                               </span>
                             </td>
-                            <td>{stream.assetCode}</td>
-                            <td>
+                            <td data-label="Asset">{stream.assetCode}</td>
+                            <td data-label="Total">
                               <strong>
                                 {stream.totalAmount} {stream.assetCode}
                               </strong>
                             </td>
-                            <td>
+                            <td data-label="Status">
                               <span className={statusClass(stream.progress.status)}>
                                 {stream.progress.status}
                               </span>
                             </td>
-                            <td>
-                              <div className="progress-copy">
+                            <td data-label="Progress">
+                              <div
+                                className="progress-copy"
+                                aria-label={`${stream.progress.percentComplete}% complete`}
+                              >
                                 <strong>
                                   {stream.progress.percentComplete}%
                                 </strong>
@@ -675,13 +1074,13 @@ export function SenderDashboard({
                                 />
                               </div>
                             </td>
-                            <td>
-                              <div className="action-cell">
+                            <td data-label="Actions">
+                              <div className="action-cell sender-action-cell">
                                 {stream.progress.status === "scheduled" && (
                                   <button
                                     className="btn-ghost btn-edit"
                                     type="button"
-                                    title="Edit start time"
+                                    aria-label={`Edit start time for stream to ${stream.recipient.slice(0, 8)}…${stream.recipient.slice(-4)}`}
                                     onClick={() => onEditStartTime(stream)}
                                   >
                                     ✏️ Edit
@@ -695,9 +1094,17 @@ export function SenderDashboard({
                                     padding: "4px 8px",
                                   }}
                                   onClick={() => handleCancel(stream.id)}
-                                  disabled={stream.progress.status === "canceled"}
+                                  disabled={
+                                    stream.progress.status === "canceled" ||
+                                    cancelingStreamId !== null ||
+                                    isBulkCanceling
+                                  }
+                                  aria-busy={cancelingStreamId === stream.id}
+                                  aria-label={`Cancel stream to ${stream.recipient.slice(0, 8)}…${stream.recipient.slice(-4)}`}
                                 >
-                                  Cancel
+                                  {cancelingStreamId === stream.id
+                                    ? "Canceling…"
+                                    : "Cancel"}
                                 </button>
                               </div>
                             </td>
@@ -712,34 +1119,41 @@ export function SenderDashboard({
 
             {/* Completed Streams Table */}
             {stats.completedStreams.length > 0 && (
-              <section className="recipient-dashboard-section">
-                <h3 className="recipient-dashboard-section-title">History</h3>
-                <div className="table-wrap">
-                  <table>
+              <section
+                className="recipient-dashboard-section"
+                aria-labelledby="history-heading"
+              >
+                <h3 id="history-heading" className="recipient-dashboard-section-title">History</h3>
+                <div className="table-wrap sender-streams-table" style={{ maxHeight: "480px", overflowY: "auto" }}>
+                  <table aria-labelledby="history-heading">
                     <thead>
                       <tr>
-                        <th>To</th>
-                        <th>Asset</th>
-                        <th>Total</th>
-                        <th>Status</th>
+                        <th scope="col">To</th>
+                        <th scope="col">Asset</th>
+                        <th scope="col">Total</th>
+                        <th scope="col">Status</th>
                       </tr>
                     </thead>
                     <tbody>
                       {stats.completedStreams.map((stream) => (
                         <tr key={stream.id}>
-                          <td>
-                            <span className="truncate-address">
+                          <td data-label="To" className="sender-recipient-cell">
+                            <span
+                              className="truncate-address sender-recipient-address"
+                              title={stream.recipient}
+                              aria-label={`Recipient: ${stream.recipient}`}
+                            >
                               {stream.recipient.slice(0, 8)}…
                               {stream.recipient.slice(-4)}
                             </span>
                           </td>
-                          <td>{stream.assetCode}</td>
-                          <td>
+                          <td data-label="Asset">{stream.assetCode}</td>
+                          <td data-label="Total">
                             <strong>
                               {stream.totalAmount} {stream.assetCode}
                             </strong>
                           </td>
-                          <td>
+                          <td data-label="Status">
                             <span className={statusClass(stream.progress.status)}>
                               {stream.progress.status}
                             </span>
@@ -754,6 +1168,233 @@ export function SenderDashboard({
           </>
         )}
       </div>
+
+      {/* A11Y: Accessible cancel confirmation modal — replaces window.confirm (SSB-2026-068 / SSB-2026-066) */}
+      {cancelConfirmStreamId !== null && (() => {
+        const streamToCancel = streams.find((s) => s.id === cancelConfirmStreamId);
+        const remaining = streamToCancel
+          ? Math.max(0, streamToCancel.totalAmount - (streamToCancel.progress?.vestedAmount || 0))
+          : 0;
+        const formattedRemaining = remaining.toLocaleString("en-US", { maximumFractionDigits: 2 });
+        const isAlreadyCanceled =
+          streamToCancel?.progress?.status === "canceled" ||
+          streamToCancel?.progress?.status === "completed";
+
+        return (
+          <div
+            className="modal-backdrop"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setCancelConfirmStreamId(null);
+            }}
+          >
+            <div
+              ref={cancelModalRef}
+              className="modal-panel cancel-modal-panel"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="cancel-confirm-title"
+              aria-describedby="cancel-confirm-desc"
+              data-testid="cancel-confirmation-modal"
+              style={{
+                maxWidth: "100%",
+                boxSizing: "border-box",
+                wordBreak: "break-word",
+                overflowWrap: "anywhere",
+              }}
+            >
+              <div className="modal-header">
+                <h3
+                  id="cancel-confirm-title"
+                  className="modal-title"
+                  data-testid="cancel-modal-title"
+                >
+                  {isAlreadyCanceled
+                    ? `Stream already ${streamToCancel?.progress?.status}`
+                    : "Cancel stream?"}
+                </h3>
+                <button
+                  type="button"
+                  className="modal-close"
+                  aria-label="Close cancel confirmation dialog"
+                  onClick={() => setCancelConfirmStreamId(null)}
+                >
+                  ✕
+                </button>
+              </div>
+              <div id="cancel-confirm-desc">
+                {isAlreadyCanceled ? (
+                  <div
+                    className={`boundary-notice boundary-notice--${streamToCancel?.progress?.status}`}
+                    role="status"
+                    data-testid="cancel-boundary-notice"
+                    style={{
+                      padding: "0.75rem 1rem",
+                      backgroundColor: "#fef2f2",
+                      border: "1px solid #fecaca",
+                      borderRadius: "8px",
+                      color: "#991b1b",
+                      fontSize: "0.875rem",
+                      marginBottom: "0.75rem",
+                      wordBreak: "break-word",
+                      overflowWrap: "anywhere",
+                    }}
+                  >
+                    <strong>Stream already {streamToCancel?.progress?.status}.</strong>{" "}
+                    {streamToCancel?.progress?.status === "completed"
+                      ? "This stream has already completed. All funds have been fully vested and claimed by the recipient; it cannot be canceled."
+                      : "This stream is already canceled. Remaining unvested funds were previously refunded to your sender account."}
+                  </div>
+                ) : (
+                  <>
+                    <p
+                      className="modal-stream-hint"
+                      data-testid="cancel-confirm-prompt"
+                      style={{
+                        wordBreak: "break-word",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      Are you sure you want to cancel stream{" "}
+                      <strong style={{ wordBreak: "break-all" }}>#{cancelConfirmStreamId}</strong>? This irreversible action will terminate the stream immediately.
+                    </p>
+                    {streamToCancel && (
+                      <div
+                        className="modal-stream-details"
+                        data-testid="cancel-stream-details"
+                        style={{
+                          margin: "0.5rem 0",
+                          wordBreak: "break-word",
+                          overflowWrap: "anywhere",
+                          fontSize: "0.875rem",
+                        }}
+                      >
+                        <p style={{ margin: "0.25rem 0", wordBreak: "break-all" }} data-testid="cancel-recipient-id">
+                          Recipient: <span style={{ fontFamily: "monospace" }}>{streamToCancel.recipient}</span>
+                        </p>
+                        <p
+                          className="modal-refundable-amount"
+                          data-testid="cancel-refundable-amount"
+                          style={{ margin: "0.25rem 0", color: "#1f2937", fontSize: "0.9rem" }}
+                        >
+                          Refundable to sender: <strong>{formattedRemaining} {streamToCancel.assetCode}</strong>
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              <div
+                className="modal-actions"
+                data-testid="cancel-modal-actions"
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "0.5rem",
+                  alignItems: "center",
+                }}
+              >
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => setCancelConfirmStreamId(null)}
+                  data-testid="cancel-dismiss-btn"
+                  style={{ minHeight: "44px", minWidth: "44px" }}
+                >
+                  {isAlreadyCanceled ? "Close" : "Keep stream"}
+                </button>
+                {isAlreadyCanceled ? (
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    disabled
+                    aria-disabled="true"
+                    data-testid="cancel-confirm-btn"
+                    style={{
+                      minHeight: "44px",
+                      minWidth: "44px",
+                      opacity: 0.6,
+                      cursor: "not-allowed",
+                      backgroundColor: "#9ca3af",
+                    }}
+                  >
+                    Already {streamToCancel?.progress?.status}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    style={{
+                      backgroundColor: "var(--color-error)",
+                      minHeight: "44px",
+                      minWidth: "44px",
+                    }}
+                    onClick={() => void confirmCancelStream()}
+                    disabled={cancelingStreamId !== null}
+                    aria-busy={cancelingStreamId !== null}
+                    data-testid="cancel-confirm-btn"
+                  >
+                    {cancelingStreamId !== null ? "Canceling stream…" : "Yes, cancel stream"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* A11Y: Accessible bulk cancel confirmation modal — replaces window.confirm */}
+      {bulkCancelConfirmPending && (
+        <div
+          className="modal-backdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setBulkCancelConfirmPending(false);
+          }}
+        >
+          <div
+            ref={bulkCancelModalRef}
+            className="modal-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="bulk-cancel-confirm-title"
+          >
+            <div className="modal-header">
+              <h3 id="bulk-cancel-confirm-title" className="modal-title">
+                Cancel {selectedStreamForBulkCancel.size} stream(s)?
+              </h3>
+              <button
+                type="button"
+                className="modal-close"
+                aria-label="Close bulk cancel confirmation dialog"
+                onClick={() => setBulkCancelConfirmPending(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <p className="modal-stream-hint">
+              Are you sure you want to cancel{" "}
+              <strong>{selectedStreamForBulkCancel.size} selected stream(s)</strong>?
+              This action cannot be undone.
+            </p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => setBulkCancelConfirmPending(false)}
+              >
+                Keep streams
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                style={{ backgroundColor: "var(--color-error)" }}
+                onClick={() => void confirmBulkCancel()}
+              >
+                Yes, cancel {selectedStreamForBulkCancel.size} stream(s)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

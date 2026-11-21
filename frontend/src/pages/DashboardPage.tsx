@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, type RefObject } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef, type RefObject } from "react";
 import { CreateStreamForm } from "../components/CreateStreamForm";
 import { EditStartTimeModal } from "../components/EditStartTimeModal";
 import { IssueBacklog } from "../components/IssueBacklog";
@@ -25,6 +25,7 @@ import {
 } from "../services/api";
 import { ListStreamsFilters } from "../services/api";
 import { OpenIssue, Stream } from "../types/stream";
+import { StatsPanel } from "../components/StatsPanel";
 
 export interface DashboardPageProps {
   wallet?: FreighterState;
@@ -45,7 +46,11 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
   } | null>(null);
   const [loadingDashboard, setLoadingDashboard] = useState(true);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [loadingStreams, setLoadingStreams] = useState(true);
+  const [streamLoadError, setStreamLoadError] = useState<string | null>(null);
   const [totalUnfilteredCount, setTotalUnfilteredCount] = useState<number>(0);
+  const streamRequestId = useRef(0);
+  const retryInFlight = useRef(false);
   const CREATE_STREAM_SECTION_ID = "create-stream-section";
 
   const scrollToCreateStream = useCallback(() => {
@@ -55,6 +60,8 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
   const { filters, filteredStreams, setFilter } = useStreamFilter(streams);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const [loadMoreStatus, setLoadMoreStatus] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
 
   const wsUrl = getWebSocketUrl();
@@ -91,6 +98,7 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
       sender: filters.sender || urlFilters.sender,
       recipient: filters.recipient || urlFilters.recipient,
       asset: filters.assetCode || urlFilters.asset,
+      q: filters.q.trim() || undefined,
       sort: filters.sort || urlFilters.sort,
       page: filters.page > 1 ? filters.page : (urlFilters.page ?? undefined),
     }),
@@ -103,27 +111,78 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
       sender: filters.sender,
       recipient: filters.recipient,
       asset: filters.assetCode,
-      q: "",
+      q: filters.q,
     }),
     [filters],
   );
 
   async function refreshStreams(currentFilters: ListStreamsFilters): Promise<void> {
-    const result = await listStreams({ ...currentFilters, limit: 20 });
-    setStreams(result.data);
-    setHasMore(result.page * result.limit < result.total);
-    setCurrentPage(result.page);
+    const requestId = ++streamRequestId.current;
+    setLoadingStreams(true);
+    setStreamLoadError(null);
+    setLoadMoreError(null);
+    setLoadMoreStatus(null);
+    try {
+      const result = await listStreams({ ...currentFilters, limit: 20 });
+      if (requestId !== streamRequestId.current) return;
+      setStreams(result.data);
+      setHasMore(result.page * result.limit < result.total);
+      setCurrentPage(result.page);
+    } catch (err) {
+      if (requestId !== streamRequestId.current) return;
+      const message =
+        err instanceof ApiError
+          ? `Failed loading streams (${err.statusCode}). Check your connection and retry.`
+          : "Failed loading streams. Check your connection and retry.";
+      setStreamLoadError(message);
+      showToast(message, "error");
+    } finally {
+      if (requestId === streamRequestId.current) {
+        setLoadingStreams(false);
+        setInitialLoading(false);
+        setLoadingDashboard(false);
+      }
+    }
+  }
+
+  async function retryStreamLoad(): Promise<void> {
+    if (retryInFlight.current) return;
+    retryInFlight.current = true;
+    try {
+      await refreshStreams(apiFilters);
+    } finally {
+      retryInFlight.current = false;
+    }
   }
 
   async function loadMore(): Promise<void> {
     if (loadingMore || !hasMore) return;
     setLoadingMore(true);
+    setLoadMoreError(null);
+    setLoadMoreStatus("Loading more streams...");
+    const requestId = streamRequestId.current;
     try {
       const nextPage = currentPage + 1;
       const result = await listStreams({ ...apiFilters, page: nextPage, limit: 20 });
+      if (requestId !== streamRequestId.current) return;
       setStreams((prev) => [...prev, ...result.data]);
-      setHasMore(result.page * result.limit < result.total);
+      const hasAdditionalStreams =
+        result.data.length > 0 && result.page * result.limit < result.total;
+      setHasMore(hasAdditionalStreams);
       setCurrentPage(result.page);
+      setLoadMoreStatus(
+        result.data.length > 0
+          ? `Loaded ${result.data.length} more streams.`
+          : "No more streams to load.",
+      );
+    } catch (err) {
+      if (requestId !== streamRequestId.current) return;
+      const message =
+        err instanceof ApiError
+          ? `Failed loading more streams (${err.statusCode}). Check your connection and retry.`
+          : "Failed loading more streams. Check your connection and retry.";
+      setLoadMoreError(message);
+      setLoadMoreStatus(null);
     } finally {
       setLoadingMore(false);
     }
@@ -144,18 +203,7 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
 
   useEffect(() => {
     setLoadingDashboard(true);
-    refreshStreams(apiFilters)
-      .catch((err: unknown) => {
-        const message =
-          err instanceof ApiError
-            ? `Failed loading streams (${err.statusCode})`
-            : "Failed loading streams";
-        showToast(message, "error");
-      })
-      .finally(() => {
-        setInitialLoading(false);
-        setLoadingDashboard(false);
-      });
+    void refreshStreams(apiFilters);
   }, [apiFilters, showToast]);
 
   useEffect(() => {
@@ -289,24 +337,14 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
 
   return (
     <>
-      <section className="metric-grid">
-        <article className="metric-card">
-          <span>Total Streams</span>
-          <strong>{metrics.total}</strong>
-        </article>
-        <article className="metric-card">
-          <span>Active</span>
-          <strong>{metrics.active}</strong>
-        </article>
-        <article className="metric-card">
-          <span>Completed</span>
-          <strong>{metrics.completed}</strong>
-        </article>
-        <article className="metric-card">
-          <span>Total Vested</span>
-          <strong>{metrics.vested}</strong>
-        </article>
-      </section>
+      <StatsPanel
+        total={metrics.total}
+        active={metrics.active}
+        completed={metrics.completed}
+        vested={metrics.vested}
+        loading={initialLoading}
+        streamsLoading={loadingMore}
+      />
 
       <section className="chart-section">
         <h2 className="chart-section__title">Stream Metrics Trends</h2>
@@ -327,6 +365,11 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
         </div>
         <StreamsTable
           streams={filteredStreams}
+          loading={loadingStreams}
+          loadError={streamLoadError}
+          onRetryLoad={retryStreamLoad}
+          loadMoreError={loadMoreError}
+          loadMoreStatus={loadMoreStatus}
           filters={tableFilters}
           totalStreamCount={totalUnfilteredCount}
           onCreateStream={scrollToCreateStream}
@@ -335,6 +378,7 @@ export function DashboardPage({ wallet: propWallet }: DashboardPageProps) {
             setFilter("sender", next.sender ?? defaultStreamFilters.sender);
             setFilter("recipient", next.recipient ?? defaultStreamFilters.recipient);
             setFilter("assetCode", next.asset ?? defaultStreamFilters.assetCode);
+            setFilter("q", next.q ?? defaultStreamFilters.q);
           }}
           setUrlFilters={setUrlFilters}
           onCancel={handleCancel}

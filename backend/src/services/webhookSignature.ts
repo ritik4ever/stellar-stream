@@ -35,9 +35,13 @@ export function verifyWebhookSignature(
 export function getWebhookHeaders(
   payload: string,
   secret?: string,
+  deliveryId?: string,
 ): Record<string, string> {
   return {
     "Content-Type": "application/json",
+    ...(deliveryId && {
+      "Idempotency-Key": `stellar-stream-${deliveryId}`,
+    }),
     ...(secret && {
       "X-Webhook-Signature": `sha256=${computeWebhookSignature(payload, secret)}`,
     }),

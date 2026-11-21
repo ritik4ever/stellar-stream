@@ -9,8 +9,12 @@ vi.mock("./metrics", () => ({
   eventsIndexedTotal: { inc: vi.fn() },
   ledgersScannedTotal: { inc: vi.fn() },
   lastIndexedLedger: { set: vi.fn() },
+  indexerLatestLedger: { set: vi.fn() },
+  indexerLedgerLag: { set: vi.fn() },
   indexerErrorsTotal: { inc: vi.fn() },
   indexerCircuitState: { set: vi.fn() },
+  indexerEventsDedupedTotal: { inc: vi.fn() },
+  indexerPollDurationMs: { set: vi.fn() },
 }));
 
 import { CircuitBreaker } from "./indexer";

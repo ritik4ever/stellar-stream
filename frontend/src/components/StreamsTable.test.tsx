@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { StreamsTable, STREAMS_TABLE_VIRTUAL_OVERSCAN } from "./StreamsTable";
@@ -54,6 +55,25 @@ function setScrollViewport(element: HTMLElement, height: number) {
   });
 }
 
+function createIntersectionObserverMock(
+  onObserve: (callback: IntersectionObserverCallback) => void,
+): typeof IntersectionObserver {
+  return class MockIntersectionObserver implements IntersectionObserver {
+    readonly root = null;
+    readonly rootMargin = "";
+    readonly thresholds: ReadonlyArray<number> = [];
+
+    constructor(callback: IntersectionObserverCallback) {
+      onObserve(callback);
+    }
+
+    observe = vi.fn();
+    disconnect = vi.fn();
+    unobserve = vi.fn();
+    takeRecords = vi.fn((): IntersectionObserverEntry[] => []);
+  };
+}
+
 describe("StreamsTable column visibility", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -89,6 +109,54 @@ describe("StreamsTable column visibility", () => {
     render(<StreamsTable {...defaultProps} />);
 
     expect(screen.getByRole("columnheader", { name: "Asset" })).toBeInTheDocument();
+  });
+
+  it("shows a stream load error and invokes its retry action", () => {
+    const onRetryLoad = vi.fn();
+    render(
+      <StreamsTable
+        {...defaultProps}
+        filters={{ status: "active" }}
+        loadError="Failed loading streams. Check your connection and retry."
+        onRetryLoad={onRetryLoad}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Check your connection and retry.",
+    );
+    expect(screen.getByLabelText("Status")).toHaveValue("active");
+    expect(screen.getByText("Vested: 20.00 USDC")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(onRetryLoad).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the stream amount and row actions available in labeled cells", () => {
+    const { container } = render(<StreamsTable {...defaultProps} />);
+
+    expect(screen.getByText("Vested: 20.00 USDC").closest("td")).toHaveAttribute(
+      "data-label",
+      "Progress",
+    );
+    expect(screen.getByRole("button", { name: "Cancel stream 1" }).closest("td"))
+      .toHaveAttribute("data-label", "Actions");
+    expect(screen.getByText("G_SENDER...").closest("td")).toHaveAttribute(
+      "data-label",
+      "Sender",
+    );
+    expect(
+      screen.getByTitle(
+        "G_SENDER123456789012345678901234567890123456789012345678901",
+      ),
+    ).toBeInTheDocument();
+    expect(container.querySelector(".copyable-address__copy")).toHaveStyle({
+      minHeight: "44px",
+    });
+    expect(container.querySelector(".mobile-select-all input")).toHaveAttribute(
+      "aria-label",
+      "Select all streams",
+    );
   });
 });
 
@@ -158,13 +226,55 @@ describe("StreamsTable infinite scroll", () => {
   });
 
   it("shows loading indicator when loadingMore is true", () => {
-    render(<StreamsTable {...defaultProps} loadingMore={true} />);
-    expect(screen.getByText(/Loading more streams/i)).toBeInTheDocument();
+    render(
+      <StreamsTable
+        {...defaultProps}
+        onLoadMore={vi.fn()}
+        loadingMore={true}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(/Loading more streams/i);
   });
 
   it("shows end of results message when hasMore is false", () => {
-    render(<StreamsTable {...defaultProps} hasMore={false} />);
-    expect(screen.getByText(/End of results/i)).toBeInTheDocument();
+    render(
+      <StreamsTable
+        {...defaultProps}
+        onLoadMore={vi.fn()}
+        hasMore={false}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(/End of results/i);
+  });
+
+  it("supports loading and retrying more streams from the keyboard with a polite status", async () => {
+    const user = userEvent.setup();
+    const onLoadMore = vi.fn();
+    const { rerender } = render(
+      <StreamsTable {...defaultProps} onLoadMore={onLoadMore} hasMore />,
+    );
+
+    const loadMoreButton = screen.getByRole("button", { name: "Load more streams" });
+    loadMoreButton.focus();
+    expect(document.activeElement).toBe(loadMoreButton);
+    await user.keyboard("{Enter}");
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <StreamsTable
+        {...defaultProps}
+        onLoadMore={onLoadMore}
+        hasMore
+        loadMoreError="Failed loading more streams. Check your connection and retry."
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Failed loading more streams");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    const retryButton = screen.getByRole("button", { name: "Retry loading streams" });
+    retryButton.focus();
+    await user.keyboard("{Enter}");
+    expect(onLoadMore).toHaveBeenCalledTimes(2);
   });
 
   it("calls onLoadMore when sentinel becomes visible", () => {
@@ -172,10 +282,9 @@ describe("StreamsTable infinite scroll", () => {
     let observerCallback: IntersectionObserverCallback = () => {};
 
     vi.spyOn(window, "IntersectionObserver").mockImplementation(
-      (callback) => {
+      createIntersectionObserverMock((callback) => {
         observerCallback = callback;
-        return { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn(), root: null, rootMargin: "", thresholds: [] };
-      },
+      }),
     );
 
     render(
@@ -199,10 +308,9 @@ describe("StreamsTable infinite scroll", () => {
     let observerCallback: IntersectionObserverCallback = () => {};
 
     vi.spyOn(window, "IntersectionObserver").mockImplementation(
-      (callback) => {
+      createIntersectionObserverMock((callback) => {
         observerCallback = callback;
-        return { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn(), root: null, rootMargin: "", thresholds: [] };
-      },
+      }),
     );
 
     render(
@@ -225,10 +333,9 @@ describe("StreamsTable infinite scroll", () => {
     let observerCallback: IntersectionObserverCallback = () => {};
 
     vi.spyOn(window, "IntersectionObserver").mockImplementation(
-      (callback) => {
+      createIntersectionObserverMock((callback) => {
         observerCallback = callback;
-        return { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn(), root: null, rootMargin: "", thresholds: [] };
-      },
+      }),
     );
 
     render(

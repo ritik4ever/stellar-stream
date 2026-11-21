@@ -187,5 +187,19 @@ describe("eventHistory", () => {
       expect(historyB).toHaveLength(1);
       expect(historyB[0].timestamp).toBe(500);
     });
+
+    it("orders same-second created before claimed in asc and claimed before created in desc even if created is backfilled later", async () => {
+      const { recordEvent, getStreamHistory } = await import("./eventHistory");
+
+      // Simulate claimed recorded before a backfilled created at the exact same second
+      recordEvent("stream-same-sec", "claimed", 1000, "GRECIPIENT", 50);
+      recordEvent("stream-same-sec", "created", 1000, "GSENDER", 100);
+
+      const ascHistory = getStreamHistory("stream-same-sec", 20, 0, "asc");
+      expect(ascHistory.map((e) => e.eventType)).toEqual(["created", "claimed"]);
+
+      const descHistory = getStreamHistory("stream-same-sec", 20, 0, "desc");
+      expect(descHistory.map((e) => e.eventType)).toEqual(["claimed", "created"]);
+    });
   });
 });

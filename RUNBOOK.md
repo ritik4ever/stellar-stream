@@ -1,27 +1,33 @@
 # Operational Runbook
 
 This runbook provides step-by-step procedures for common operational tasks in StellarStream.  
-For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**.
-
-## Table of Contents
+For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**.## Table of Contents
 1. [Reset SQLite Database](#reset-sqlite-database)
-2. [Rotate JWT Secret](#rotate-jwt-secret)
-3. [Force Indexer Reconcile](#force-indexer-reconcile)
-4. [Requeue Dead-Letter Webhooks](#requeue-dead-letter-webhooks)
-5. [Archive Old Streams Manually](#archive-old-streams-manually)
-6. [Indexer Falls Behind](#indexer-falls-behind)
-7. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
-8. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
-9. [Contract Invocation Timeout](#contract-invocation-timeout)
+2. [SQLite Restore from Backup](#sqlite-restore-from-backup)
+3. [Rotate JWT Secret](#rotate-jwt-secret)
+4. [Force Indexer Reconcile](#force-indexer-reconcile)
+5. [Requeue Dead-Letter Webhooks](#requeue-dead-letter-webhooks)
+6. [Archive Old Streams Manually](#archive-old-streams-manually)
+7. [Indexer Falls Behind](#indexer-falls-behind)
+8. [Indexer Monitoring Outcome Signal](#indexer-monitoring-outcome-signal)
+9. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
+10. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
+11. [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal)
+12. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
+13. [Contract Invocation Timeout](#contract-invocation-timeout)
+14. [Docker Compose Startup Failure](#docker-compose-startup-failure)
 
 ---
 
 ### Reset SQLite Database
+
 **Prerequisites:**
+
 - Access to the server's filesystem.
 - Backend service stopped (recommended).
 
 **Steps:**
+
 1. Stop the backend service.
 2. Navigate to the `backend/data` directory.
 3. Delete the database file:
@@ -31,16 +37,361 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 4. Restart the backend service.
 
 **Expected Output:**
+
 - Backend logs show: `Database initialized.` and `migrate()` running.
 - A new `streams.db` file is created.
 
 ---
 
-### Rotate JWT Secret
+### SQLite Restore from Backup
+
+This section covers restoring a SQLite database from a backup (or from a fresh
+checkout) where the schema version in the file may differ from the running code.
+The procedure is reproducible in a clean environment with no undocumented local
+state.
+
+#### How restore detection works
+
+Every time the backend opens the database file, before applying any pending
+migrations, it reads the `schema_migrations` table and compares the recorded
+schema versions against the migrations bundled with the running code.
+The result is published as the `sqlite_restore_outcome` Prometheus gauge and
+logged at startup. The signal carries counts and state only — never the
+database path, migration names, or user data — so it is safe to paste into an
+incident channel.
+
+| Outcome           | Gauge value | What it means                                                                                                                                                  | Owner action                                                                                                                                |
+| ----------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `success`         | 0           | Schema matches the running code.                                                                                                                               | None.                                                                                                                                       |
+| `transient_delay` | 1           | The restored file is behind the running code. Pending migrations are applied automatically on startup.                                                         | None while the backend starts cleanly. Verify the signal returns to `success` after restart.                                                |
+| `blocked`         | 2           | The restored file is ahead of the running code: it contains schema versions this build does not know. Forward-only migrations cannot reconcile the difference. | Deploy the code version that wrote the snapshot, or restore a snapshot taken with this build; then confirm the signal returns to `success`. |
+| `interrupted`     | 3           | The restored database backup was interrupted before completion or corrupted during active writes.                                                              | Discard the incomplete backup file, restore a valid complete backup, and confirm the signal returns to success.                             |
+
+#### Taking a backup
+
+Always stop the backend before copying the database directory so WAL pages are
+fully checkpointed into the main file.
+
+```bash
+# 1. Stop the backend.
+pm2 stop stellar-stream-backend   # or: systemctl stop stellar-stream-backend
+
+# 2. Copy the entire data directory — include the -wal and -shm companions.
+cp -r /data /data-backup-$(date +%Y%m%d-%H%M%S)
+
+# 3. Restart.
+pm2 start stellar-stream-backend
+```
+
+If you cannot stop the service, you can use SQLite's online backup API via
+`sqlite3` to copy a consistent snapshot without locking the live file:
+
+```bash
+sqlite3 /data/streams.db ".backup '/data-backup/streams-$(date +%Y%m%d).db'"
+```
+
+The `-wal` and `-shm` files are not needed for a backup produced by `.backup`
+because the command writes a fully checkpointed copy.
+
+For a repeatable backup with preflight validation and an integrity check, use
+the repository helper. It writes beside the destination, checks
+`PRAGMA integrity_check`, and publishes the result only after verification:
+
+```bash
+npm run sqlite:backup -- /data-backup/streams-$(date +%Y%m%d-%H%M%S).db
+# Or: DB_PATH=/data/streams.db SQLITE_BACKUP_PATH=/data-backup/streams.db \
+#       bash scripts/sqlite-backup.sh
+```
+
+The helper fails before opening SQLite when `DB_PATH` is missing/unreadable,
+the destination directory is missing/unwritable, `DATABASE_URL` selects
+PostgreSQL, `sqlite3` is unavailable, or one of the tunables below is not a
+non-negative integer. It never prints environment values. A fresh Compose
+database is reported as `transient_delay` during startup until migrations
+complete.
+
+Every run ends in one of three states, so the outcome is machine-checkable in a
+backup job:
+
+| Exit | State | Destination |
+| ---- | -------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `0` | verified healthy — the published file passed integrity checks | replaced with the new snapshot |
+| `1` | interrupted before completion, or unverified after retries | untouched; the run prints the rollback step and cleans up its own temp file |
+| `2` | preflight or configuration failure | nothing was attempted; this class of failure is never retried |
+
+| Tunable                             | Default | Meaning                                                        |
+| ----------------------------------- | ------- | -------------------------------------------------------------- |
+| `SQLITE_BACKUP_TIMEOUT_MS`          | `5000`  | busy timeout per snapshot attempt while the database is writable |
+| `SQLITE_BACKUP_RETRIES`             | `2`     | extra attempts after the first; `0` makes the run single-shot   |
+| `SQLITE_BACKUP_RETRY_DELAY_SECONDS` | `3`     | wait between attempts                                           |
+| `SQLITE_BACKUP_STALE_MINUTES`       | `60`    | age at which a leftover `.sqlite-backup.*` file is reported     |
+
+#### When a backup is interrupted before completion
+
+A backup can be interrupted in two places: the snapshot never finished (killed
+process, lock contention, disk pressure), or it finished and passed its checks
+but the published file is not usable. Both stop with exit `1` and a `ROLLBACK:`
+line; neither can leave a half-written backup in place of a good one.
+
+**Detection**
+
+1. Read the exit code and the `ROLLBACK:` line of the backup run. Exit `1` means
+   interrupted; exit `2` means the job was misconfigured and retrying it is
+   pointless.
+2. Look for a leftover snapshot beside the destination. The helper reports them
+   itself on its next run:
+   ```bash
+   ls -a /data-backup | grep '^\.sqlite-backup\.'
+   ```
+   Any `.sqlite-backup.*` file older than the job's normal runtime is a backup
+   that died mid-copy. It is never a restorable snapshot.
+3. Confirm what you actually hold, before relying on it:
+   ```bash
+   bash scripts/sqlite-backup.sh --verify /data-backup/streams.db
+   # Same thing through npm: npm run sqlite:verify -- /data-backup/streams.db
+   ```
+   Exit `0` means the file is complete and intact; exit `1` means it must be
+   discarded, and the command prints the rollback step.
+4. If a restore already happened, the backend reports the same condition at
+   startup as `sqlite_restore_outcome 3` (`interrupted`).
+
+**Safe retry boundaries**
+
+- Retried: a snapshot that did not complete, an empty snapshot file, or a
+  snapshot that fails `PRAGMA integrity_check` — up to `SQLITE_BACKUP_RETRIES`
+  extra attempts, spaced by `SQLITE_BACKUP_RETRY_DELAY_SECONDS`.
+- Never retried: preflight and configuration failures (exit `2`), and the
+  publish/confirm phase. Only attempt `1 + SQLITE_BACKUP_RETRIES` snapshots, so
+  a stuck lock cannot turn one backup job into an unbounded loop.
+- Re-running the helper is always safe: it writes a new temporary file and never
+  edits the live database, so an interrupted run costs nothing but the partial
+  snapshot.
+- Do not raise the retry budget to work around `database locked`. Repeated lock
+  contention means the writer is saturating the busy timeout — take the backup
+  at a quieter moment or increase `SQLITE_BACKUP_TIMEOUT_MS`, and treat a third
+  consecutive failure as an incident rather than a retry candidate.
+
+**Recovery — reach a verified healthy state, or stop with a rollback**
+
+1. Resolve the cause named in the `FAIL:` line (free disk, stop competing
+   writers, install `sqlite3`, correct `DB_PATH`).
+2. Remove the partial snapshot the run left behind, if any. The helper only ever
+   deletes its own temp file; a leftover from a killed process is yours to
+   delete after confirming no backup is still running:
+   ```bash
+   rm -f -- '/data-backup/.sqlite-backup.abc123'
+   ```
+3. Re-run the backup once:
+   ```bash
+   DB_PATH=/data/streams.db bash scripts/sqlite-backup.sh /data-backup/streams.db
+   ```
+   A success prints `RESULT: PASS` and exits `0`; that published file is the
+   verified healthy state, and it is the only file that should be treated as a
+   backup.
+4. If it still exits `1`, stop. The previous backup at that destination was left
+   untouched by the failed attempts, so roll back to it rather than accumulating
+   unverified copies:
+   ```bash
+   # The destination still holds the last snapshot that was verified.
+   bash scripts/sqlite-backup.sh --verify /data-backup/streams.db
+   # To restore it (backend stopped):
+   pm2 stop stellar-stream-backend
+   cp -p -- /data-backup/streams.db /data/streams.db
+   rm -f /data/streams.db-wal /data/streams.db-shm
+   pm2 start stellar-stream-backend
+   curl -s http://localhost:3001/metrics | grep sqlite_restore_outcome
+   ```
+   `sqlite_restore_outcome` must read `0`. If no destination passes `--verify`,
+   there is no usable backup: take a fresh one from the live database as soon as
+   the cause in step 1 is fixed, and treat the interval as an availability risk.
+5. Record the outcome. A backup job that exits `1` three times in a row is an
+   incident, not a flaky job.
+
+**If a published backup later turns out unhealthy**
+
+The helper re-checks the file after the atomic rename. When that check fails it
+puts the previous backup back and exits `1` — you get the previous snapshot, not
+a broken one. Only when no previous backup existed does it remove the unverified
+file, leaving the destination absent rather than misleading. In both cases the
+live database is never modified; restore from the last file that passes
+`--verify`. Publishing keeps one brief copy of the previous snapshot beside the
+destination, so the backup directory needs room for roughly two backups during
+the swap; a full filesystem shows up as exit `1`, not as a damaged backup.
+
+#### Restoring a backup in a clean environment
+
+These steps reproduce the expected restore outcome without undocumented local
+state. Each scenario can be exercised from a fresh checkout.
+
 **Prerequisites:**
+
+- Access to the server filesystem and the backup file.
+- Backend service stopped.
+- `sqlite3` available for inspection.
+
+**Steps:**
+
+1. Stop the backend:
+
+   ```bash
+   pm2 stop stellar-stream-backend
+   ```
+
+2. Replace the database file with the backup:
+
+   ```bash
+   # Remove the live file and its WAL companions.
+   rm -f /data/streams.db /data/streams.db-wal /data/streams.db-shm
+
+   # Place the backup.
+   cp /data-backup/streams-20260101.db /data/streams.db
+   ```
+
+3. Inspect the schema versions recorded in the backup:
+
+   ```bash
+   sqlite3 /data/streams.db \
+     "SELECT version, name, applied_at FROM schema_migrations ORDER BY version;"
+   ```
+
+4. Start the backend:
+
+   ```bash
+   pm2 start stellar-stream-backend
+   ```
+
+5. Read the restore outcome signal immediately after startup:
+   ```bash
+   curl -s http://localhost:3001/metrics | grep sqlite_restore_outcome
+   ```
+
+**Expected output** for each scenario:
+
+| Backup vs. running code           | `sqlite_restore_outcome` value | What happens                                                                                                                                           |
+| --------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Behind (fewer migrations applied) | `1` (transient_delay)          | Startup applies the pending migrations automatically. No data is at risk.                                                                              |
+| Matching (same versions)          | `0` (success)                  | No migrations needed. Service starts normally.                                                                                                         |
+| Ahead (unknown versions)          | `2` (blocked)                  | Startup logs a warning. The service starts but the schema mismatch must be resolved before the service handles requests safely. See remediation below. |
+| Interrupted / Corrupt backup      | `3` (interrupted)              | Startup detects database corruption or incomplete write. The service must not use an incomplete backup. See remediation below.                         |
+| Fresh file / no schema_migrations | `1` (transient_delay)          | All migrations are applied from scratch. Normal path for a clean install.                                                                              |
+
+#### Restoring after a behind-code backup (transient_delay)
+
+This is the normal case. The backup was taken at an older schema version; the
+running code ships additional migrations.
+
+1. Complete steps 1–4 from the restore procedure above.
+2. Check backend logs to confirm migrations ran:
+   ```bash
+   pm2 logs stellar-stream-backend --lines 50 | grep -i "migration\|schema\|restore"
+   ```
+   Expected: `SQLite restore outcome recorded` with `outcome: "transient_delay"` and
+   then each migration applied.
+3. Verify the signal resolves to `success` by comparing the live signal after startup:
+   ```bash
+   curl -s http://localhost:3001/metrics | grep sqlite_restore_outcome
+   # Expected: sqlite_restore_outcome 0
+   ```
+   Note: the startup-recorded gauge retains the value at the time the database was
+   opened (i.e., `1`); the live recomputed value will be `0`. This is by design —
+   the gauge captures the restore state, not the post-migration state.
+4. Verify the database schema is current:
+   ```bash
+   sqlite3 /data/streams.db \
+     "SELECT version FROM schema_migrations ORDER BY version;"
+   ```
+   All expected migration version numbers should appear.
+
+#### Restoring a blocked backup (schema ahead of running code)
+
+This requires operator intervention: the backup contains schema versions the
+current build does not know, and forward-only migrations cannot undo them.
+
+**Option A — Roll forward: deploy the newer code.**
+If the backup was created by a newer build that is available, deploy that
+build instead. Once the deployed code matches the schema in the backup, the
+signal returns to `success`.
+
+**Option B — Roll back: replace with a compatible backup.**
+If the newer build is unavailable or undesirable, restore a backup that was
+taken with the current (or earlier) schema version and repeat the procedure.
+
+Both options follow the same verification flow: after restarting, confirm
+`sqlite_restore_outcome` is `0`.
+
+**Diagnosis:**
+
+```bash
+# Count how many applied versions are unknown to the running code:
+sqlite3 /data/streams.db \
+  "SELECT COUNT(*) FROM schema_migrations;" # compare with discoverMigrations count
+
+# Read the startup log entry (never exposes the database path or migration names):
+pm2 logs stellar-stream-backend --lines 100 | grep -i "restore"
+```
+
+#### Restoring an interrupted or corrupt backup
+
+This indicates that the database backup was interrupted before completion (e.g. copied during active writes without proper checkpointing or lock) or corrupted. The startup integrity check (`PRAGMA integrity_check;`) detects this state and sets `sqlite_restore_outcome` to `3` (`interrupted`).
+
+For the backup side of the same condition — detecting an interrupted run, the
+retry boundary, and rolling back to the last verified snapshot — see
+[When a backup is interrupted before completion](#when-a-backup-is-interrupted-before-completion).
+
+**Owner Action:**
+
+1. Discard the incomplete or corrupted backup file. Confirm which remaining
+   backups are usable before deleting anything:
+   ```bash
+   bash scripts/sqlite-backup.sh --verify /data-backup/streams-20260101.db
+   ```
+2. Restore a valid, complete backup (or a fresh backup taken when the service was stopped or using `.backup`).
+3. Restart the backend service.
+4. Confirm the signal returns to `success` (`0`).
+
+**Diagnosis:**
+
+```bash
+# Check the startup log for interrupted restore outcome (never exposes paths or secrets):
+pm2 logs stellar-stream-backend --lines 100 | grep -i "restore"
+```
+
+#### Validation from a clean environment
+
+To confirm the restore behavior is reproducible without undocumented local state:
+
+1. From a fresh checkout, install dependencies: `cd backend && npm install`
+2. Run the restore-scenario tests (no running service or live database needed):
+   ```bash
+   cd backend
+   npx vitest run src/services/dbRestoreOutcome.restore.test.ts
+   ```
+
+All 12 tests must pass. They build temporary in-memory databases at
+specific schema versions and verify the exact outcome signal and Prometheus
+gauge value for each scenario. 3. Optionally, run the full suite to confirm no regressions:
+
+```bash
+cd backend && npx vitest run
+```
+
+4. Run the backup-script tests, which cover an interrupted snapshot, the retry
+   boundary, and rollback of a published-but-unusable backup without a live
+   database:
+   ```bash
+   npm run test:sqlite-backup
+   ```
+
+---
+
+### Rotate JWT Secret
+
+**Prerequisites:**
+
 - Access to the backend environment variables or `.env` file.
 
 **Steps:**
+
 1. Generate a new random secret:
    ```bash
    openssl rand -hex 32
@@ -49,16 +400,76 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 3. Restart the backend service.
 
 **Expected Output:**
+
 - All existing user sessions are invalidated.
-- Users will be prompted to re-connect their wallets and sign a new challenge.
+- Users will be prompted to re-connect their wallets and sign a new challenge.**Validation from Clean Environment:**
+To verify the rotation works without undocumented local state:
+1. Provision a fresh backend instance (or container) with the new `JWT_SECRET` only
+2. No database migration or prior state required - the secret is read at startup
+3. Issue a new challenge via `GET /api/auth/challenge` and complete auth flow
+4. Verify `POST /api/auth/token` returns a valid JWT signed with the new secret.
+5. Read the outcome signal (see [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal)):
+   ```bash
+   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
+     "http://localhost:3001/api/secrets-rotation/monitoring?credential=jwt_secret" | jq .outcome
+   # Expected after rotation completes: "success"
+   # While pre-rotation tokens are still accepted: "transient_delay"
+   # If new-credential artifacts are rejected: "blocked" — restart once and re-check.
+   ```
+
+---
+
+### Rotate Server Signing Key
+
+**Prerequisites:**
+
+- Access to the backend environment variables or `.env` file.
+- A Stellar keypair (secret key starting with `S...`)
+
+**Steps:**
+
+1. Generate a new Stellar keypair:
+   ```bash
+   # Using Stellar CLI
+   stellar keys generate server-signing-new
+   # Or via Node.js:
+   node -e "const {Keypair} = require('@stellar/stellar-sdk'); const kp = Keypair.random(); console.log('Secret:', kp.secret()); console.log('Public:', kp.publicKey());"
+   ```
+2. Fund the new public key on-chain with XLM for transaction fees (testnet: friendbot).
+3. Update the `SERVER_SIGNING_KEY` value in your environment or `backend/.env` file.
+4. Restart the backend service.
+
+**Expected Output:**
+
+- All existing SEP-10 challenges issued with the old key become invalid.
+- New challenges via `GET /api/auth/challenge` are signed with the new key.
+- Clients must request a new challenge and re-sign to authenticate.**Validation from Clean Environment:**
+To verify the rotation works without undocumented local state:
+1. Provision a fresh backend instance (or container) with the new `SERVER_SIGNING_KEY` only
+2. No database migration or prior state required - the key is read at startup
+3. Issue a new challenge via `GET /api/auth/challenge?accountId=<client>`
+4. Client signs the challenge and submits via `POST /api/auth/token`
+5. Verify a valid JWT is returned (signed with current `JWT_SECRET`)
+6. Read the outcome signal (see [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal)):
+   ```bash
+   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
+     "http://localhost:3001/api/secrets-rotation/monitoring?credential=server_signing_key" | jq .outcome
+   # Expected after rotation completes: "success"
+   ```
+
+**Note on Combined Rotation:**
+Both `JWT_SECRET` and `SERVER_SIGNING_KEY` can be rotated simultaneously by updating both environment variables and restarting once. The order of operations does not matter as both are loaded at startup. Verify with `GET /api/secrets-rotation/monitoring?credential=both` (or omit the parameter) — see [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal).
 
 ---
 
 ### Force Indexer Reconcile
+
 **Prerequisites:**
+
 - Access to the backend environment variables.
 
 **Steps:**
+
 1. Identify the ledger sequence number you want to re-index from.
 2. Set the `INDEXER_START_LEDGER` environment variable:
    ```bash
@@ -68,17 +479,21 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 3. Restart the backend service.
 
 **Expected Output:**
+
 - Backend logs show: `INDEXER_START_LEDGER override active: starting from ledger 1234567`.
 - The indexer will process events starting from that ledger, potentially updating local records.
 
 ---
 
 ### Requeue Dead-Letter Webhooks
+
 **Prerequisites:**
+
 - An admin JWT or access to the database.
 - The ID of the dead-letter record.
 
 **Steps:**
+
 1. Get the list of dead-letter webhooks:
    ```bash
    curl -H "Authorization: Bearer <ADMIN_TOKEN>" http://localhost:3001/api/webhooks/dead-letters
@@ -89,18 +504,23 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
    ```
 
 **Expected Output:**
+
 - JSON response: `{ "success": true, "message": "Webhook re-queued successfully" }`.
 - The record is moved from `webhook_dead_letters` back to `webhook_deliveries`.
 
 ---
 
 ### Archive Old Streams Manually
+
 **Prerequisites:**
+
 - Node.js environment on the server.
 
 **Steps:**
 Currently, archiving is defined in the codebase but not exposed via a CLI or API. To trigger it manually, you can use a small script:
+
 1. Create a file `archive.js`:
+
    ```javascript
    const { initDb } = require('./dist/services/db');
    const { archiveOldStreams } = require('./dist/services/streamStore');
@@ -113,36 +533,43 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
    }
    run();
    ```
+
 2. Run the script:
    ```bash
    node archive.js
    ```
 
 **Expected Output:**
+
 - Console log showing the number of streams archived (completed > 30 days ago).
 
 ---
 
 ### Indexer Falls Behind
+
 **Symptoms:**
+
 - Stream statuses in the dashboard are stale (e.g., a completed stream still shows "active").
-- Backend logs show `lastLedger` lagging behind the current Stellar network ledger sequence.
-- Alert: `indexer_lag_seconds` exceeds threshold (configurable, default 300s).
+- `indexer_latest_ledger` advances while `last_indexed_ledger` does not, and `indexer_ledger_lag` rises.
+- `indexer_errors_total` increases or `indexer_circuit_state` is `1` (HALF_OPEN) or `2` (OPEN).
+- `indexer_outcome` is `1` (transient_delay) or `2` (blocked) — see [Indexer Monitoring Outcome Signal](#indexer-monitoring-outcome-signal).
 
 **Diagnosis:**
-1. Check the current indexer cursor position:
+
+1. Read indexer metrics (add configured metrics authentication if enabled):
    ```bash
-   sqlite3 backend/data/streams.db "SELECT key, value FROM indexer_cursor;"
+   curl -s http://localhost:3001/metrics | grep -E '^(indexer_latest_ledger|last_indexed_ledger|indexer_ledger_lag|indexer_errors_total|indexer_circuit_state)'
    ```
-2. Compare with the latest Stellar ledger sequence (using the RPC endpoint):
+2. Compare the reported head with a direct `getLatestLedger` call to the configured RPC endpoint. If the direct call succeeds and the RPC-head gauge advances, RPC is reachable; if the direct call fails or times out, treat this as an RPC/provider connectivity incident.
    ```bash
    curl -s <STELLAR_RPC_URL> -X POST \
      -H "Content-Type: application/json" \
      -d '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger"}' | \
      jq '.result.sequence'
    ```
-3. Check backend logs for indexer errors:
+3. Check the persisted retry boundary and recent indexer errors:
    ```bash
+   sqlite3 backend/data/streams.db "SELECT last_ledger_sequence FROM indexer_cursor WHERE id = 1;"
    journalctl -u stellar-stream-backend --since "10 minutes ago" | grep -i indexer
    ```
    Or if running via PM2:
@@ -150,36 +577,96 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
    pm2 logs stellar-stream-backend --lines 200 | grep -i indexer
    ```
 
+Startup also emits a structured `deployment configuration outcome` log before exiting
+for missing required settings. `blocked` (`outcomeCode: 2`) identifies missing variable
+names in `detail` and the selected network in `network`, without logging values. A
+startup `success` (`outcomeCode: 0`) means configuration validated (or Soroban was
+intentionally disabled); it does not prove RPC connectivity.
+
 **Remediation:**
-1. **Network issue:** Verify the backend can reach the Stellar RPC endpoint:
+
+1. **RPC rate limit or disconnection:** Do not issue repeated manual event requests or repeatedly restart the service. The indexer makes one normal poll attempt per configured polling interval (default 10 seconds), opens its circuit after 5 consecutive poll failures, waits `CIRCUIT_BREAKER_TIMEOUT_MS` (default 60 seconds), then makes a single half-open probe. A failed probe reopens the circuit; a successful probe closes it. There is no separate immediate retry, `Retry-After` handling, or provider failover.
+2. Verify RPC availability and provider rate-limit status, then restore network access or reduce competing RPC traffic. Preserve the database and `indexer_cursor`; the next scheduled poll/probe retries from the last persisted checkpoint. A partially fetched cursor page is safe to replay: event writes are idempotent, and the checkpoint advances only after the full scan and checkpoint write succeed.
    ```bash
-   curl -s --max-time 5 <STELLAR_RPC_URL>/health
+   curl -s --max-time 10 <STELLAR_RPC_URL> -X POST \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger"}'
    ```
-   If unreachable, check firewall rules and RPC provider status.
-2. **Backoff stuck:** Restart the backend to reset the indexer's exponential backoff:
+3. **Lag continues to rise while RPC is healthy:** Confirm the RPC head is advancing, `indexer_errors_total` is flat, and the database is writable. Let complete polls proceed; a successful scan of a range with no contract events still advances the checkpoint. Avoid lowering the polling interval during a rate-limit incident.
+4. **Verify recovery:** Require `indexer_circuit_state` to return to `0` (CLOSED), `last_indexed_ledger` to catch up to the observed RPC head, and `indexer_ledger_lag` to reach `0` after a complete poll. Confirm the database cursor matches the indexed-ledger gauge and that indexer errors remain flat for at least two poll intervals.
+5. **Stop and roll back if recovery is not verified:** If lag still grows after two circuit-breaker timeouts with RPC healthy, or the RPC remains unavailable, stop the backend, preserve the database/cursor, and restore the last known-good RPC URL and deployment configuration before restarting once. If that does not restore the checks above, leave the service stopped and escalate to the RPC provider/on-call maintainer. Do not delete the database, rewind `indexer_cursor`, or set `INDEXER_START_LEDGER` as a recovery shortcut.
+
+---
+
+### Indexer Monitoring Outcome Signal
+
+**Symptoms:**
+
+- Alert on the `indexer_outcome` Prometheus gauge changing from `0`.
+- `GET /api/indexer/monitoring` returns `outcome: "transient_delay"` or `outcome: "blocked"`.
+- `indexer_circuit_state` is `1` (HALF_OPEN) or `2` (OPEN).
+
+The signal collapses the indexer's poll health into three outcomes so the two cases
+(`lag increasing while RPC is healthy` and `RPC rate limit or disconnection`) map to
+an explicit owner action instead of raw counters.
+
+**Outcome meanings:**
+
+| Outcome           | Gauge value | Meaning                                                                                                                                                                           | Owner action                                                                                                                                     |
+| ----------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `success`         | 0           | Circuit CLOSED, no consecutive poll failures; the checkpoint is current. A non-zero `ledgerLag` is expected between polls.                                                        | None.                                                                                                                                            |
+| `transient_delay` | 1           | One or more consecutive polls failed with a retryable provider condition (rate limit or disconnection), or the breaker is HALF_OPEN probing recovery. The retry budget is intact. | None while `consecutiveFailures` stays below `failureThreshold` — the next scheduled poll retries.                                               |
+| `blocked`         | 2           | Consecutive failures reached the threshold and the circuit is OPEN, or work is outstanding with no RPC endpoint/contract configured.                                              | Verify RPC availability and provider rate-limit status, restore network access or reduce competing RPC traffic; let the half-open probe recover. |
+
+**Diagnosis:**
+
+1. Read the signal. It reports ledgers, counts and enumerated state only — never the
+   RPC URL, contract ID, credentials, or a raw provider message, so it is safe to paste
+   into an incident channel:
    ```bash
-   pm2 restart stellar-stream-backend
+   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
+     http://localhost:3001/api/indexer/monitoring | jq
    ```
-   Or if using systemd:
+2. Cross-check the raw gauges on the Prometheus scrape:
    ```bash
-   systemctl restart stellar-stream-backend
+   curl -s http://localhost:3001/metrics | grep -E '^(indexer_outcome|indexer_circuit_state|indexer_ledger_lag|indexer_errors_total)'
    ```
-3. **Force re-index from a specific ledger** (use with caution—this may process duplicate events):
-   ```bash
-   export INDEXER_START_LEDGER=<LEDGER_SEQUENCE>
-   pm2 restart stellar-stream-backend
-   ```
-4. **Persistent lag:** If the indexer consistently falls behind, reduce the polling interval by setting `INDEXER_POLL_INTERVAL_MS` to a lower value (e.g., `5000` for 5 seconds) in the backend `.env`.
+
+**Remediation:**
+
+1. Startup log `deployment configuration outcome` = `blocked` — set the missing
+   `CONTRACT_ID` from a contract deployed to the logged network and/or the
+   `SERVER_PRIVATE_KEY` in the deployment secret manager. Confirm `STELLAR_NETWORK`,
+   `RPC_URL`, and `NETWORK_PASSPHRASE` agree before restarting once. Never paste
+   secret values into logs or incident messages.
+2. `blocked` with `state.circuitState` = `"OPEN"` — the indexer exhausted its retry
+   budget. Follow [Indexer Falls Behind](#indexer-falls-behind) remediation steps 1–2:
+   verify RPC availability and provider rate-limit status, restore network access or
+   reduce competing RPC traffic, and let the scheduled poll/half-open probe recover. Do
+   not restart the service in a loop.
+3. `blocked` with `state.rpcConfigured` = `false` and `state.ledgerLag > 0` — the service
+   is running without a Stellar RPC URL or contract ID. Set them and restart once.
+4. `transient_delay` — take no action while `consecutiveFailures` stays below
+   `failureThreshold`. If the count reaches the threshold the outcome moves to `blocked`;
+   see step 1. The `state.lastFailureKind` field separates `rate_limited` from
+   `disconnected` without exposing the provider message.
+5. `success` with a non-zero `state.ledgerLag` — expected between polls while the chain
+   advances; lag alone does not raise the outcome. If lag keeps growing while
+   `indexer_outcome` stays `0`, follow [Indexer Falls Behind](#indexer-falls-behind)
+   remediation step 3.
 
 ---
 
 ### Webhook Dead-Letter Spike
+
 **Symptoms:**
+
 - Alert: `webhook_dead_letter_count` exceeds threshold (default > 50).
 - Recipients report not receiving stream event notifications.
 - Backend logs contain repeated `webhook delivery failed` entries.
 
 **Diagnosis:**
+
 1. Count dead-letter records:
    ```bash
    sqlite3 backend/data/streams.db "SELECT COUNT(*) FROM webhook_dead_letters;"
@@ -196,6 +683,7 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
    ```
 
 **Remediation:**
+
 1. **Fix the receiver endpoint:** If the downstream webhook receiver is down or returning errors, contact the receiver's operator. Verify the webhook endpoint is reachable:
    ```bash
    curl -s -o /dev/null -w "%{http_code}" --max-time 5 <WEBHOOK_URL>
@@ -216,13 +704,108 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
 
 ---
 
-### SQLite WAL Size Growth
+### Webhook Delivery Outcome Signal
+
 **Symptoms:**
+
+- Alert on the `webhook_outcome` Prometheus gauge changing from `0`.
+- `GET /api/webhooks/monitoring` returns `outcome: "blocked"`.
+- Recipients report missing stream event notifications.
+
+**Outcome meanings:**
+
+| Outcome           | Gauge value | Meaning                                                                                       | Owner action                                                            |
+| ----------------- | ----------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `success`         | 0           | Nothing queued, nothing dead-lettered.                                                        | None.                                                                   |
+| `transient_delay` | 1           | Deliveries are waiting out a backoff window; the retry budget is intact.                      | None while the queued count falls — the worker clears these on its own. |
+| `blocked`         | 2           | The destination exhausted its retry budget, or work is queued with no destination configured. | Verify the receiver, then requeue; or set `WEBHOOK_DESTINATION_URL`.    |
+
+**Diagnosis:**
+
+1. Read the signal. It reports counts and state only — never the destination URL, a payload, or a stream ID, so it is safe to paste into an incident channel:
+   ```bash
+   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
+     http://localhost:3001/api/webhooks/monitoring | jq
+   ```
+2. Cross-check the raw counters on the Prometheus scrape:
+   ```bash
+   curl -s http://localhost:3001/metrics | grep -E "^webhook_(outcome|queue_|dead_letters)"
+   ```
+
+**Remediation:**
+
+1. `blocked` with `counts.deadLetters > 0` — the destination has remained unavailable. Follow [Webhook Dead-Letter Spike](#webhook-dead-letter-spike).
+2. `blocked` with `counts.pending > 0` and no destination configured — set `WEBHOOK_DESTINATION_URL` in the backend `.env` and restart the service.
+3. `transient_delay` — take no action while the queued count is falling. If it stops draining, inspect the worker log for `webhook delivery scheduled for retry` and confirm the destination is reachable.
+
+---
+
+### Secrets Rotation Outcome Signal
+
+**Symptoms:**
+
+- Alert on the `secrets_rotation_outcome` Prometheus gauge changing from `0`.
+- `GET /api/secrets-rotation/monitoring` returns `outcome: "blocked"`.
+- Users report being logged out repeatedly during a `JWT_SECRET` / `SERVER_SIGNING_KEY` rotation.
+
+This is the observable state of the rotation procedure documented in
+[Rotate JWT Secret](#rotate-jwt-secret) and [Rotate Server Signing Key](#rotate-server-signing-key).
+The backend records that a credential was provisioned at startup (never its value) and
+classifies the rollout so an operator can tell a completed rotation from one that still
+needs attention.
+
+**Outcome meanings:**
+
+| Outcome           | Gauge value | Meaning                                                                                                                            | Owner action                                                                                                         |
+| ----------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `success`         | 0           | No rotation recorded (fresh process), or the rotation completed: artifacts signed with the previous credential are rejected.        | None.                                                                                                                |
+| `transient_delay` | 1           | Old-credential artifacts (tokens or challenges) are still being accepted. Expected while outstanding sessions and in-flight challenges clear. | None while the stale-acceptance count falls toward zero; it clears as clients re-authenticate.                     |
+| `blocked`         | 2           | Fresh-credential artifacts are being rejected: the configured credential failed validation, or the restart step was missed.          | Follow the runbook rotation steps: correct the credential value, restart the backend **once**, and re-read the signal. Do not restart in a loop. |
+
+**Diagnosis:**
+
+1. Read the signal. It reports enumerated state and counts only — never a secret value, a token, a signature, or a raw verification message, so it is safe to paste into an incident channel:
+   ```bash
+   # Whole-process signal (latest rotation of any credential)
+   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
+     http://localhost:3001/api/secrets-rotation/monitoring | jq
+
+   # Scoped to one credential (jwt_secret | server_signing_key | both)
+   curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
+     "http://localhost:3001/api/secrets-rotation/monitoring?credential=jwt_secret" | jq
+   ```
+2. Cross-check the gauge on the Prometheus scrape:
+   ```bash
+   curl -s http://localhost:3001/metrics | grep secrets_rotation_outcome
+   ```
+3. `stale_accepted=true` / `fresh_rejected=true` query parameters let an operator or
+   automated check feed an observation in (e.g. from an auth attempt with a pre-rotation
+   token) without ever passing the credential itself. The endpoint never verifies
+   credentials and never echoes anything secret.
+
+**Remediation:**
+
+1. `blocked` — re-run the rotation procedure from the top: generate the new credential,
+   update `JWT_SECRET` / `SERVER_SIGNING_KEY` in the environment, and restart once. The
+   signal returns to `success` when the process runs on the new credential.
+2. `transient_delay` persisting beyond the session lifetime — confirm the restart
+   actually happened (`rotationCount` should have incremented at startup); if clients
+   still hold old artifacts, force re-authentication or wait for expiry.
+3. After any rotation, record what was rotated and when, and confirm the signal reads
+   `success` (gauge `0`) before closing the change window.
+
+---
+
+### SQLite WAL Size Growth
+
+**Symptoms:**
+
 - Disk usage on the backend server is growing unexpectedly.
 - The `backend/data/` directory contains a `streams.db-wal` file significantly larger than `streams.db`.
 - Alert: WAL file size exceeds 500 MB (configurable threshold).
 
 **Diagnosis:**
+
 1. Check WAL and database file sizes:
    ```bash
    ls -lh backend/data/streams.db*
@@ -244,6 +827,7 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
    ```
 
 **Remediation:**
+
 1. **Force a WAL checkpoint** to flush the WAL into the main database:
    ```bash
    sqlite3 backend/data/streams.db "PRAGMA wal_checkpoint(TRUNCATE);"
@@ -274,12 +858,15 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
 ---
 
 ### Contract Invocation Timeout
+
 **Symptoms:**
+
 - Stream creation, claim, or cancel operations fail with timeout errors.
 - Backend logs contain `soroban_contract` errors: `Contract invocation timed out` or `RPC call timed out`.
 - Frontend shows "Transaction failed" with no detailed error message.
 
 **Diagnosis:**
+
 1. Check backend logs for contract invocation errors:
    ```bash
    journalctl -u stellar-stream-backend --since "1 hour ago" | grep -i "contract\|soroban\|timeout\|rpc"
@@ -303,6 +890,7 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
    ```
 
 **Remediation:**
+
 1. **Increase RPC timeout** in the backend `.env`:
    ```bash
    SOROBAN_RPC_TIMEOUT_MS=30000
@@ -322,3 +910,111 @@ Currently, archiving is defined in the codebase but not exposed via a CLI or API
      jq '.result'
    ```
 6. **Escalate to the Soroban/SDK team** if the issue is on the Stellar network side (e.g., network congestion or protocol upgrade).
+
+---
+
+### Docker Compose Startup Failure
+
+**Symptom:** `docker compose up` hangs or fails with `dependency failed to start: container stellar-backend is unhealthy`, the frontend never starts, or `stellar-backend` shows `Restarting`.
+
+**Why:** the frontend has `depends_on: backend: condition: service_healthy`, so it waits on the backend healthcheck (`wget http://localhost:3001/api/health`, every 30s, 3 retries, 10s start period). If the backend exits during startup (for example, `validateEnv()` rejects the config), `restart: on-failure:5` restarts it up to 5 times. After that it stays stopped.
+
+#### Guarded startup
+
+Use the startup script instead of `docker compose up -d`. It either reaches a verified healthy state or stops with a rollback:
+
+```bash
+npm run compose:up        # or: bash scripts/compose-up.sh
+```
+
+| Phase     | What happens                                                                                                                                                                             | On failure                                                                 |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Preflight | Checks `docker compose`, `backend/.env`, the backend configuration (see below) and `docker compose config`                                                                               | Exit `2`. Nothing is started                                               |
+| Backend   | `up -d --build redis backend`, then polls container health every `POLL_INTERVAL`s for up to `BACKEND_HEALTH_TIMEOUT`s                                                                    | Prints `compose ps`, the last healthcheck probes and the last 40 log lines |
+| Recovery  | Restarts the backend at most `MAX_RECOVERY_ATTEMPTS` times (default `1`). Config errors are **not** retried. `MAX_CRASH_RESTARTS` (default `3`) container restarts count as a crash loop | Rollback                                                                   |
+| Frontend  | Starts only after the backend is healthy. Waits up to `FRONTEND_HEALTH_TIMEOUT`s                                                                                                         | Rollback                                                                   |
+| Rollback  | `docker compose down --remove-orphans`. The `backend-data` volume (SQLite) is **kept**                                                                                                   | Exit `1`, `RESULT: FAIL`                                                   |
+
+It ends with a single `RESULT: PASS` or `RESULT: FAIL` line. Set `ROLLBACK=keep` to leave the containers running so you can inspect them.
+
+#### Configuration preflight
+
+Before starting any container, the script reads `backend/.env` (without sourcing it) and rejects settings that would leave the backend crash-looping or permanently unhealthy. Every check fails with exit `2` and a message that names the variable and the rule — **credential values are never printed** (only the variable name and, for format errors, `[<n> chars, redacted]`).
+
+| Check                                                                                                                                                                             | Why it matters                                                                                                                                                                        |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Env file has at least one setting                                                                                                                                                 | An empty environment can never satisfy `validateEnv()`, so the stack would start, crash-loop and roll back                                                                            |
+| `CONTRACT_ID` + `SERVER_PRIVATE_KEY` present, each exactly 56 characters starting with `C` / `S`                                                                                  | Required by the backend unless `SOROBAN_DISABLED=true`; the `.env.example` placeholders are deliberately invalid                                                                      |
+| `PORT` (when set) matches the Compose backend port (`3001`)                                                                                                                       | The container healthcheck and published port in `docker-compose.yml` are fixed, so any other `PORT` makes the backend stay `unhealthy` and the frontend never starts                  |
+| `RPC_URL`, `SOROBAN_RPC_URL`, `WEBHOOK_DESTINATION_URL` (when set) are `http(s)://` URLs                                                                                          | The backend rejects malformed URLs at startup                                                                                                                                         |
+| `STELLAR_NETWORK` (when set) is `testnet` or `mainnet`/`public`, and the well-known `RPC_URL`/`SOROBAN_RPC_URL` endpoints and `NETWORK_PASSPHRASE` belong to the selected network | The backend refuses to start on a testnet/mainnet mismatch (`network configuration mismatch`, exit 1), so the stack would crash-loop; the preflight catches it before anything starts |
+
+A `DB_PATH` outside the persisted `/app/data` volume is a **warning**, not a failure: the stack still starts, but the SQLite file is recreated on every container start (a fresh database each time). Use the default `/app/data/streams.db` to persist data across restarts.
+
+Override the expected backend port for a customised compose file with `BACKEND_PORT=<port>`.
+
+#### Manual detection
+
+```bash
+docker compose ps                                   # STATUS: (unhealthy) / Restarting
+docker inspect -f '{{json .State.Health}}' stellar-backend | jq '.Log[-3:]'
+docker compose logs --tail 50 backend
+```
+
+#### Common causes
+
+| Log line                                                                    | Fix                                                                                                                                                                            |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `env file .../backend/.env not found`                                       | `cp backend/.env.example backend/.env`                                                                                                                                         |
+| `has no settings (empty environment)`                                       | Add `SOROBAN_DISABLED=true` for local runs, or fill in `CONTRACT_ID` and `SERVER_PRIVATE_KEY`                                                                                  |
+| `Soroban configuration incomplete`                                          | Set a valid `CONTRACT_ID` and `SERVER_PRIVATE_KEY`, or `SOROBAN_DISABLED=true` for local runs                                                                                  |
+| `CONTRACT_ID is invalid` / `SERVER_PRIVATE_KEY is invalid`                  | The placeholder keys from `.env.example` are not valid. Replace them or set `SOROBAN_DISABLED=true`                                                                            |
+| `PORT=... does not match the Compose backend port`                          | Remove `PORT` from `backend/.env` (default `3001`) or update `docker-compose.yml` consistently                                                                                 |
+| `STELLAR_NETWORK must be "testnet" or "mainnet"`                            | Use `testnet` (default) or `mainnet` (aliases `public`, `main`) in `backend/.env`                                                                                              |
+| `points at a testnet endpoint but STELLAR_NETWORK=mainnet` (or the reverse) | Align `STELLAR_NETWORK`, `RPC_URL`/`SOROBAN_RPC_URL`, and `NETWORK_PASSPHRASE` with the network the contract was deployed to (see `DEPLOYMENT.md`, "Choose the Network First") |
+| `EADDRINUSE`                                                                | Another process holds port 3001: `lsof -i :3001`                                                                                                                               |
+
+The preflight rows above are reported by `npm run compose:up` before anything is started; the `EADDRINUSE` row is only visible after start (or when running `docker compose up` directly).
+
+#### Rollback
+
+```bash
+docker compose down            # never add -v: it deletes the backend-data SQLite volume
+```
+
+After you fix the cause, re-run `npm run compose:up`. To check the script itself without Docker, run `npm run test:compose-up`.
+2. **Rotating `JWT_SECRET` (zero-downtime)**
+   - Generate a new secret: `openssl rand -hex 32`.
+   - Move the current value to `JWT_SECRET_PREVIOUS`, put the new value in `JWT_SECRET`, and set
+     `JWT_ROTATION_CUTOVER_AT` to a future ISO 8601 time (e.g. `2026-10-15T00:00:00Z`).
+   - Restart backend instances. New tokens are signed with the new secret; tokens signed with the
+     old secret still verify until the cutover time.
+   - After the cutover time, remove `JWT_SECRET_PREVIOUS` and `JWT_ROTATION_CUTOVER_AT`.
+   - The server refuses to start (no partial rollout) if only one of the two variables is set, the
+     previous secret is shorter than 32 characters or equals `JWT_SECRET`, or the cutover time is not a
+     valid date. Errors name the variable only and never print secret values.
+
+---
+
+## Frontend CI and Browser Test Timeout (Issues #1192, #1193)
+
+### Symptoms
+- Pull requests modifying frontend components, styles, or tests fail during `Frontend CI` with `browser test timed out` or headless execution delay.
+- The outcome status is classified as `TRANSIENT_TIMEOUT`.
+
+### Triage & Classification
+- **SUCCESS:** All frontend build, lint, and unit test suites passed.
+- **TRANSIENT_TIMEOUT:** Runner resource contention or headless browser startup latency exceeded timeout. Action: Retry the GitHub Actions job.
+- **BLOCKED:** Deterministic TypeScript type check failure (`npx tsc --noEmit`) or linting error (`npm run lint`). Action: Fix source code locally before re-pushing.
+
+### Owner Action & Remediation
+1. **Local Smoke Verification:**
+   Run the local verification suite:
+   ```bash
+   node scripts/check-frontend-ci.mjs
+   node --test scripts/check-frontend-ci.test.mjs
+   ```
+2. **Component & Style Inspection:**
+   Verify that recently modified components in `frontend/src` have matching type definitions and unit tests.
+3. **Transient Delay Recovery:**
+   If the job failed solely due to runner timeout with zero type or syntax errors, trigger a re-run of failed jobs from the GitHub Actions UI.

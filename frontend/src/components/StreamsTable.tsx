@@ -41,6 +41,10 @@ interface StreamsTableProps {
   loadingMore?: boolean;
   onRefreshStreams?: () => void;
   setUrlFilters?: (filters: ListStreamsFilters) => void;
+  loadError?: string | null;
+  onRetryLoad?: () => void;
+  loadMoreError?: string | null;
+  loadMoreStatus?: string | null;
 }
 
 const SKELETON_ROW_COUNT = 6;
@@ -106,6 +110,10 @@ export function StreamsTable({
   loadingMore = false,
   onRefreshStreams,
   setUrlFilters,
+  loadError,
+  onRetryLoad,
+  loadMoreError,
+  loadMoreStatus,
 }: StreamsTableProps) {
   const { visibility, toggleColumn, isVisible } = useStreamTableColumns();
   const [columnsOpen, setColumnsOpen] = useState(false);
@@ -151,7 +159,7 @@ export function StreamsTable({
     if (!sentinel || !onLoadMore) return;
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0]?.isIntersecting && hasMore && !loadingMore) {
+        if (entries[0]?.isIntersecting && hasMore && !loadingMore && !loadMoreError) {
           onLoadMore();
         }
       },
@@ -159,7 +167,7 @@ export function StreamsTable({
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [onLoadMore, hasMore, loadingMore]);
+  }, [onLoadMore, hasMore, loadingMore, loadMoreError]);
 
   const [selectedStreamIds, setSelectedStreamIds] = useState<Set<string>>(new Set());
   const [expandedStreamId, setExpandedStreamId] = useState<string | null>(null);
@@ -428,6 +436,21 @@ export function StreamsTable({
       )}
       <div className="card" ref={tableWrapperRef}>
         <FilterBar filters={filters} onChange={onFiltersChange} setUrlFilters={setUrlFilters} />
+        {loadError && (
+          <div role="alert" className="activity-error" style={{ marginBottom: "1rem" }}>
+            <p>{loadError}</p>
+            {onRetryLoad && (
+              <button
+                type="button"
+                className="retry-btn"
+                onClick={onRetryLoad}
+                disabled={loading}
+              >
+                {loading ? "Retrying…" : "Retry"}
+              </button>
+            )}
+          </div>
+        )}
         <div
           className="streams-table-toolbar"
           style={{
@@ -438,6 +461,40 @@ export function StreamsTable({
             gap: "0.75rem",
           }}
         >
+          <label className="mobile-select-all">
+            <input
+              type="checkbox"
+              ref={(el) => {
+                if (el) {
+                  el.indeterminate =
+                    selectedStreamIds.size > 0 && !allSelectableSelected;
+                }
+              }}
+              aria-label={
+                selectableStreams.length === 0
+                  ? "No selectable streams on this page"
+                  : allSelectableSelected
+                  ? "Deselect all streams"
+                  : "Select all streams"
+              }
+              aria-checked={
+                selectedStreamIds.size > 0 && !allSelectableSelected
+                  ? "mixed"
+                  : allSelectableSelected
+              }
+              checked={allSelectableSelected}
+              onChange={handleSelectAllToggle}
+              disabled={loading || selectableStreams.length === 0}
+              data-testid="streams-table-select-all"
+            />
+            <span>
+              {selectableStreams.length === 0
+                ? "No selectable streams"
+                : allSelectableSelected
+                ? `All ${selectableStreams.length} selected`
+                : "Select all streams"}
+            </span>
+          </label>
           <h2 style={{ margin: 0 }}>Live Streams</h2>
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
             <div className="column-toggle" ref={columnsRef} style={{ position: "relative" }}>
@@ -510,16 +567,34 @@ export function StreamsTable({
             ...(shouldVirtualize ? { height: TABLE_SCROLL_VIEWPORT_HEIGHT } : {}),
           }}
         >
-          <table aria-busy={loading} aria-label="Streams">
+          <table aria-busy={loading || loadingMore} aria-label="Streams">
             <thead className="streams-table-head">
               <tr>
                 <th>
                   <input
                     type="checkbox"
-                    aria-label="Select all streams"
+                    ref={(el) => {
+                      if (el) {
+                        el.indeterminate =
+                          selectedStreamIds.size > 0 && !allSelectableSelected;
+                      }
+                    }}
+                    aria-label={
+                      selectableStreams.length === 0
+                        ? "No selectable streams on this page"
+                        : allSelectableSelected
+                        ? "Deselect all streams"
+                        : "Select all streams"
+                    }
+                    aria-checked={
+                      selectedStreamIds.size > 0 && !allSelectableSelected
+                        ? "mixed"
+                        : allSelectableSelected
+                    }
                     checked={allSelectableSelected}
                     onChange={handleSelectAllToggle}
-                    disabled={loading}
+                    disabled={loading || selectableStreams.length === 0}
+                    data-testid="streams-table-header-select-all"
                   />
                 </th>
                 <th>ID</th>
@@ -575,14 +650,25 @@ export function StreamsTable({
             style={{ height: 1 }}
             data-testid="infinite-scroll-sentinel"
           />
-          {loadingMore && (
+          {onLoadMore && (
             <div style={{ textAlign: "center", padding: "1rem", color: "var(--color-muted)" }}>
-              Loading more streams...
-            </div>
-          )}
-          {!hasMore && streams.length > 0 && (
-            <div style={{ textAlign: "center", padding: "1rem", color: "var(--color-muted)" }}>
-              End of results
+              <p role="status" aria-live="polite" aria-atomic="true">
+                {loadingMore
+                  ? "Loading more streams..."
+                  : loadMoreError ??
+                    loadMoreStatus ??
+                    (!hasMore ? "End of results" : "")}
+              </p>
+              {(hasMore || loadingMore) && (
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={onLoadMore}
+                  disabled={loadingMore}
+                >
+                  {loadMoreError ? "Retry loading streams" : "Load more streams"}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -591,18 +677,31 @@ export function StreamsTable({
       {selectedStreamIds.size > 0 && (
         <BulkActionBar
           selectedCount={selectedStreamIds.size}
+          isFiltered={Boolean(filters.status || filters.asset || filters.search || filters.sender || filters.recipient)}
           onCancel={handleBulkCancel}
           isCanceling={isBulkCanceling}
           progress={bulkCancelProgress}
           buttonRef={cancelButtonRef}
         />
       )}
+      <div
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="bulk-selection-announcement"
+      >
+        {selectedStreamIds.size > 0
+          ? `${selectedStreamIds.size} stream${selectedStreamIds.size !== 1 ? "s" : ""} selected across view`
+          : ""}
+      </div>
     </>
   );
 }
 
 interface BulkActionBarProps {
   selectedCount: number;
+  isFiltered?: boolean;
   onCancel: () => void;
   isCanceling: boolean;
   progress: { current: number; total: number };
@@ -611,22 +710,50 @@ interface BulkActionBarProps {
 
 function BulkActionBar({
   selectedCount,
+  isFiltered = false,
   onCancel,
   isCanceling,
   progress,
   buttonRef,        // ← add this line to the destructured props
 }: BulkActionBarProps) {
   return (
-    <div className="bulk-action-bar">
+    <div
+      className="bulk-action-bar"
+      data-testid="bulk-action-bar"
+      role="region"
+      aria-label="Bulk actions"
+    >
       <div className="bulk-action-bar__content">
-        <span className="bulk-action-bar__count">
+        <span
+          className="bulk-action-bar__count"
+          data-testid="bulk-selection-count"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
           {selectedCount} stream{selectedCount !== 1 ? "s" : ""} selected
+          {isFiltered && (
+            <span
+              className="badge"
+              data-testid="bulk-filtered-badge"
+              style={{ marginLeft: "0.5rem", fontSize: "0.75rem" }}
+            >
+              Filtered
+            </span>
+          )}
         </span>
         <button
           ref={buttonRef}
           className="bulk-action-bar__button"
           onClick={onCancel}
           disabled={isCanceling}
+          data-testid="bulk-cancel-action-btn"
+          aria-busy={isCanceling}
+          aria-label={
+            isCanceling
+              ? `Canceling ${progress.current} of ${progress.total} streams`
+              : `Cancel ${selectedCount} Stream${selectedCount !== 1 ? "s" : ""}`
+          }
         >
           {isCanceling
             ? `Canceling ${progress.current}/${progress.total}...`
@@ -684,16 +811,19 @@ const StreamRow = memo(function StreamRow({
   return (
     <>
       <tr ref={measureRef} data-index={dataIndex}>
-        <td>
-          <input
-            type="checkbox"
-            aria-label={`Select stream ${stream.id}`}
-            checked={isSelected}
-            onChange={() => onCheckboxToggle(stream.id)}
-            disabled={isFinalised}
-          />
+        <td data-label="Select">
+          <label className="stream-row-select">
+            <input
+              type="checkbox"
+              aria-label={`Select stream ${stream.id}`}
+              aria-checked={isSelected}
+              checked={isSelected}
+              onChange={() => onCheckboxToggle(stream.id)}
+              disabled={isFinalised}
+            />
+          </label>
         </td>
-        <td>
+        <td data-label="ID">
           <button
             type="button"
             className="btn-ghost"
@@ -707,21 +837,21 @@ const StreamRow = memo(function StreamRow({
             {isExpanded ? "▲" : "▼"} {stream.id}
           </button>
         </td>
-        <td>
+        <td data-label="Sender">
           <CopyableAddress address={stream.sender} truncationMode="end" />
         </td>
-        <td>
+        <td data-label="Recipient">
           <CopyableAddress address={stream.recipient} truncationMode="end" />
         </td>
-        {show("assetCode") && <td>{stream.assetCode}</td>}
-        {show("duration") && <td>{formatDuration(stream.durationSeconds)}</td>}
+        {show("assetCode") && <td data-label="Asset">{stream.assetCode}</td>}
+        {show("duration") && <td data-label="Duration">{formatDuration(stream.durationSeconds)}</td>}
         {show("ratePerSecond") && (
-          <td>{stream.progress.ratePerSecond.toFixed(6)}</td>
+          <td data-label="Rate / sec">{stream.progress.ratePerSecond.toFixed(6)}</td>
         )}
         {show("pausedDuration") && (
-          <td>{stream.pausedDuration ?? 0}s</td>
+          <td data-label="Paused">{stream.pausedDuration ?? 0}s</td>
         )}
-        <td>
+        <td data-label="Progress">
           <div className="progress-copy">
             <strong>{stream.progress.percentComplete.toFixed(2)}%</strong>
             <span className="muted">
@@ -736,7 +866,7 @@ const StreamRow = memo(function StreamRow({
             />
           </div>
         </td>
-        <td>
+        <td data-label="Status">
           <div className="status-cell">
             <span className={statusClass(stream.progress.status)}>
               {stream.progress.status}
@@ -757,7 +887,7 @@ const StreamRow = memo(function StreamRow({
             )}
           </div>
         </td>
-        <td>
+        <td data-label="Actions">
           <div className="action-cell">
             {isScheduled && (
               <button

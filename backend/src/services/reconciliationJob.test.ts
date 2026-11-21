@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const reconcileMock = vi.hoisted(() => vi.fn());
+const getOnChainStreamCountMock = vi.hoisted(() => vi.fn());
 const loggerMock = vi.hoisted(() => ({
   info: vi.fn(),
   warn: vi.fn(),
@@ -9,6 +10,15 @@ const loggerMock = vi.hoisted(() => ({
 
 vi.mock("./streamStore", () => ({
   reconcileMissingStreams: reconcileMock,
+  getOnChainStreamCount: getOnChainStreamCountMock,
+}));
+
+vi.mock("./db", () => ({
+  getDb: vi.fn(() => ({
+    prepare: vi.fn(() => ({
+      get: vi.fn(() => ({ total: 0 })),
+    })),
+  })),
 }));
 
 vi.mock("../logger", () => ({
@@ -21,16 +31,19 @@ describe("reconciliationJob – missing stream detection", () => {
     vi.resetModules();
     vi.clearAllMocks();
     reconcileMock.mockResolvedValue(0);
+    getOnChainStreamCountMock.mockResolvedValue(0);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { stopReconciliationJob } = await import("./reconciliationJob");
+    stopReconciliationJob();
     vi.useRealTimers();
   });
 
   it("calls reconcileMissingStreams immediately when started", async () => {
     const { startReconciliationJob } = await import("./reconciliationJob");
     startReconciliationJob(60000);
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(0);
     expect(reconcileMock).toHaveBeenCalledTimes(1);
   });
 
@@ -38,7 +51,7 @@ describe("reconciliationJob – missing stream detection", () => {
     reconcileMock.mockResolvedValue(5);
     const { startReconciliationJob } = await import("./reconciliationJob");
     startReconciliationJob(60000);
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(0);
     expect(reconcileMock).toHaveBeenCalledTimes(1);
     const result = await reconcileMock.mock.results[0].value;
     expect(result).toBe(5);
@@ -111,7 +124,7 @@ describe("reconciliationJob – missing stream detection", () => {
     reconcileMock.mockRejectedValue(new Error("RPC timeout"));
     const { startReconciliationJob } = await import("./reconciliationJob");
     startReconciliationJob(60000);
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(0);
     expect(loggerMock.error).toHaveBeenCalled();
   });
 });

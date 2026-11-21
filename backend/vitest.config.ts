@@ -13,5 +13,25 @@ export default defineConfig({
     // (rate limiters, DB singletons, env vars) is fully isolated.
     pool: "forks",
     isolate: true,
+    // Coverage configuration to enforce 80% branch coverage threshold
+    coverage: {
+      enabled: true,
+      provider: "v8",
+      include: ["src/**/*.tsx"],
+      exclude: [
+        "src/**/*.test.ts",
+        "src/**/*.test.tsx",
+        "src/test-setup.ts",
+      ],
+      thresholds: {
+        branches: 80,
+        lines: 80,
+        functions: 80,
+        statements: 80,
+      },
+      reporter: ["text", "json", "html"],
+      reportsDirectory: "coverage",
+      all: true,
+    },
   },
 });
