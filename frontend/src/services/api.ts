@@ -117,6 +117,7 @@ export interface ListStreamsFilters {
   status?: string;
   asset?: string;
   q?: string;
+  search?: string;
   sort?: string;
   page?: number;
   limit?: number;
@@ -130,6 +131,27 @@ export interface PaginatedResult<T> {
 }
 
 export async function listStreams(filters?: ListStreamsFilters): Promise<PaginatedResult<Stream>> {
+  if (filters?.sender && !filters.recipient && !filters.status && !filters.asset && !filters.q && !filters.sort && !filters.page) {
+    try {
+      const senderUrl = `${API_BASE}/streams/sender/${encodeURIComponent(filters.sender)}`;
+      const senderRes = await fetch(senderUrl);
+      if (senderRes.ok) {
+        const senderBody = await parseResponse<{ data?: Stream[]; streams?: Stream[]; total?: number; page?: number; limit?: number }>(senderRes);
+        const senderData = senderBody.data ?? senderBody.streams;
+        if (senderData && Array.isArray(senderData)) {
+          return {
+            data: senderData,
+            total: senderBody.total ?? senderData.length,
+            page: senderBody.page ?? 1,
+            limit: senderBody.limit ?? senderData.length,
+          };
+        }
+      }
+    } catch {
+      // Fallback to standard /api/streams endpoint
+    }
+  }
+
   const params = new URLSearchParams();
   if (filters?.recipient) params.set("recipient", filters.recipient);
   if (filters?.sender) params.set("sender", filters.sender);
@@ -144,8 +166,14 @@ export async function listStreams(filters?: ListStreamsFilters): Promise<Paginat
   const url = q ? `${API_BASE}/streams?${q}` : `${API_BASE}/streams`;
 
   const response = await fetch(url);
-  const body = await parseResponse<{ data: Stream[]; total: number; page: number; limit: number }>(response);
-  return body;
+  const body = await parseResponse<{ data?: Stream[]; streams?: Stream[]; total?: number; page?: number; limit?: number }>(response);
+  const data = body.data ?? body.streams ?? [];
+  return {
+    data,
+    total: body.total ?? data.length,
+    page: body.page ?? 1,
+    limit: body.limit ?? data.length,
+  };
 }
 
 export async function listRecipientStreams(accountId: string): Promise<Stream[]> {
@@ -293,8 +321,8 @@ export interface StreamEvent {
 
 export async function getStreamHistory(streamId: string, signal?: AbortSignal): Promise<StreamEvent[]> {
   const response = await fetch(`${API_BASE}/streams/${streamId}/history`, { signal });
-  const body = await parseResponse<{ data: StreamEvent[] }>(response);
-  return body.data;
+  const body = await parseResponse<{ data?: StreamEvent[]; events?: StreamEvent[] }>(response);
+  return body.data ?? body.events ?? [];
 }
 
 export async function listAllEvents(): Promise<StreamEvent[]> {
@@ -372,9 +400,9 @@ export async function getSenderEvents(senderAddress: string, limit: number = 10)
   try {
     // First get all streams for the sender
     const streamsResult = await listStreams({ sender: senderAddress });
-    const streams = streamsResult.data;
+    const streams = streamsResult?.data ?? [];
 
-    if (streams.length === 0) {
+    if (!streams || streams.length === 0) {
       return [];
     }
 

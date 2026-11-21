@@ -8,7 +8,7 @@ pub mod dao;
 pub mod templates;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
-    Map, String, Vec,
+    Map, String, Symbol, TryFromVal, Val, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -236,6 +236,13 @@ pub struct StreamCreated {
 }
 
 /// Emitted each time a recipient successfully claims vested tokens.
+///
+/// This event is the authoritative, self-describing record of a single committed
+/// claim. `amount` is the recipient payout for this call and `claimed_amount` is
+/// the cumulative claimed balance after the call. Across a partial claim (a
+/// one-unit claim followed by the remaining claim) the indexer reconstructs the
+/// payout by summing the `amount` fields and reads the resulting balance from the
+/// latest `claimed_amount`; it must never derive a payout from `StreamCompleted`.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StreamClaimed {
@@ -541,6 +548,27 @@ impl StellarStreamContract {
         )
     }
 
+    /// Creates a stream and escrows exactly `total_amount` tokens from `sender`.
+    ///
+    /// # Escrow amount boundaries
+    ///
+    /// | `total_amount` | Result |
+    /// |---|---|
+    /// | `<= 0` (including `0` and `i128::MIN`) | panics with `"total_amount must be positive"`; nothing is transferred and no stream record is written |
+    /// | `1` | accepted — the smallest representable escrow; vesting floor-rounds to `0` until `end_time` |
+    /// | `2 ..= i128::MAX` | accepted when the sender's balance covers it; vesting is exact at every point of the schedule (see [`vested_amount`]) |
+    /// | greater than the sender's balance | panics with `"insufficient sender balance"` before any transfer |
+    ///
+    /// # Failure ordering (escrow vs. storage)
+    ///
+    /// The token transfer is attempted **before** any stream state is written.
+    /// If either the balance pre-check or the transfer itself fails, the whole
+    /// invocation is rolled back by the host: no `Stream` record, no
+    /// `NextStreamId` increment, and no balance movement survive.  Callers can
+    /// therefore treat a failed creation as having had no effect at all.
+    ///
+    /// `create_stream_from_template` shares this behavior; `create_split_stream`
+    /// has the additional `allocations == total_amount` rule documented there.
     #[allow(clippy::too_many_arguments)]
     pub fn create_stream(
         env: Env,
@@ -568,6 +596,21 @@ impl StellarStreamContract {
         )
     }
 
+    /// Creates a parent stream id plus one vesting child stream per recipient,
+    /// escrowing exactly `total_amount` tokens from `sender`.
+    ///
+    /// # Allocation boundaries
+    ///
+    /// | Condition | Result |
+    /// |---|---|
+    /// | `recipients` is empty | panics with `"recipients must not be empty"` |
+    /// | any single allocation `<= 0` | panics with `"allocation must be positive"` |
+    /// | allocations sum to less or more than `total_amount` | panics with `"allocations must equal total_amount"` |
+    /// | allocations sum overflows `i128` | panics with `"allocations must equal total_amount"` — the running total is checked, so it can never wrap into a value that satisfies the equality test |
+    ///
+    /// Validation happens in the same invocation as the escrow transfer, so a
+    /// rejected split reverts the transfer: no tokens move, no child `Stream`
+    /// record is persisted, and `NextStreamId` is not advanced.
     pub fn create_split_stream(
         env: Env,
         sender: Address,
@@ -623,7 +666,14 @@ impl StellarStreamContract {
             if allocation <= 0 {
                 panic!("allocation must be positive");
             }
-            allocated_total += allocation;
+            // Checked accumulation: a sum that cannot be represented in `i128`
+            // is not a valid allocation set, so it must fail with the same
+            // defined error as any other mismatch instead of wrapping (which
+            // under `overflow-checks = false` could satisfy the equality test
+            // below and escrow more than `total_amount`).
+            allocated_total = allocated_total
+                .checked_add(allocation)
+                .expect("allocations must equal total_amount");
 
             next_id += 1;
             let child_stream_id = next_id;
@@ -714,17 +764,45 @@ impl StellarStreamContract {
             .unwrap_or(0)
     }
 
+    /// Returns the amount of tokens the recipient may claim at `at_time`.
+    ///
+    /// # Boundary / edge behavior
+    ///
+    /// | Condition | Result |
+    /// |---|---|
+    /// | `at_time < start_time` | `0` — nothing has vested yet (before the cliff too) |
+    /// | `at_time == start_time` | `0` — the stream has just begun; zero elapsed |
+    /// | `at_time` within `[start_time, end_time)` | linear fraction of `total_amount`, floor-rounded to the nearest integer token unit |
+    /// | `at_time >= end_time` | `total_amount - claimed_amount` — fully vested; clamped so it never exceeds the remaining balance |
+    /// | stream is **canceled** | `cancel()` sets `end_time` and `total_amount` to the vested amount at cancel time, so this function automatically returns at most what was vested then |
+    /// | stream is **paused** | vesting is frozen at `pause_started_at`; `at_time` beyond that point still returns the paused vested amount |
+    ///
+    /// # Rounding
+    ///
+    /// Vesting uses integer (floor) division: `total_amount * elapsed / duration`.
+    /// Rounding applies to cumulative vesting, not separately to each claim.
+    /// Repeated partial claims subtract the exact cumulative `claimed_amount`;
+    /// they do not accumulate additional rounding loss. The final remainder is
+    /// claimable at `end_time`.
+    ///
+    /// # Arithmetic safety
+    ///
+    /// The subtraction `vested - claimed_amount` is performed with `checked_sub` and
+    /// saturates to `0` on underflow, so the return value is always non-negative.
     pub fn claimable(env: Env, stream_id: u64, at_time: u64) -> i128 {
         let stream = read_stream(&env, stream_id);
         let vested = vested_amount(&stream, at_time);
-        let claimable = vested - stream.claimed_amount;
-        if claimable < 0 {
-            0
-        } else {
-            claimable
-        }
+        vested
+            .checked_sub(stream.claimed_amount)
+            .unwrap_or(0)
+            .max(0)
     }
 
+    /// Batch variant of [`claimable`].  Returns a map of stream_id → claimable
+    /// amount for up to 20 stream IDs at once.  Unknown stream IDs map to `0`.
+    ///
+    /// Applies the same edge-case rules as [`claimable`]: floor rounding,
+    /// saturating-to-zero `checked_sub`, and cancel/pause clamping.
     pub fn get_claimable_batch(env: Env, stream_ids: Vec<u64>, at_time: u64) -> Map<u64, i128> {
         if stream_ids.len() > 20 {
             panic!("too many stream ids");
@@ -736,12 +814,10 @@ impl StellarStreamContract {
             let amount = match stream_opt {
                 Some(stream) => {
                     let vested = vested_amount(&stream, at_time);
-                    let claimable = vested - stream.claimed_amount;
-                    if claimable < 0 {
-                        0
-                    } else {
-                        claimable
-                    }
+                    vested
+                        .checked_sub(stream.claimed_amount)
+                        .unwrap_or(0)
+                        .max(0)
                 }
                 None => 0,
             };
@@ -774,6 +850,15 @@ impl StellarStreamContract {
     /// The indexer reconstructs the committed action exactly once by processing
     /// `StreamClaimed` first.  `StreamCompleted` is a secondary signal; the
     /// indexer must not double-count the amount from both events.
+    ///
+    /// For a partial claim (one-unit claim followed by the remaining claim) each
+    /// successful call emits exactly one `StreamClaimed`, whose `amount` is that
+    /// call's recipient payout and whose `claimed_amount` is the committed
+    /// balance after it.  Because `StreamClaimed` is published only after the
+    /// token transfer and the accounting update both succeed, a payout that fails
+    /// after the recipient has already authorized reverts the whole call and
+    /// emits no event, so the indexer reconstructs exactly the payouts that
+    /// actually happened and no phantom claim for a rolled-back one.
     pub fn claim(
         env: Env,
         stream_id: u64,
@@ -1322,12 +1407,97 @@ fn read_template(env: &Env, template_id: u64) -> StreamTemplate {
 }
 
 fn read_stream(env: &Env, stream_id: u64) -> Stream {
-    env.storage()
+    let key = DataKey::Stream(stream_id);
+    let fields: Map<Symbol, Val> = env
+        .storage()
         .persistent()
-        .get(&DataKey::Stream(stream_id))
-        .unwrap_or_else(|| panic!("stream not found"))
+        .get(&key)
+        .unwrap_or_else(|| panic!("stream not found"));
+    Stream {
+        sender: read_stream_field(env, &fields, "sender"),
+        recipient: read_stream_field(env, &fields, "recipient"),
+        token: read_stream_field(env, &fields, "token"),
+        total_amount: read_stream_field(env, &fields, "total_amount"),
+        claimed_amount: read_stream_field(env, &fields, "claimed_amount"),
+        start_time: read_stream_field(env, &fields, "start_time"),
+        end_time: read_stream_field(env, &fields, "end_time"),
+        cliff_seconds: read_stream_field_or(env, &fields, "cliff_seconds", 0),
+        vesting_type: read_stream_field_or(
+            env,
+            &fields,
+            "vesting_type",
+            String::from_str(env, "linear"),
+        ),
+        min_claim_interval_seconds: read_stream_field_or(
+            env,
+            &fields,
+            "min_claim_interval_seconds",
+            0,
+        ),
+        last_claim_time: read_stream_field_or(env, &fields, "last_claim_time", 0),
+        canceled: read_stream_field_or(env, &fields, "canceled", false),
+        paused: read_stream_field_or(env, &fields, "paused", false),
+        pause_started_at: read_stream_field_or(env, &fields, "pause_started_at", None),
+        metadata: read_stream_field_or(env, &fields, "metadata", None),
+    }
 }
 
+fn read_stream_field<T>(env: &Env, fields: &Map<Symbol, Val>, name: &str) -> T
+where
+    T: TryFromVal<Env, Val>,
+{
+    let value: Val = fields
+        .get(Symbol::new(env, name))
+        .unwrap_or_else(|| panic!("invalid stream"));
+    T::try_from_val(env, &value).unwrap_or_else(|_| panic!("invalid stream"))
+}
+
+fn read_stream_field_or<T>(env: &Env, fields: &Map<Symbol, Val>, name: &str, default: T) -> T
+where
+    T: TryFromVal<Env, Val>,
+{
+    match fields.get(Symbol::new(env, name)) {
+        Some(value) => T::try_from_val(env, &value).unwrap_or_else(|_| panic!("invalid stream")),
+        None => default,
+    }
+}
+
+/// Computes the gross amount vested for `stream` as of `at_time` (before
+/// subtracting already-claimed tokens).
+///
+/// # Boundary / edge behavior
+///
+/// | Condition | Result |
+/// |---|---|
+/// | `at_time < start_time + cliff_seconds` | `0` — cliff not yet reached |
+/// | `at_time` in `[start_time, end_time)` | `total_amount * elapsed / duration`, floor-rounded |
+/// | `at_time >= end_time` | `total_amount` — stream fully vested; clamped |
+/// | `total_duration == 0` | `0` — degenerate stream guard (prevents divide-by-zero) |
+/// | `total_amount == 1` | `0` until `at_time == end_time`, then `1` (floor rounding) |
+/// | `total_amount == i128::MAX` | the exact floor quotient — vesting is never truncated to `0` |
+/// | stream is **paused** | `at_time` is overridden by `pause_started_at` so vesting is frozen |
+///
+/// # Rounding
+///
+/// Uses integer (floor) division of cumulative vesting. Less than one base
+/// token unit is deferred at an intermediate timestamp, regardless of the
+/// number of claims. At `end_time` the full total is vested.
+///
+/// # Arithmetic safety
+///
+/// `total_amount * elapsed / duration` is evaluated as
+/// `(total_amount / duration) * elapsed + (total_amount % duration) * elapsed / duration`
+/// so the intermediate product never has to be represented.  Because
+/// `elapsed <= duration` for every input:
+///
+/// * `(total_amount / duration) * elapsed <= total_amount`, so it fits `i128`;
+/// * `(total_amount % duration) * elapsed < duration²  <= 2¹²⁸`, so it fits `u128`.
+///
+/// The result is therefore the exact floor quotient for **every** amount up to
+/// and including `i128::MAX`, and it is always `<= total_amount`.  Earlier
+/// builds computed `total_amount.checked_mul(elapsed).unwrap_or(0)`, which made
+/// any amount large enough to overflow the product vest as `0` for the whole
+/// life of the stream — an escrowed-but-never-claimable stream.  See #1124.
 fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
     let effective_now = if stream.paused {
         stream.pause_started_at.unwrap_or(at_time)
@@ -1348,12 +1518,26 @@ fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
     let elapsed = effective_time.saturating_sub(stream.start_time);
     let total_duration = stream.end_time.saturating_sub(stream.start_time);
 
-    if total_duration == 0 {
+    // Degenerate guards: a zero-length window has no schedule to prorate
+    // against, and a non-positive amount has nothing to vest.
+    if total_duration == 0 || stream.total_amount <= 0 {
         return 0;
     }
 
-    stream.total_amount.checked_mul(elapsed as i128).unwrap_or(0) / (total_duration as i128)
+    let total = stream.total_amount;
+    let duration = total_duration as i128;
+    let whole = total / duration;
+    let remainder = total % duration;
+
+    let whole_part = whole * elapsed as i128;
+    let fraction_part =
+        ((remainder as u128) * (elapsed as u128) / (total_duration as u128)) as i128;
+
+    whole_part + fraction_part
 }
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod claimable_events_test;

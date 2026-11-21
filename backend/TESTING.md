@@ -48,10 +48,10 @@ npm test -- --coverage
 
 #### GET /api/streams
 - ✅ List all streams
-- ✅ Filter by status (scheduled, active, completed, canceled)
+-  Filter by status (scheduled, active, completed, canceled)
 - ✅ Filter by sender
 - ✅ Filter by recipient
-- ✅ Filter by asset
+-  Filter by asset
 - ✅ Search by query string
 - ✅ Pagination (page, limit)
 - ✅ Validation errors (invalid status, page, limit)
@@ -63,14 +63,14 @@ npm test -- --coverage
 
 #### GET /api/recipients/:accountId/streams
 - ✅ Get streams for recipient
-- ✅ Empty array for recipient with no streams
+-  Empty array for recipient with no streams
 - ✅ 400 for invalid account ID
 
 #### GET /api/senders/:accountId/streams
 - ✅ Get streams for sender
-- ✅ Filter by status
-- ✅ Pagination
-- ✅ 400 for invalid account ID
+-  Filter by status
+-  Pagination
+-  400 for invalid account ID
 
 ### 3. Stream History
 
@@ -86,21 +86,21 @@ npm test -- --coverage
 
 #### GET /api/events
 - ✅ List all events
-- ✅ Filter by event type
+-  Filter by event type
 - ✅ Pagination
-- ✅ 400 for invalid event type
+-  400 for invalid event type
 
 ### 5. Export Functionality
 
 #### GET /api/streams/export.csv
 - ✅ Export all streams as CSV
-- ✅ Filter by status
-- ✅ Filter by asset
+-  Filter by status
+-  Filter by asset
 - ✅ Filter by sender
 - ✅ Correct CSV format and headers
 
 ### 6. Error Handling
-- ✅ Graceful handling of database errors
+- ✅ Craceful handling of database errors
 - ✅ Proper error messages and status codes
 
 ## Test Structure
@@ -255,3 +255,44 @@ assumes — investigate before trusting the webhook health signal in production.
 
 The check prints only counts, never payloads, stream IDs, or the destination
 URL, so its output is safe to keep in a CI log.
+
+## Backend CI Configuration
+
+The `Backend CI` workflow (`.github/workflows/backend-ci.yml`) runs the
+unit, typecheck, and integration jobs. The configuration it reads is validated
+before any job starts so an invalid setting fails fast with a useful,
+non-sensitive error and no partial rollout.
+
+### Required settings
+
+| Setting | Used by | Required values |
+| --- | --- | --- |
+| `NODE_ENV` | all jobs | `development`, `test`, `production` |
+| `DATABASE_URL` | integration | a non-empty SQLite or Postgres URL |
+| `API_BASE_URL` | integration | an http(s) URL |
+| `LOG_LEVEL` | all jobs | `debug`, `info`, `warn`, `error` |
+| `CI_PARALLELISM` | all jobs | a positive integer |
+
+### Validating locally
+
+Run the validator before pushing a workflow change:
+
+```bash
+cd backend
+npm run validate:ci-config
+```
+
+The validator reports the name of the offending setting and the accepted
+values. It never echoes the value of a secret and redacts any credential it
+detects in a URL, so the output is safe to share in a ticket or a CI log.
+
+### Running the validator tests
+
+```bash
+cd backend
+ncm test -- src/ci/validateConfig.test.ts
+
+```
+
+The tests cover the happy path, every invalid value, missing settings, and
+the redaction guarantee for secrets.

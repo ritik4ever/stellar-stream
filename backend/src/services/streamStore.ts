@@ -13,15 +13,38 @@ import {
 } from "@stellar/stellar-sdk";
 import pLimit from "p-limit";
 import { initDb, getDb, syncFtsIndex } from "./db";
-import { recordEventWithDb, getClaimedTotal, streamHasEvent } from "./eventHistory";
+import {
+  recordEventWithDb,
+  getClaimedTotal,
+  streamHasEvent,
+  type StreamEventType,
+} from "./eventHistory";
 import { triggerWebhook } from "./webhook";
-import { initCache, getCache } from "./cache";
+import { initCache, getCache, invalidateCacheSync } from "./cache";
 import { resetStatsCache } from "./stats";
 import { resetStreamMetricsCache } from "./streamMetrics";
 import { logger } from "../logger";
 import { retryWithBackoff, SorobanSubmitError } from "../utils/sorobanRetry";
+import {
+  evaluateStreamProgressClockSkew,
+  classifyStreamProgressOutcome,
+  getLastStreamProgressSignal,
+  resetStreamProgressOutcome,
+  STREAM_PROGRESS_OUTCOME_CODES,
+  type StreamProgressOutcome,
+  type StreamProgressOutcomeSignal,
+} from "./streamProgressOutcome";
 
-export { SorobanSubmitError };
+export {
+  SorobanSubmitError,
+  evaluateStreamProgressClockSkew,
+  classifyStreamProgressOutcome,
+  getLastStreamProgressSignal,
+  resetStreamProgressOutcome,
+  STREAM_PROGRESS_OUTCOME_CODES,
+  type StreamProgressOutcome,
+  type StreamProgressOutcomeSignal,
+};
 
 export type StreamStatus = "scheduled" | "active" | "paused" | "completed" | "canceled";
 
@@ -394,28 +417,26 @@ async function fetchOnChainStreamRecord(
   return result;
 }
 
-function recordBackfilledCreatedEvent(stream: StreamRecord): void {
+function recordBackfilledCreatedEvent(stream: StreamRecord, dbHandle?: any): void {
   if (streamHasEvent(stream.id, "created")) {
     return;
   }
 
-  const db = getDb();
-  db.transaction(() => {
-    recordEventWithDb(
-      db,
-      stream.id,
-      "created",
-      stream.createdAt,
-      stream.sender,
-      stream.totalAmount,
-      {
-        recipient: stream.recipient,
-        assetCode: stream.assetCode,
-        durationSeconds: stream.durationSeconds,
-        source: "reconciliation",
-      },
-    );
-  })();
+  const db = dbHandle ?? getDb();
+  recordEventWithDb(
+    db,
+    stream.id,
+    "created",
+    stream.createdAt,
+    stream.sender,
+    stream.totalAmount,
+    {
+      recipient: stream.recipient,
+      assetCode: stream.assetCode,
+      durationSeconds: stream.durationSeconds,
+      source: "reconciliation",
+    },
+  );
 }
 
 function computeStatus(stream: StreamRecord, at: number): StreamStatus {
@@ -448,20 +469,28 @@ export function calculateProgress(
   stream: StreamRecord,
   at = nowInSeconds(),
 ): StreamProgress {
+  const startPerf = Date.now();
+  evaluateStreamProgressClockSkew(stream, at, startPerf);
+
   const effectiveAt =
-    stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
+    stream.canceledAt !== undefined
+      ? stream.canceledAt
+      : stream.pausedAt !== undefined
+      ? Math.min(at, stream.pausedAt)
+      : at;
 
   const elapsed = Math.max(0, Math.max(0, effectiveAt - stream.startAt) - stream.pausedDuration);
   const ratio = stream.durationSeconds <= 0 ? 1 : Math.min(1, elapsed / stream.durationSeconds);
   const elapsedSeconds = stream.durationSeconds <= 0 ? 0 : Math.min(elapsed, stream.durationSeconds);
-  const vestedAmount = stream.totalAmount * ratio;
+  const vestedAmount = round(stream.totalAmount * ratio);
+  const remainingAmount = round(Math.max(0, stream.totalAmount - vestedAmount));
 
   return {
     status: computeStatus(stream, at),
     ratePerSecond: stream.durationSeconds <= 0 ? Infinity : round(stream.totalAmount / stream.durationSeconds),
     elapsedSeconds,
-    vestedAmount: round(vestedAmount),
-    remainingAmount: round(Math.max(0, stream.totalAmount - vestedAmount)),
+    vestedAmount,
+    remainingAmount,
     percentComplete: round(ratio * 100),
   };
 }
@@ -692,18 +721,26 @@ export async function reconcileStream(streamId: string): Promise<StreamRecord> {
 
   try {
     const sourceAccount = await sorobanContext.sourceAccountPromise;
-    const onChainStream = await fetchOnChainStreamRecord(
-      sorobanContext.contract,
-      sourceAccount,
-      id,
-      true,
+    const onChainStream = await retryWithBackoff(
+      () =>
+        fetchOnChainStreamRecord(
+          sorobanContext.contract,
+          sourceAccount,
+          id,
+          true,
+        ),
+      2,
     );
 
     if (!onChainStream) {
       throw new Error("Stream not found on-chain");
     }
 
-    upsertStream(onChainStream);
+    const db = getDb();
+    db.transaction(() => {
+      upsertStream(onChainStream);
+      recordBackfilledCreatedEvent(onChainStream, db);
+    })();
 
     logger.info({ streamId }, "stream reconciled with on-chain state");
     return onChainStream;
@@ -721,10 +758,16 @@ export async function reconcileMissingStreams(): Promise<number> {
 
   try {
     const sourceAccount = await sorobanContext.sourceAccountPromise;
-    const nextId = await fetchNextOnChainStreamId(
-      sorobanContext.contract,
-      sourceAccount,
-    );
+    let nextId: number | null = null;
+    try {
+      nextId = await retryWithBackoff(
+        () => fetchNextOnChainStreamId(sorobanContext.contract, sourceAccount),
+        2,
+      );
+    } catch (err) {
+      logger.error({ err }, "failed to fetch next on-chain stream ID due to RPC outage");
+      return 0;
+    }
 
     if (nextId === null || nextId <= 1) {
       logger.info("no on-chain streams available to reconcile");
@@ -748,12 +791,18 @@ export async function reconcileMissingStreams(): Promise<number> {
     logger.warn({ missingCount: missingIds.length, missingIds }, "missing local streams detected");
 
     let repairedCount = 0;
+    const db = getDb();
+
     for (const missingId of missingIds) {
       try {
-        const stream = await fetchOnChainStreamRecord(
-          sorobanContext.contract,
-          sourceAccount,
-          missingId,
+        const stream = await retryWithBackoff(
+          () =>
+            fetchOnChainStreamRecord(
+              sorobanContext.contract,
+              sourceAccount,
+              missingId,
+            ),
+          2,
         );
 
         if (!stream) {
@@ -761,11 +810,19 @@ export async function reconcileMissingStreams(): Promise<number> {
           continue;
         }
 
-        upsertStream(stream);
-        recordBackfilledCreatedEvent(stream);
+        // Atomically commit stream and event in a single transaction.
+        // If event recording or upsert fails, the entire stream insertion rolls back cleanly.
+        db.transaction(() => {
+          upsertStream(stream);
+          recordBackfilledCreatedEvent(stream, db);
+        })();
+
         repairedCount += 1;
       } catch (err) {
-        logger.error({ err, streamId: missingId }, "failed to backfill missing stream");
+        logger.error({ err, streamId: missingId }, "failed to backfill missing stream due to RPC outage or error");
+        // On persistent RPC outage, abort remaining missing streams in this cycle to avoid hammering a down RPC provider,
+        // while preserving already committed streams.
+        break;
       }
     }
 
@@ -858,23 +915,17 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
     cliffSeconds: input.cliffSeconds ?? 0,
   };
 
-  const db = getDb();
-  db.transaction(() => {
-    upsertStream(stream);
-    recordEventWithDb(
-      db,
-      streamIdStr,
-      "created",
-      stream.createdAt,
-      input.sender,
-      input.totalAmount,
-      {
-        recipient: input.recipient,
-        assetCode: input.assetCode,
-        durationSeconds: input.durationSeconds,
-      },
-    );
-  })();
+  persistStreamAndEvent(stream, {
+    eventType: "created",
+    timestamp: stream.createdAt,
+    actor: input.sender,
+    amount: input.totalAmount,
+    metadata: {
+      recipient: input.recipient,
+      assetCode: input.assetCode,
+      durationSeconds: input.durationSeconds,
+    },
+  });
 
   await invalidateCache("stream:");
   await invalidateCache("streams:list:");
@@ -922,32 +973,40 @@ export async function estimateCreateStreamFee(input: StreamInput): Promise<Strea
 export function refreshStreamStatuses(): number {
   const db = getDb();
   const now = nowInSeconds();
+  const completedStreams: StreamRecord[] = [];
+  let completedCount = 0;
 
-  const toComplete = db.prepare(`
-    SELECT * FROM streams 
-    WHERE canceled_at IS NULL AND completed_at IS NULL AND paused_at IS NULL
-      AND (start_at + duration_seconds) <= ?
-  `).all() as StreamRow[];
+  db.transaction(() => {
+    const toComplete = db.prepare(`
+      SELECT * FROM streams
+      WHERE canceled_at IS NULL AND completed_at IS NULL AND paused_at IS NULL
+        AND (start_at + duration_seconds) <= ?
+    `).all(now) as StreamRow[];
 
-  const result = db.prepare(`
-    UPDATE streams SET completed_at = ?
-    WHERE canceled_at IS NULL AND completed_at IS NULL AND paused_at IS NULL
-      AND (start_at + duration_seconds) <= ?
-  `).run(now, now);
+    const result = db.prepare(`
+      UPDATE streams SET completed_at = ?
+      WHERE canceled_at IS NULL AND completed_at IS NULL AND paused_at IS NULL
+        AND (start_at + duration_seconds) <= ?
+    `).run(now, now);
+    completedCount = result.changes;
 
-  toComplete.forEach(row => {
-    const record = rowToRecord(row);
+    for (const row of toComplete) {
+      const record = rowToRecord(row);
+      record.completedAt = now;
 
-    record.completedAt = now;
+      if (!streamHasEvent(record.id, "completed")) {
+        recordEventWithDb(db, record.id, "completed", now);
+      }
 
-    if (!streamHasEvent(record.id, "completed")) {
-      recordEventWithDb(db, record.id, "completed", now);
+      completedStreams.push(record);
     }
+  })();
 
-    triggerWebhook("completed", record);
-  });
+  for (const stream of completedStreams) {
+    triggerWebhook("completed", stream);
+  }
 
-  return result.changes;
+  return completedCount;
 }
 
 export async function archiveOldStreams(): Promise<number> {
@@ -1014,7 +1073,7 @@ export async function archiveOldStreams(): Promise<number> {
 function buildOrderClause(sort: SortField, order: SortOrder): string {
   const column = SORT_COLUMNS[sort];
   const dir = order === "asc" ? "ASC" : "DESC";
-  return `ORDER BY ${column} ${dir}`;
+  return `ORDER BY ${column} ${dir}, id ASC`;
 }
 
 export function listStreams(includeArchived = false, sort: SortField = "createdAt", order: SortOrder = "desc"): StreamRecord[] {
@@ -1162,15 +1221,113 @@ export function compareStreams(
   });
 }
 
+interface StreamEventWrite {
+  eventType: StreamEventType;
+  timestamp: number;
+  actor?: string;
+  amount?: number;
+  metadata?: Record<string, any>;
+}
+
+interface StreamMutationResult {
+  stream: StreamRecord;
+  changed: boolean;
+}
+
+function streamError(message: string, statusCode: number, code?: string): Error {
+  return Object.assign(new Error(message), { statusCode, code });
+}
+
+function persistStreamAndEvent(
+  stream: StreamRecord,
+  event: StreamEventWrite,
+): void {
+  const db = getDb();
+  try {
+    db.transaction(() => {
+      upsertStream(stream);
+      recordEventWithDb(
+        db,
+        stream.id,
+        event.eventType,
+        event.timestamp,
+        event.actor,
+        event.amount,
+        event.metadata,
+      );
+    })();
+  } catch (err) {
+    logger.error({ err, streamId: stream.id }, "stream and event write rolled back");
+    throw streamError(
+      "Failed to persist stream and event.",
+      500,
+      "STREAM_WRITE_FAILED",
+    );
+  }
+}
+
+function mutateStreamAndEvent(
+  id: string,
+  mutate: (stream: StreamRecord) => StreamEventWrite | undefined,
+): StreamMutationResult {
+  const db = getDb();
+  try {
+    return db.transaction(() => {
+      // Acquire the writer lock before reading so a competing writer sees the
+      // latest committed state instead of overwriting it with a stale record.
+      db.prepare("UPDATE streams SET id = id WHERE id = @id").run({ id });
+      const row = db.prepare("SELECT * FROM streams WHERE id = @id").get({ id }) as
+        | StreamRow
+        | undefined;
+      if (!row) {
+        throw streamError("Stream not found.", 404, "NOT_FOUND");
+      }
+
+      const stream = rowToRecord(row);
+      const event = mutate(stream);
+      if (!event) {
+        return { stream, changed: false };
+      }
+
+      upsertStream(stream);
+      recordEventWithDb(
+        db,
+        stream.id,
+        event.eventType,
+        event.timestamp,
+        event.actor,
+        event.amount,
+        event.metadata,
+      );
+      return { stream, changed: true };
+    })();
+  } catch (err) {
+    if (
+      err &&
+      typeof err === "object" &&
+      "statusCode" in err &&
+      typeof err.statusCode === "number"
+    ) {
+      throw err;
+    }
+    logger.error({ err, streamId: id }, "stream and event write rolled back");
+    throw streamError(
+      "Failed to persist stream and event.",
+      500,
+      "STREAM_WRITE_FAILED",
+    );
+  }
+}
+
 export async function cancelStream(
   id: string,
 ): Promise<StreamRecord | undefined> {
-  const stream = getStream(id);
-  if (!stream || stream.canceledAt !== undefined) {
-    return stream;
+  const existingStream = getStream(id);
+  if (!existingStream || existingStream.canceledAt !== undefined) {
+    return existingStream;
   }
 
-  stream.canceledAt = nowInSeconds();
+  let refundedAmount: number | undefined;
 
   try {
     const sorobanContext = getSorobanContext();
@@ -1209,7 +1366,7 @@ export async function cancelStream(
           }
 
           if (txResult?.status === "SUCCESS" && txResult.returnValue) {
-            stream.refundedAmount = Number(scValToNative(txResult.returnValue));
+            refundedAmount = Number(scValToNative(txResult.returnValue));
           }
         }
       }
@@ -1218,43 +1375,48 @@ export async function cancelStream(
     logger.warn({ err, streamId: id }, "failed to get refund amount from chain");
   }
 
+  const canceledAt = nowInSeconds();
+  const result = mutateStreamAndEvent(id, (stream) => {
+    if (stream.canceledAt !== undefined) {
+      return undefined;
+    }
+    stream.canceledAt = canceledAt;
+    if (refundedAmount !== undefined) {
+      stream.refundedAmount = refundedAmount;
+    }
+    return {
+      eventType: "canceled",
+      timestamp: canceledAt,
+      actor: stream.sender,
+    };
+  });
+  if (!result.changed) {
+    return result.stream;
+  }
+
+  const stream = result.stream;
   await invalidateCache(`stream:${id}`);
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
   resetStatsCache();
   resetStreamMetricsCache();
 
-  const db = getDb();
-  db.transaction(() => {
-    upsertStream(stream);
-    recordEventWithDb(db, stream.id, "canceled", stream.canceledAt!, stream.sender);
-  })();
-
   triggerWebhook("canceled", stream);
   return stream;
 }
 
 export async function pauseStream(id: string): Promise<StreamRecord> {
-  const stream = getStream(id);
-  if (!stream) {
-    const err: any = new Error("Stream not found.");
-    err.statusCode = 404;
-    throw err;
-  }
-
-  const status = computeStatus(stream, nowInSeconds());
-  if (status !== "active") {
-    const err: any = new Error("Only active streams can be paused.");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  stream.pausedAt = nowInSeconds();
-  const db = getDb();
-  db.transaction(() => {
-    upsertStream(stream);
-    recordEventWithDb(db, stream.id, "paused", stream.pausedAt!, stream.sender);
-  })();
+  const pausedAt = nowInSeconds();
+  const { stream } = mutateStreamAndEvent(id, (current) => {
+    // Re-read committed state under the writer lock so a concurrent writer
+    // (e.g. cancel) cannot be overwritten with a stale record.
+    const status = computeStatus(current, pausedAt);
+    if (status !== "active") {
+      throw streamError("Only active streams can be paused.", 400);
+    }
+    current.pausedAt = pausedAt;
+    return { eventType: "paused", timestamp: pausedAt, actor: current.sender };
+  });
 
   await invalidateCache(`stream:${id}`);
   await invalidateCache("streams:list:");
@@ -1267,32 +1429,24 @@ export async function pauseStream(id: string): Promise<StreamRecord> {
 }
 
 export async function resumeStream(id: string): Promise<StreamRecord> {
-  const stream = getStream(id);
-  if (!stream) {
-    const err: any = new Error("Stream not found.");
-    err.statusCode = 404;
-    throw err;
-  }
-
-  if (stream.pausedAt === undefined) {
-    const err: any = new Error("Stream is not paused.");
-    err.statusCode = 400;
-    throw err;
-  }
-
   const now = nowInSeconds();
-  const elapsed = now - stream.pausedAt;
-  stream.pausedDuration = (stream.pausedDuration ?? 0) + elapsed;
-  stream.durationSeconds += elapsed;
-  stream.pausedAt = undefined;
-
-  const db = getDb();
-  db.transaction(() => {
-    upsertStream(stream);
-    recordEventWithDb(db, stream.id, "resumed", now, stream.sender, undefined, {
-      pausedDuration: stream.pausedDuration,
-    });
-  })();
+  const { stream } = mutateStreamAndEvent(id, (current) => {
+    // Re-read committed state under the writer lock so a concurrent writer
+    // (e.g. cancel) cannot be overwritten with a stale record.
+    if (current.pausedAt === undefined) {
+      throw streamError("Stream is not paused.", 400);
+    }
+    const elapsed = now - current.pausedAt;
+    current.pausedDuration = (current.pausedDuration ?? 0) + elapsed;
+    current.durationSeconds += elapsed;
+    current.pausedAt = undefined;
+    return {
+      eventType: "resumed",
+      timestamp: now,
+      actor: current.sender,
+      metadata: { pausedDuration: current.pausedDuration },
+    };
+  });
 
   await invalidateCache(`stream:${id}`);
   await invalidateCache("streams:list:");
@@ -1307,39 +1461,26 @@ export async function resumeStream(id: string): Promise<StreamRecord> {
 export async function updateStreamStartAt(id: string,
   newStartAt: number,
 ): Promise<StreamRecord> {
-  const stream = getStream(id);
-  if (!stream) {
-    const err: any = new Error("Stream not found.");
-    err.statusCode = 404;
-    throw err;
-  }
-
-  const status = computeStatus(stream, nowInSeconds());
-  if (status !== "scheduled") {
-    const err: any = new Error(
-      "Can only update start time for scheduled streams.",
-    );
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const oldStartAt = stream.startAt;
-  stream.startAt = newStartAt;
   const updatedAt = nowInSeconds();
-
-  const db = getDb();
-  db.transaction(() => {
-    upsertStream(stream);
-    recordEventWithDb(
-      db,
-      stream.id,
-      "start_time_updated",
-      updatedAt,
-      stream.sender,
-      undefined,
-      { oldStartAt, newStartAt },
-    );
-  })();
+  const { stream } = mutateStreamAndEvent(id, (current) => {
+    // Re-read committed state under the writer lock so a concurrent writer
+    // (e.g. cancel) cannot be overwritten with a stale record.
+    const status = computeStatus(current, updatedAt);
+    if (status !== "scheduled") {
+      throw streamError(
+        "Can only update start time for scheduled streams.",
+        400,
+      );
+    }
+    const oldStartAt = current.startAt;
+    current.startAt = newStartAt;
+    return {
+      eventType: "start_time_updated",
+      timestamp: updatedAt,
+      actor: current.sender,
+      metadata: { oldStartAt, newStartAt },
+    };
+  });
 
   await invalidateCache(`stream:${id}`);
   await invalidateCache("streams:list:");
@@ -1351,41 +1492,31 @@ export async function updateStreamStartAt(id: string,
 }
 
 export function markStreamComplete(id: string, at: number = nowInSeconds()): StreamRecord {
-  const stream = getStream(id);
-  if (!stream) {
-    const err: any = new Error("Stream not found.");
-    err.statusCode = 404;
-    throw err;
-  }
+  const { stream } = mutateStreamAndEvent(id, (current) => {
+    // Re-read committed state under the writer lock so a concurrent writer
+    // (e.g. cancel) cannot be overwritten with a stale record.
+    const status = computeStatus(current, at);
+    if (status === "completed") {
+      throw streamError("Stream is already completed.", 400);
+    }
+    if (status === "canceled") {
+      throw streamError("Stream is already canceled.", 400);
+    }
 
-  const status = computeStatus(stream, at);
-  if (status === "completed") {
-    const err: any = new Error("Stream is already completed.");
-    err.statusCode = 400;
-    throw err;
-  }
-  if (status === "canceled") {
-    const err: any = new Error("Stream is already canceled.");
-    err.statusCode = 400;
-    throw err;
-  }
+    const progress = calculateProgress(current, at);
+    if (progress.vestedAmount < current.totalAmount) {
+      throw streamError("Stream is not fully vested.", 400);
+    }
 
-  const progress = calculateProgress(stream, at);
-  if (progress.vestedAmount < stream.totalAmount) {
-    const err: any = new Error("Stream is not fully vested.");
-    err.statusCode = 400;
-    throw err;
-  }
-
-  stream.completedAt = at;
-
-  const db = getDb();
-  db.transaction(() => {
-    upsertStream(stream);
-    recordEventWithDb(db, stream.id, "completed", at, stream.sender);
-  })();
+    current.completedAt = at;
+    return { eventType: "completed", timestamp: at, actor: current.sender };
+  });
 
   triggerWebhook("completed", stream);
+  // SSB-2026-108: keep list results consistent with committed state.
+  invalidateCacheSync(`stream:${stream.id}`);
+  invalidateCacheSync("streams:list:");
+  invalidateCacheSync("streams:export:");
 
   return stream;
 }
@@ -1393,16 +1524,30 @@ export function markStreamComplete(id: string, at: number = nowInSeconds()): Str
 export function deleteStreamById(id: string): boolean {
   const db = getDb();
 
-  const stream = db
-    .prepare("SELECT id, archived_at FROM streams WHERE id = ?")
-    .get(id) as { id: string; archived_at: number | null } | undefined;
-
-  if (!stream) return false;
-
-  if (stream.archived_at !== null) return false;
-
   const now = nowInSeconds();
-  db.prepare("UPDATE streams SET archived_at = ? WHERE id = ?").run(now, id);
+  let deleted = false;
+  try {
+    db.transaction(() => {
+      const stream = db
+        .prepare("SELECT id, archived_at FROM streams WHERE id = ?")
+        .get(id) as { id: string; archived_at: number | null } | undefined;
 
+      if (!stream) return;
+      if (stream.archived_at !== null) return;
+
+      db.prepare("UPDATE streams SET archived_at = ? WHERE id = ?").run(now, id);
+      deleted = true;
+    })();
+  } catch (err) {
+    logger.error({ err, streamId: id }, "stream delete rolled back");
+    return false;
+  }
+
+  if (!deleted) return false;
+
+  // SSB-2026-108: keep list results consistent with committed state.
+  invalidateCacheSync(`stream:${id}`);
+  invalidateCacheSync("streams:list:");
+  invalidateCacheSync("streams:export:");
   return true;
 }

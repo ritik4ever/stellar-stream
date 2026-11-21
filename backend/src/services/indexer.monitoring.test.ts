@@ -28,7 +28,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
 
-// ── Stub all Prometheus metrics ───────────────────────────────────────────────
 vi.mock("./metrics", () => ({
   eventsIndexedTotal: { inc: vi.fn() },
   ledgersScannedTotal: { inc: vi.fn() },
@@ -40,6 +39,8 @@ vi.mock("./metrics", () => ({
   indexerOutcome: { set: vi.fn() },
   // Cursor-age freshness gauge added for issue #1228 (refreshed on poll success).
   indexerLastSuccessTimestampSeconds: { set: vi.fn() },
+  indexerEventsDedupedTotal: { inc: vi.fn() },
+  indexerPollDurationMs: { set: vi.fn() },
 }));
 
 // ── In-memory SQLite DB (replaced per-test) ───────────────────────────────────

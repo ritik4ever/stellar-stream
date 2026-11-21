@@ -12,7 +12,11 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "declaration": true,
-    "moduleResolution": "node"
+    "moduleResolution": "node",
+    // TypeScript 6 deprecates the CommonJS "node" resolver; the backend keeps it
+    // until a deliberate migration to "node16". Silence the deprecation so tsc
+    // runs on the pinned 6.x toolchain.
+    "ignoreDeprecations": "6.0"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

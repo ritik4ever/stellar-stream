@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Stream } from "../types/stream";
-import { StreamEvent, getStream, getStreamHistory } from "../services/api";
+import { ApiError, StreamEvent, getStream, getStreamHistory } from "../services/api";
 import { CopyableAddress } from "./CopyableAddress";
 import { CliffMarker } from "./CliffMarker";
 
@@ -109,6 +109,7 @@ export function StreamDetailDrawer({
   const [history, setHistory] = useState<StreamEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<"missing" | "load" | "refresh" | null>(null);
   const [canceling, setCanceling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [pausing, setPausing] = useState(false);
@@ -119,27 +120,40 @@ export function StreamDetailDrawer({
   const abortRef = useRef<AbortController | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
-  const fetchData = useCallback(async (id: string) => {
+  const fetchData = useCallback(async (id: string, refresh = false) => {
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
     setLoading(true);
     setError(null);
-    setStream(null);
-    setHistory([]);
+    setErrorKind(null);
+    if (!refresh) {
+      setStream(null);
+      setHistory([]);
+    }
 
     try {
-      const [s, h] = await Promise.all([getStream(id), getStreamHistory(id)]);
+      const [s, h] = await Promise.all([
+        getStream(id, ctrl.signal),
+        getStreamHistory(id, ctrl.signal),
+      ]);
       if (ctrl.signal.aborted) return;
       setStream(s);
-      setHistory(h);
+      setHistory(Array.isArray(h) ? h : []);
     } catch (err) {
       if (ctrl.signal.aborted) return;
       const msg = err instanceof Error ? err.message : "Failed to load stream.";
-      setError(msg.toLowerCase().includes("not found")
-        ? `Stream "${id}" could not be found. It may have been deleted.`
-        : msg);
+      if (err instanceof ApiError && err.statusCode === 404) {
+        setError(`Stream "${id}" could not be found. It may have been deleted.`);
+        setErrorKind("missing");
+      } else if (refresh) {
+        setError(msg);
+        setErrorKind("refresh");
+      } else {
+        setError(msg);
+        setErrorKind("load");
+      }
     } finally {
       if (!ctrl.signal.aborted) setLoading(false);
     }
@@ -149,6 +163,17 @@ export function StreamDetailDrawer({
   useEffect(() => {
     fetchData(streamId);
     return () => { abortRef.current?.abort(); };
+  }, [streamId, fetchData]);
+
+  // Pause updates while document is hidden, refresh when tab becomes visible
+  useEffect(() => {
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        fetchData(streamId, true);
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [streamId, fetchData]);
 
   // Auto-focus close button when drawer opens
@@ -186,7 +211,7 @@ export function StreamDetailDrawer({
     setCancelError(null);
     try {
       await onCancel(stream.id);
-      await fetchData(stream.id);
+      await fetchData(stream.id, true);
     } catch (err) {
       setCancelError(err instanceof Error ? err.message : "Cancel failed.");
     } finally {
@@ -201,7 +226,7 @@ export function StreamDetailDrawer({
     try {
       await signAction({ action: "pause", streamId: stream.id, timestamp: Date.now() });
       await onPause(stream.id);
-      await fetchData(stream.id);
+      await fetchData(stream.id, true);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Pause failed.");
     } finally {
@@ -216,7 +241,7 @@ export function StreamDetailDrawer({
     try {
       await signAction({ action: "resume", streamId: stream.id, timestamp: Date.now() });
       await onResume(stream.id);
-      await fetchData(stream.id);
+      await fetchData(stream.id, true);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Resume failed.");
     } finally {
@@ -246,7 +271,10 @@ export function StreamDetailDrawer({
     !!signAction &&
     stream?.progress.status === "paused";
 
-  const hasActions = !!onCancel || showPause || showResume;
+  const hasActions =
+    errorKind !== "refresh" &&
+    !isFinalised &&
+    (!!onCancel || showPause || showResume);
 
   return (
     <div
@@ -283,11 +311,20 @@ export function StreamDetailDrawer({
             <div className="drawer-error" role="alert">
               <span className="drawer-error__icon" aria-hidden="true">⚠</span>
               <div>
+                {errorKind === "missing" && (
+                  <p className="drawer-error__title"><strong>Stream not found</strong></p>
+                )}
+                {errorKind === "refresh" && (
+                  <p className="drawer-error__title"><strong>Unable to refresh stream</strong></p>
+                )}
+                {errorKind === "load" && (
+                  <p className="drawer-error__title"><strong>Unable to load stream</strong></p>
+                )}
                 <p className="drawer-error__msg">{error}</p>
                 <button
                   type="button"
                   className="retry-btn"
-                  onClick={() => fetchData(streamId)}
+                  onClick={() => fetchData(streamId, errorKind === "refresh")}
                   style={{ marginTop: "0.5rem" }}
                 >
                   Retry
@@ -310,8 +347,15 @@ export function StreamDetailDrawer({
           )}
 
           {/* Content */}
-          {!loading && !error && stream && (
+          {!loading && (!error || errorKind === "refresh") && stream && (
             <>
+              {stream.progress.status === "canceled" && (
+                <div className="drawer-error" role="status" aria-label="Canceled stream">
+                  <span className="drawer-error__icon" aria-hidden="true">✕</span>
+                  <p><strong>This stream is canceled and cannot be modified.</strong></p>
+                </div>
+              )}
+
               {/* Metadata section */}
               <section className="drawer-section" aria-labelledby="drawer-meta-heading">
                 <h3 id="drawer-meta-heading" className="drawer-section-title">Metadata</h3>
@@ -383,15 +427,30 @@ export function StreamDetailDrawer({
               )}
 
               {/* Progress section */}
-              <section className="drawer-section" aria-labelledby="drawer-progress-heading">
+              <section className="drawer-section" aria-labelledby="drawer-progress-heading" data-testid="stream-progress-section">
                 <h3 id="drawer-progress-heading" className="drawer-section-title">Progress</h3>
-                <div className="drawer-progress-header">
-                  <span className="drawer-progress-pct">{stream.progress.percentComplete}%</span>
-                  <span className="muted">
+                <div
+                  className="drawer-progress-header"
+                  data-testid="stream-progress-header"
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "0.5rem",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  <span className="drawer-progress-pct" data-testid="stream-progress-pct">{Math.min(100, Math.max(0, stream.progress.percentComplete))}%</span>
+                  <span
+                    className="muted"
+                    data-testid="stream-progress-vested-label"
+                    style={{ wordBreak: "break-word", maxWidth: "100%" }}
+                  >
                     {stream.progress.vestedAmount} / {stream.totalAmount} {stream.assetCode} vested
                   </span>
                 </div>
-                <div style={{ position: "relative", padding: "0.5rem 0" }}>
+                <div style={{ position: "relative", padding: "0.5rem 0", width: "100%", overflowX: "hidden" }}>
                   {stream.cliffSeconds != null && stream.cliffSeconds > 0 && (
                     <CliffMarker
                       startAt={stream.startAt}
@@ -403,33 +462,53 @@ export function StreamDetailDrawer({
                   <div
                     className="progress-bar"
                     role="progressbar"
-                    aria-valuenow={stream.progress.percentComplete}
+                    data-testid="stream-progress-bar"
+                    aria-valuenow={Math.min(100, Math.max(0, stream.progress.percentComplete))}
                     aria-valuemin={0}
                     aria-valuemax={100}
                     aria-label="Stream progress"
+                    aria-valuetext={`${stream.progress.percentComplete}% complete, ${stream.progress.vestedAmount} ${stream.assetCode} vested, ${Math.max(0, stream.progress.remainingAmount)} ${stream.assetCode} remaining`}
                   >
-                    <div style={{ width: `${Math.min(stream.progress.percentComplete, 100)}%` }} />
+                    <div style={{ width: `${Math.min(100, Math.max(0, stream.progress.percentComplete))}%` }} />
                   </div>
                 </div>
-                <dl className="drawer-dl" style={{ marginTop: "0.75rem" }}>
-                  <div className="drawer-dl__row">
-                    <dt>Rate</dt>
-                    <dd>{stream.progress.ratePerSecond} {stream.assetCode}/s</dd>
+
+                {/* A11Y: Polite status announcement for screen readers */}
+                <div
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  className="sr-only"
+                  data-testid="stream-progress-live-announcer"
+                >
+                  {`Stream status: ${stream.progress.status}. ${stream.progress.percentComplete}% vested.`}
+                </div>
+
+                <dl className="drawer-dl" style={{ marginTop: "0.75rem", wordBreak: "break-word" }}>
+                  <div className="drawer-dl__row" style={{ flexWrap: "wrap", gap: "0.25rem" }}>
+                    <dt id="label-stream-rate">Rate</dt>
+                    <dd aria-labelledby="label-stream-rate" style={{ wordBreak: "break-all" }}>{stream.progress.ratePerSecond} {stream.assetCode}/s</dd>
                   </div>
-                  <div className="drawer-dl__row">
-                    <dt>Elapsed</dt>
-                    <dd>{stream.progress.elapsedSeconds}s</dd>
+                  <div className="drawer-dl__row" style={{ flexWrap: "wrap", gap: "0.25rem" }}>
+                    <dt id="label-stream-elapsed">Elapsed</dt>
+                    <dd aria-labelledby="label-stream-elapsed">{stream.progress.elapsedSeconds}s</dd>
                   </div>
-                  <div className="drawer-dl__row">
-                    <dt>Remaining</dt>
-                    <dd>{stream.progress.remainingAmount} {stream.assetCode}</dd>
+                  <div className="drawer-dl__row" style={{ flexWrap: "wrap", gap: "0.25rem" }}>
+                    <dt id="label-stream-remaining">Remaining</dt>
+                    <dd
+                      aria-labelledby="label-stream-remaining"
+                      data-testid="stream-progress-remaining"
+                      style={{ wordBreak: "break-all" }}
+                    >
+                      {Math.max(0, stream.progress.remainingAmount)} {stream.assetCode}
+                    </dd>
                   </div>
                 </dl>
               </section>
 
               {/* Actions */}
               {hasActions && (
-                <section className="drawer-section" aria-labelledby="drawer-actions-heading">
+                <section className="drawer-section drawer-actions" aria-labelledby="drawer-actions-heading" data-testid="stream-progress-actions">
                   <h3 id="drawer-actions-heading" className="drawer-section-title">Actions</h3>
 
                   {cancelError && (
@@ -439,15 +518,25 @@ export function StreamDetailDrawer({
                     <p className="drawer-cancel-error" role="alert">{actionError}</p>
                   )}
 
-                  <div className="action-cell">
+                  <div
+                    className="action-cell"
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: "0.75rem",
+                      alignItems: "center",
+                    }}
+                  >
                     {/* Pause — active streams, sender only */}
                     {showPause && (
                       <button
                         type="button"
                         className="btn-ghost"
+                        style={{ minHeight: "44px", minWidth: "44px", padding: "0.5rem 1rem" }}
                         disabled={pausing}
                         onClick={handlePause}
                         aria-busy={pausing}
+                        data-testid="stream-pause-btn"
                       >
                         {pausing ? "Pausing…" : "⏸ Pause"}
                       </button>
@@ -458,9 +547,11 @@ export function StreamDetailDrawer({
                       <button
                         type="button"
                         className="btn-ghost"
+                        style={{ minHeight: "44px", minWidth: "44px", padding: "0.5rem 1rem" }}
                         disabled={resuming}
                         onClick={handleResume}
                         aria-busy={resuming}
+                        data-testid="stream-resume-btn"
                       >
                         {resuming ? "Resuming…" : "▶ Resume"}
                       </button>
@@ -471,9 +562,11 @@ export function StreamDetailDrawer({
                       <button
                         type="button"
                         className="btn-ghost"
+                        style={{ minHeight: "44px", minWidth: "44px", padding: "0.5rem 1rem" }}
                         disabled={isFinalised || canceling}
                         onClick={handleCancel}
                         aria-busy={canceling}
+                        data-testid="stream-cancel-btn"
                       >
                         {canceling ? "Canceling…" : "Cancel Stream"}
                       </button>
@@ -485,7 +578,7 @@ export function StreamDetailDrawer({
               {/* Event history */}
               <section className="drawer-section" aria-labelledby="drawer-history-heading">
                 <h3 id="drawer-history-heading" className="drawer-section-title">Event History</h3>
-                {history.length === 0 ? (
+                {!history || history.length === 0 ? (
                   <div className="activity-empty" role="status">
                     <span className="activity-empty-icon" aria-hidden="true">📭</span>
                     <p>No events yet.</p>

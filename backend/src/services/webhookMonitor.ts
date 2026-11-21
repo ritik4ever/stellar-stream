@@ -55,6 +55,15 @@ export interface WebhookOutcomeSignal {
    * log, scrape, and paste into an incident channel.
    */
   detail: string;
+  /**
+   * True only for the empty queue case: no pending or dead-lettered deliveries,
+   * so operators can distinguish the normal empty state from an actual failure.
+   */
+  isNormalEmpty: boolean;
+  /**
+   * Time spent classifying the queue snapshot for the current signal.
+   */
+  latencyMs: number;
   counts: WebhookQueueCounts;
 }
 
@@ -83,8 +92,10 @@ export function classifyWebhookOutcome(
     delivered: snapshot.delivered,
   };
 
+  const startedAt = Date.now();
   let outcome: WebhookDeliveryOutcome;
   let detail: string;
+  let isNormalEmpty = false;
 
   if (counts.deadLetters > 0) {
     outcome = "blocked";
@@ -105,12 +116,20 @@ export function classifyWebhookOutcome(
       `Owner action: none while the queued count falls.`;
   } else {
     outcome = "success";
-    detail =
-      `No webhook deliveries are queued or dead-lettered ` +
-      `(${counts.delivered} delivered).`;
+    isNormalEmpty = counts.pending === 0 && counts.deadLetters === 0;
+    detail = isNormalEmpty
+      ? `No webhook deliveries are queued or dead-lettered; this is the normal empty case (${counts.delivered} delivered).`
+      : `No webhook deliveries are queued or dead-lettered (${counts.delivered} delivered).`;
   }
 
-  return { outcome, outcomeCode: WEBHOOK_OUTCOME_CODES[outcome], detail, counts };
+  return {
+    outcome,
+    outcomeCode: WEBHOOK_OUTCOME_CODES[outcome],
+    detail,
+    isNormalEmpty,
+    latencyMs: Math.max(0, Date.now() - startedAt),
+    counts,
+  };
 }
 
 /**

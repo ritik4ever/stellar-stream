@@ -41,56 +41,7 @@ a versioned decoder or an explicit migration because old serialized values
 cannot be assumed to contain the new field. Existing `Stream(id)` records must
 remain readable throughout the migration.
 
-### Edge behavior: reading a stream created by a previous build
 
-The following behavior is normative for any build that reads state written
-by an earlier build. These cases are covered by tests in `contracts/src/test.rs`
-(see `test_read_legacy_stream_preserves_balances`,
-`test_read_legacy_stream_checked_arithmetic`, and `test_upgrade_read_old_state_preserves_state`).
-
-1. **Same layout, new build.** A `Stream(id)` written by a previous build with the
-   same `DataKey` layout decodes to the same `Stream` value. All fields are
-   preserved byte-for-byte; no field is defaulted or dropped.
-
-2. **Integer token units.** All amounts (`total_amount`, `claimed_amount`,
-   `withdrawn_amount`) are `i128` in the token's base unit. Reading old state
-   must not rescale or round these units. A value written as `10_000_000`
-   reads back as `10_000_000`, never as a decimal or a different denomination.
-
-3. **Checked arithmetic.** Any arithmetic performed while reading or updating
-   old state uses checked operations. If an addition or subtraction on
-   `claimed_amount` or `total_amount` would overflow or underflow `i128`, the
-   call fails with the contract's checked-arithmetic error rather than wrapping.
-   No partial write is persisted when the arithmetic fails.
-
-4. **Invariant preservation.** Reading old state must preserve
-4. **Invariant preservation.** Reading old state must preserve
-   `claimed_amount <= total_amount` and the address/boolean lifecycle fields.
-   Values must not be silently coerced during a read.
-
-5. **Unknown / future fields.** If a newer build adds fields to `Stream`, an
-   older build reading that state must fail closed (decode error) rather than
-   ignoring the extra bytes. This is why adding fields requires a versioned
-   decoder or an explicit migration.
-
-6. **Missing optional metadata.** Optional metadata that was absent in the old
-   record reads as `None`; it is not invented or substituted with a default
-   value.
-
-7. **No mutation on read.** Reading a stream created by a previous build does
-   not modify its stored representation. Only explicit mutating entry points
-   (claim, pause, resume, cancel, clawback, transfer) write back to
-   `Stream(id)`.
-
-### Edge behavior: upgraded code encountering old state
-
-When a new WASM is deployed over existing storage:
-
-1. **Read compatibility.** As long as the `DataKey` layout and `Stream` encoding
-   are unchanged, the upgraded code reads old `Stream(id)` records unchanged.
-2. **Layout-changing upgrade.** If the layout changes, the compatibility read
-   path must remain available until the bounded migration completes. During
-   the migration, old records remain readable and balances are not changed.
 
 Before deploying a layout-changing WASM:
 
@@ -185,6 +136,13 @@ Within a single Soroban transaction the contract emits events in the following
 fixed order.  The indexer relies on this ordering to reconstruct the committed
 action **exactly once** without double-counting.
 
+### `create_stream()` / `create_split_stream()` (Stream creation escrow)
+
+1. **Token transfer / Escrow**: Tokens are transferred from `sender` to `contract_address` (`total_amount`). The underlying token contract emits its transfer event first.
+2. **State persistence**: `DataKey::NextStreamId` is incremented and `DataKey::Stream(next_id)` is committed to persistent storage.
+3. `StreamCreated`: Emitted **after** escrowed token transfer and storage persistence succeed (one per child stream for split streams). The indexer reconstructs the initial stream state (`sender`, `recipient`, `token`, `total_amount`, `start_time`, `end_time`, `cliff_seconds`, `vesting_type`, `min_claim_interval_seconds`, `metadata`) **exactly once**.
+4. **Failure atomicity**: If the sender balance is insufficient, authorization fails, or any validation fails before storage, the invocation reverts atomically. Zero contract events are emitted, no stream ID is consumed, and escrowed balances remain unchanged.
+
 ### `claim()` call
 
 1. `StreamClaimed` — always emitted after the token transfer and accounting
@@ -197,6 +155,34 @@ action **exactly once** without double-counting.
 No other events are emitted by a successful `claim()` call (unless the
 call is first rejected by the rate-limiter, in which case `ClaimThrottled` is
 emitted and both `StreamClaimed` and `StreamCompleted` are suppressed).
+
+#### `StreamClaimed` as the authoritative partial-claim record
+
+`StreamClaimed` is a self-describing record of a single committed claim. Its
+event-specific fields are:
+
+| Field | Meaning |
+| --- | --- |
+| `amount` | The recipient payout transferred to the recipient by **this** call. |
+| `claimed_amount` | The cumulative claimed balance **after** this call succeeds. |
+
+A partial claim is a "one-unit claim followed by the remaining claim": the
+recipient first pulls out a small amount, then claims the rest. Each successful
+call emits exactly one `StreamClaimed`, so an indexer that never reads contract
+storage reconstructs the committed payout by summing the `amount` fields and reads
+the resulting balance from the latest `claimed_amount` — the two agree event by
+event, so nothing is missed or double-counted. `StreamCompleted` carries only
+`total_amount` and must never be used as a payout amount. Because `claim()`
+publishes `StreamClaimed` only after the token transfer and the accounting update
+both succeed, a claim whose payout fails after the recipient has authorized
+reverts the whole transaction: no `StreamClaimed` is emitted and `claimed_amount`
+is not advanced, so the indexer records exactly the payouts that actually happened.
+
+This event-only reconstruction is tested by
+`test_1137_events_reconstruct_partial_claim_state_exactly_once` in
+`contracts/src/test.rs`; the underlying claim mechanics and the failed-payout
+rollback are covered by `test_1138_one_unit_claim_then_remaining_claim` and
+`test_1138_transfer_failure_after_authorization_rolls_back`.
 
 ### Other entry points (one event each)
 

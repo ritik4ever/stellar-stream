@@ -32,7 +32,14 @@ import {
   startIndexer,
   getCircuitBreakerStatus,
 } from "./services/indexer";
-import { adminAuth } from "./middleware/adminAuth";
+import {
+  getIdempotentStream,
+  storeIdempotentStream,
+  isInFlightStreamCreation,
+  markStreamCreationInFlight,
+  clearStreamCreationInFlight,
+} from "./services/streamIdempotency";
+import { ADMIN_CALLER, adminAuth, authorizeAdminApiKey } from "./middleware/adminAuth";
 import { deleteStreamById, reconcileStream } from "./services/streamStore";
 import { getCache } from "./services/cache";
 import { getStreamStats } from "./services/stats";
@@ -60,6 +67,12 @@ import {
   countDeadLetters,
   requeueDeadLetter,
 } from "./services/webhook";
+import { emitListStreamsSignal } from "./services/listStreamsOutcome";
+import {
+  emitCancelStreamSignal,
+  CancelStreamOutcome,
+} from "./services/cancelStreamOutcome";
+import { emitCreateStreamSignal } from "./services/createStreamOutcome";
 import {
   archiveOldStreams,
   calculateProgress,
@@ -129,9 +142,75 @@ const STREAM_HISTORY_MAX_LIMIT = 200;
 
 export const app = express();
 const port = Number(process.env.PORT ?? 3001);
-const ALLOWED_ASSETS = (process.env.ALLOWED_ASSETS || "USDC,XLM")
-  .split(",")
-  .map((asset) => asset.trim().toUpperCase());
+const ASSET_CODE_REGEX = /^[A-Za-z0-9]{1,12}$/;
+
+/**
+ * Normalize, deduplicate, and sort an iterable of asset codes into the
+ * canonical allowlist representation (`trim()`, `toUpperCase()`, unique,
+ * sorted lexicographically `A–Z`, `0–9`).
+ *
+ * Consistency rule (SSB-2026-123):
+ * - Every handler (`GET /api/assets`, `GET /api/admin/assets`,
+ *   `POST /api/admin/assets`, `DELETE /api/admin/assets/:code`), service
+ *   (`getAllowedAssets`, `addAllowedAsset`, `removeAllowedAsset`,
+ *   `evaluateAssetAllowlistConfig`), and startup parser (`parseAllowedAssetsConfig`)
+ *   returns this exact normalized sorted asset list.
+ * - Mutations only return a `200` with the updated list after the underlying
+ *   SQLite write has committed; on validation or storage failure, the handler
+ *   returns an error response without claiming a state change.
+ */
+export function normalizeAssetAllowlist(assets: Iterable<string>): string[] {
+  const normalized = new Set<string>();
+  for (const raw of assets) {
+    if (typeof raw !== "string") continue;
+    const code = raw.trim().toUpperCase();
+    if (code.length > 0) {
+      normalized.add(code);
+    }
+  }
+  return Array.from(normalized).sort();
+}
+
+/**
+ * Parse and validate the ALLOWED_ASSETS environment configuration.
+ *
+ * Boundary semantics (documented, deterministic):
+ * - Each entry is trimmed and upper-cased (mixed-case input is normalized).
+ * - Empty entries (e.g. from trailing commas) or empty/whitespace-only
+ *   configurations are rejected on startup.
+ * - Duplicate entries (case-insensitive, post-normalization) are collapsed.
+ * - The resulting list is de-duplicated and sorted for a stable order.
+ * - If any entry is not 1-12 alphanumeric characters or no valid asset codes
+ *   are provided, startup fails with an explicit error (invalid configuration
+ *   on startup) rather than silently dropping or accepting it.
+ */
+export function parseAllowedAssetsConfig(raw: string | undefined): string[] {
+  const source = raw === undefined ? "USDC,XLM" : raw;
+  const trimmedSource = source.trim();
+  if (trimmedSource.length === 0) {
+    throw new Error(
+      "Invalid ALLOWED_ASSETS configuration: ALLOWED_ASSETS must contain at least one asset code.",
+    );
+  }
+
+  const rawTokens = trimmedSource.split(",").map((asset) => asset.trim().toUpperCase());
+  if (rawTokens.some((token) => token.length === 0)) {
+    throw new Error(
+      "Invalid ALLOWED_ASSETS configuration: empty asset code entry is not allowed.",
+    );
+  }
+
+  const invalid = rawTokens.filter((asset) => !ASSET_CODE_REGEX.test(asset));
+  if (invalid.length > 0) {
+    throw new Error(
+      `Invalid ALLOWED_ASSETS configuration: ${invalid
+        .map((asset) => JSON.stringify(asset))
+        .join(", ")} must be 1-12 alphanumeric characters.`,
+    );
+  }
+
+  return normalizeAssetAllowlist(rawTokens);
+}
 
 const SORT_FIELDS = ["totalAmount", "startAt", "createdAt", "durationSeconds"] as const;
 const SORT_ORDERS = ["asc", "desc"] as const;
@@ -179,7 +258,7 @@ const listStreamsQuerySchema = z.object({
   limit: z.coerce
     .number()
     .int("limit must be an integer")
-    .min(1, "limit must be an integer")
+    .min(1, "limit must be greater than or equal to 1")
     .max(
       PAGINATION_MAX_LIMIT,
       `limit must be less than or equal to ${PAGINATION_MAX_LIMIT}`,
@@ -496,15 +575,37 @@ app.get(
   },
 );
 
-app.get("/api/assets", (_req: Request, res: Response) => {
+app.get("/api/assets", (req: Request, res: Response) => {
+  const startPerf = Date.now();
+  // Guarantee a stable, normalized, sorted, de-duplicated list regardless of
+  // insertion order or duplicate rows in the backing store.
+  const assets = normalizeAssetAllowlist(getAllowedAssets());
+  const latencyMs = Math.max(0, Date.now() - startPerf);
+  const isNormalEmpty = assets.length === 0;
+
+  logger.info(
+    {
+      event: "asset_allowlist_query",
+      outcome: "success",
+      outcomeCode: 0,
+      latencyMs,
+      isNormalEmpty,
+      count: assets.length,
+      correlation_id: req.correlationId,
+      requestId: req.requestId,
+      streamId: typeof req.query.streamId === "string" ? req.query.streamId : undefined,
+    },
+    `Asset allowlist queried: ${assets.length} active allowed asset(s)`,
+  );
+
   res.json({
-    data: getAllowedAssets(),
+    data: assets,
   });
 });
 
 app.get("/api/admin/assets", adminJwtAuth, (_req: Request, res: Response) => {
   res.json({
-    data: getAllowedAssets(),
+    data: normalizeAssetAllowlist(getAllowedAssets()),
   });
 });
 
@@ -515,41 +616,77 @@ app.post("/api/admin/assets", adminJwtAuth, (req: Request, res: Response) => {
     return;
   }
   const cleanCode = code.trim().toUpperCase();
-  const ASSET_CODE_REGEX = /^[A-Za-z0-9]{1,12}$/;
   if (!ASSET_CODE_REGEX.test(cleanCode)) {
     sendApiError(req, res, 400, "Asset code must be 1–12 alphanumeric characters.", { code: "VALIDATION_ERROR" });
     return;
   }
-  addAllowedAsset(cleanCode);
-  res.json({
-    data: getAllowedAssets(),
-  });
+  try {
+    const committed = addAllowedAsset(cleanCode);
+    res.json({
+      data: normalizeAssetAllowlist(committed),
+    });
+  } catch (error: any) {
+    logger.error({ err: error, assetCode: cleanCode }, "failed to add allowed asset");
+    const normalizedError = normalizeUnknownApiError(
+      error,
+      "Failed to update allowed assets.",
+    );
+    sendApiError(
+      req,
+      res,
+      normalizedError.statusCode,
+      normalizedError.message,
+      { code: normalizedError.code ?? "INTERNAL_ERROR" },
+    );
+  }
 });
 
 app.delete("/api/admin/assets/:code", adminJwtAuth, (req: Request, res: Response) => {
   const { code } = req.params;
-  if (!code) {
+  if (!code || typeof code !== "string" || !code.trim()) {
     sendApiError(req, res, 400, "Asset code is required.", { code: "VALIDATION_ERROR" });
     return;
   }
-  const cleanCode = (code as string).trim().toUpperCase();
-  removeAllowedAsset(cleanCode);
-  res.json({
-    data: getAllowedAssets(),
-  });
+  const cleanCode = code.trim().toUpperCase();
+  if (!ASSET_CODE_REGEX.test(cleanCode)) {
+    sendApiError(req, res, 400, "Asset code must be 1–12 alphanumeric characters.", { code: "VALIDATION_ERROR" });
+    return;
+  }
+  try {
+    const committed = removeAllowedAsset(cleanCode);
+    res.json({
+      data: normalizeAssetAllowlist(committed),
+    });
+  } catch (error: any) {
+    logger.error({ err: error, assetCode: cleanCode }, "failed to remove allowed asset");
+    const normalizedError = normalizeUnknownApiError(
+      error,
+      "Failed to update allowed assets.",
+    );
+    sendApiError(
+      req,
+      res,
+      normalizedError.statusCode,
+      normalizedError.message,
+      { code: normalizedError.code ?? "INTERNAL_ERROR" },
+    );
+  }
 });
 
 app.post(["/api/admin/auth", "/api/auth/admin"], (req: Request, res: Response) => {
-  const apiKey = req.body?.apiKey || req.header("X-Admin-Key");
-  if (!apiKey || apiKey !== process.env.ADMIN_API_KEY) {
-    sendApiError(req, res, 401, "Invalid Admin API Key.", { code: "UNAUTHORIZED" });
+  if (!authorizeAdminApiKey(req, res, { allowBodyKey: true })) {
     return;
   }
-  const token = jwt.sign({ role: "admin", accountId: "admin", isAdmin: true }, getJwtSecret(), { expiresIn: "24h" });
+  const token = jwt.sign({ ...ADMIN_CALLER }, getJwtSecret(), { expiresIn: "24h" });
   res.json({ token });
 });
 
 app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  const requestId =
+    (req.headers["x-request-id"] as string) ||
+    (req.headers["x-correlation-id"] as string);
+
   const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
   if (!parsedQuery.success) {
     sendValidationError(req, res, parsedQuery.error.issues);
@@ -575,7 +712,32 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
   const hasLimit = req.query.limit !== undefined;
 
   const now = nowInSeconds();
-  let data = listStreams(query.include_archived, query.sort ?? "createdAt", query.order ?? "desc").map((stream) => ({
+  let rawStreams;
+  try {
+    rawStreams = listStreams(
+      query.include_archived,
+      query.sort ?? "createdAt",
+      query.order ?? "desc",
+    );
+  } catch (_error) {
+    emitListStreamsSignal({
+      outcome: "failure",
+      detail: "Database read failure during pagination.",
+      isNormalEmpty: false,
+      latencyMs: Date.now() - startTime,
+      page: query.page ?? PAGINATION_DEFAULT_PAGE,
+      limit: query.limit ?? PAGINATION_DEFAULT_LIMIT,
+      total: 0,
+      returnedCount: 0,
+      requestId,
+    });
+    sendApiError(req, res, 500, "Failed to retrieve streams.", {
+      code: "INTERNAL_ERROR",
+    });
+    return;
+  }
+
+  let data = rawStreams.map((stream) => ({
     ...stream,
     progress: calculateProgress(stream, now),
   }));
@@ -649,6 +811,21 @@ app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
     // If cache fails, just proceed
   }
 
+  emitListStreamsSignal({
+    outcome: "success",
+    detail:
+      total === 0
+        ? "Normal empty stream list query."
+        : "Stream list query retrieved successfully.",
+    isNormalEmpty: total === 0,
+    latencyMs: Date.now() - startTime,
+    page,
+    limit,
+    total,
+    returnedCount: paginatedData.length,
+    requestId,
+  });
+
   res.set("Cache-Control", "max-age=5");
   res.json(result);
 });
@@ -682,7 +859,6 @@ app.get("/api/streams/search", readLimiter, (req: Request, res: Response) => {
   }
 
   // --- validate optional asset filter ---
-  const ASSET_CODE_REGEX = /^[A-Za-z0-9]{1,12}$/;
   const assetResult = z
     .string()
     .regex(ASSET_CODE_REGEX, "asset must be 1–12 alphanumeric characters (e.g. USDC, XLM)")
@@ -901,12 +1077,20 @@ async function withAddressCache(
     const cache = getCache();
     const cached = await cache.get<StreamRecord[]>(key);
     if (cached) return cached;
-    const data = fetcher();
-    await cache.set(key, data, 5);
-    return data;
   } catch {
-    return fetcher();
+    // If cache lookup fails, proceed to fetcher without caching
   }
+
+  const data = fetcher();
+
+  try {
+    const cache = getCache();
+    await cache.set(key, data, 5);
+  } catch {
+    // If cache write fails, still return the fetched data without re-running fetcher
+  }
+
+  return data;
 }
 
 app.get(
@@ -931,10 +1115,18 @@ app.get(
     }
     const query = parsedQuery.data;
 
-    const rawStreams = await withAddressCache(
-      `streams:sender:${address}`,
-      () => listStreamsBySender(address, query.sort ?? "createdAt", query.order ?? "desc"),
-    );
+    let rawStreams: StreamRecord[];
+    try {
+      rawStreams = await withAddressCache(
+        `streams:sender:${address}`,
+        () => listStreamsBySender(address, query.sort ?? "createdAt", query.order ?? "desc"),
+      );
+    } catch (_error: unknown) {
+      sendApiError(req, res, 500, "Failed to retrieve streams.", {
+        code: "INTERNAL_ERROR",
+      });
+      return;
+    }
 
     const now = nowInSeconds();
     let data = rawStreams.map((stream) => ({
@@ -999,6 +1191,67 @@ app.get(
   },
 );
 
+function isDatabaseTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; message?: unknown };
+  const code = typeof candidate.code === "string" ? candidate.code.toUpperCase() : "";
+  const message = typeof candidate.message === "string" ? candidate.message : "";
+  return (
+    code === "SQLITE_BUSY" ||
+    code === "SQLITE_LOCKED" ||
+    code === "ETIMEDOUT" ||
+    code === "QUERY_TIMEOUT" ||
+    code === "DATABASE_TIMEOUT" ||
+    code === "57014" ||
+    /timeout|timed out|database is locked|sqlite_busy|sqlite_locked/i.test(message)
+  );
+}
+
+function queryRecipientStreamsWithRetry(
+  recipientAddress: string,
+  sort: "totalAmount" | "startAt" | "createdAt" | "durationSeconds",
+  order: "asc" | "desc",
+): StreamRecord[] {
+  try {
+    return listStreamsByRecipient(recipientAddress, sort, order);
+  } catch (error) {
+    if (isDatabaseTimeoutError(error)) {
+      // Read-only retry on transient database timeout/lock: never duplicates state or events
+      return listStreamsByRecipient(recipientAddress, sort, order);
+    }
+    throw error;
+  }
+}
+
+function sendRecipientStreamsQueryError(
+  req: Request,
+  res: Response,
+  accountId: string,
+  error: unknown,
+) {
+  logger.error({ err: error, accountId }, "failed to query recipient streams");
+  if (isDatabaseTimeoutError(error)) {
+    const normalized = normalizeUnknownApiError(
+      error,
+      "Database query timed out while fetching recipient streams.",
+    );
+    return sendApiError(req, res, 503, normalized.message, {
+      code: "DATABASE_TIMEOUT",
+    });
+  }
+  const normalizedError = normalizeUnknownApiError(
+    error,
+    "Failed to fetch recipient streams.",
+  );
+  return sendApiError(
+    req,
+    res,
+    normalizedError.statusCode,
+    normalizedError.message,
+    { code: normalizedError.code ?? "INTERNAL_ERROR" },
+  );
+}
+
 app.get(
   "/api/streams/recipient/:address",
   readLimiter,
@@ -1021,10 +1274,21 @@ app.get(
     }
     const query = parsedQuery.data;
 
-    const rawStreams = await withAddressCache(
-      `streams:recipient:${address}`,
-      () => listStreamsByRecipient(address, query.sort ?? "createdAt", query.order ?? "desc"),
-    );
+    let rawStreams: StreamRecord[];
+    try {
+      rawStreams = await withAddressCache(
+        `streams:recipient:${address}`,
+        () =>
+          queryRecipientStreamsWithRetry(
+            address,
+            query.sort ?? "createdAt",
+            query.order ?? "desc",
+          ),
+      );
+    } catch (error: unknown) {
+      sendRecipientStreamsQueryError(req, res, address, error);
+      return;
+    }
 
     const now = nowInSeconds();
     let data = rawStreams.map((stream) => ({
@@ -1038,6 +1302,12 @@ app.get(
     if (query.sender) {
       data = data.filter(
         (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
+      );
+    }
+    if (query.recipient) {
+      data = data.filter(
+        (stream) =>
+          stream.recipient.toLowerCase() === query.recipient!.toLowerCase(),
       );
     }
     if (query.asset) {
@@ -1187,8 +1457,20 @@ app.get(
     }
     const query = parsedQuery.data;
 
+    let rawStreams: StreamRecord[];
+    try {
+      rawStreams = queryRecipientStreamsWithRetry(
+        accountId,
+        query.sort ?? "createdAt",
+        query.order ?? "desc",
+      );
+    } catch (error: unknown) {
+      sendRecipientStreamsQueryError(req, res, accountId, error);
+      return;
+    }
+
     const now = nowInSeconds();
-    let data = listStreamsByRecipient(accountId, query.sort ?? "createdAt", query.order ?? "desc").map((stream) => ({
+    let data = rawStreams.map((stream) => ({
       ...stream,
       progress: calculateProgress(stream, now),
     }));
@@ -1199,6 +1481,12 @@ app.get(
     if (query.sender) {
       data = data.filter(
         (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
+      );
+    }
+    if (query.recipient) {
+      data = data.filter(
+        (stream) =>
+          stream.recipient.toLowerCase() === query.recipient!.toLowerCase(),
       );
     }
     if (query.asset) {
@@ -1419,6 +1707,11 @@ app.post(
   mutationLimiter,
   authMiddleware,
   async (req: Request, res: Response) => {
+    const startTime = Date.now();
+    const requestId =
+      (req.headers["x-request-id"] as string) ||
+      (req.headers["x-correlation-id"] as string);
+
     const currentAllowedAssets = getAllowedAssets();
     const parsedBody = createStreamPayloadWithAllowedAssetsSchema(
       currentAllowedAssets,
@@ -1428,8 +1721,79 @@ app.post(
       return;
     }
 
+    const idempotencyKey =
+      (req.headers["idempotency-key"] as string) ||
+      (req.headers["x-idempotency-key"] as string) ||
+      `fp:${parsedBody.data.sender}:${parsedBody.data.recipient}:${parsedBody.data.assetCode}:${parsedBody.data.totalAmount}:${parsedBody.data.durationSeconds}:${parsedBody.data.startAt ?? ""}`;
+
+    // Handle repeat POST after client timeout (idempotent replay)
+    const cachedStream = getIdempotentStream(idempotencyKey);
+    if (cachedStream) {
+      emitCreateStreamSignal({
+        outcome: "idempotent_replay",
+        detail: "Repeat POST after client timeout served from cache.",
+        isNormalEmpty: true,
+        isConcurrentConflict: false,
+        isIdempotentReplay: true,
+        latencyMs: Date.now() - startTime,
+        streamId: cachedStream.id,
+        sender: cachedStream.sender,
+        recipient: cachedStream.recipient,
+        idempotencyKey,
+        requestId,
+      });
+      res.setHeader("X-Idempotent-Replay", "true");
+      res.status(200).json({
+        data: {
+          ...cachedStream,
+          progress: calculateProgress(cachedStream),
+        },
+      });
+      return;
+    }
+
+    // Handle two identical requests arriving together (concurrency guard)
+    if (isInFlightStreamCreation(idempotencyKey)) {
+      emitCreateStreamSignal({
+        outcome: "concurrent_conflict",
+        detail: "Two identical stream creation requests arrived together.",
+        isNormalEmpty: false,
+        isConcurrentConflict: true,
+        isIdempotentReplay: false,
+        latencyMs: Date.now() - startTime,
+        sender: parsedBody.data.sender,
+        recipient: parsedBody.data.recipient,
+        idempotencyKey,
+        requestId,
+      });
+      sendApiError(
+        req,
+        res,
+        409,
+        "A stream creation request with identical parameters is currently in flight.",
+        { code: "CONFLICT" },
+      );
+      return;
+    }
+
+    markStreamCreationInFlight(idempotencyKey);
+
     try {
       const stream = await createStream(parsedBody.data);
+      storeIdempotentStream(idempotencyKey, stream);
+      emitCreateStreamSignal({
+        outcome: "success",
+        detail: "Stream created successfully.",
+        isNormalEmpty: false,
+        isConcurrentConflict: false,
+        isIdempotentReplay: false,
+        latencyMs: Date.now() - startTime,
+        streamId: stream.id,
+        sender: stream.sender,
+        recipient: stream.recipient,
+        idempotencyKey,
+        requestId,
+      });
       res.status(201).json({
         data: {
           ...stream,
@@ -1438,6 +1802,18 @@ app.post(
       });
     } catch (error: any) {
       logger.error({ err: error }, "failed to create stream");
+      emitCreateStreamSignal({
+        outcome: "failure",
+        detail: error?.message || "Failed to create stream.",
+        isNormalEmpty: false,
+        isConcurrentConflict: false,
+        isIdempotentReplay: false,
+        latencyMs: Date.now() - startTime,
+        sender: parsedBody.data.sender,
+        recipient: parsedBody.data.recipient,
+        idempotencyKey,
+        requestId,
+      });
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to create stream.",
@@ -1451,6 +1827,8 @@ app.post(
           code: normalizedError.code ?? "INTERNAL_ERROR",
         },
       );
+    } finally {
+      clearStreamCreationInFlight(idempotencyKey);
     }
   },
 );
@@ -1460,6 +1838,11 @@ app.post(
   mutationLimiter,
   authMiddleware,
   async (req: Request, res: Response) => {
+    const startTime = Date.now();
+    const requestId =
+      (req.headers["x-request-id"] as string) ||
+      (req.headers["x-correlation-id"] as string);
+
     const parsedId = parseStreamId(req.params.id);
     if (!parsedId.ok) {
       sendValidationError(req, res, parsedId.issues);
@@ -1480,12 +1863,63 @@ app.post(
       return;
     }
 
+    const wasAlreadyCanceled = stream.canceledAt !== undefined;
+    const now = nowInSeconds();
+    const progressBefore = calculateProgress(stream, now);
+    const wasCompleted =
+      progressBefore.status === "completed" ||
+      (stream.claimedAmount !== undefined && stream.claimedAmount >= stream.totalAmount);
+    const initialClaimedAmount = stream.claimedAmount ?? 0;
+
     try {
       const updated = await cancelStream(parsedId.value);
       if (!updated) {
+        emitCancelStreamSignal({
+          outcome: "failure",
+          detail: "Failed to update stream during cancellation.",
+          isNormalEmpty: false,
+          isRacingClaim: false,
+          isRepeatedCancel: wasAlreadyCanceled,
+          latencyMs: Date.now() - startTime,
+          streamId: parsedId.value,
+          sender: stream.sender,
+          recipient: stream.recipient,
+          requestId,
+        });
         sendApiError(req, res, 500, "Failed to cancel stream.", { code: "INTERNAL_ERROR" });
         return;
       }
+
+      const isRacingClaim = (updated.claimedAmount ?? 0) > initialClaimedAmount;
+
+      let outcome: CancelStreamOutcome = "success";
+      let detail = "Stream cancelled successfully.";
+
+      if (wasAlreadyCanceled) {
+        outcome = "already_canceled";
+        detail = "Repeated cancel on an already canceled stream.";
+      } else if (isRacingClaim) {
+        outcome = "racing_claim";
+        detail = "Cancel succeeded with racing claim settlement.";
+      } else if (wasCompleted) {
+        outcome = "already_completed";
+        detail = "Cancel requested on an already completed stream.";
+      }
+
+      emitCancelStreamSignal({
+        outcome,
+        detail,
+        isNormalEmpty: wasAlreadyCanceled || wasCompleted,
+        isRacingClaim,
+        isRepeatedCancel: wasAlreadyCanceled,
+        latencyMs: Date.now() - startTime,
+        streamId: parsedId.value,
+        sender: stream.sender,
+        recipient: stream.recipient,
+        canceledAt: updated.canceledAt,
+        requestId,
+      });
+
       res.json({
         data: {
           ...updated,
@@ -1494,6 +1928,18 @@ app.post(
       });
     } catch (error: any) {
       logger.error({ err: error, streamId: parsedId.value }, "failed to cancel stream");
+      emitCancelStreamSignal({
+        outcome: "failure",
+        detail: error?.message || "Failed to cancel stream.",
+        isNormalEmpty: false,
+        isRacingClaim: false,
+        isRepeatedCancel: wasAlreadyCanceled,
+        latencyMs: Date.now() - startTime,
+        streamId: parsedId.value,
+        sender: stream.sender,
+        recipient: stream.recipient,
+        requestId,
+      });
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to cancel stream.",
@@ -1728,9 +2174,21 @@ app.post(
         return;
       }
 
-      const history = await import("./services/eventHistory").then((m) =>
-        m.getStreamHistory(stream.id),
-      );
+      let history: ReturnType<typeof getStreamHistory> = [];
+      try {
+        const eventHistoryModule = await import("./services/eventHistory");
+        try {
+          history = eventHistoryModule.getStreamHistory(stream.id);
+        } catch {
+          history = eventHistoryModule.getStreamHistory(stream.id);
+        }
+      } catch (historyError) {
+        logger.warn(
+          { err: historyError, streamId: stream.id },
+          "history read failed independently after claim commit; returning empty history without rolling back claim",
+        );
+        history = [];
+      }
 
       res.json({
         result: {
@@ -1835,6 +2293,15 @@ app.patch(
   },
 );
 
+function readHistoryWithRetry<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch {
+    // Read-only retry: safe against duplicating events, money-moving effects, or stored state
+    return operation();
+  }
+}
+
 app.get(
   "/api/streams/:id/history",
   readLimiter,
@@ -1857,13 +2324,36 @@ app.get(
       Math.max(1, parseInt(req.query.pageSize as string) || 20),
       100,
     );
+    const orderParam = req.query.order === "asc" ? "asc" : undefined;
 
-    const total = countStreamEvents(parsedId.value);
-    const offset = (page - 1) * pageSize;
-    const data = getStreamHistory(parsedId.value, pageSize, offset);
-    const hasMore = offset + pageSize < total;
+    try {
+      const total = readHistoryWithRetry(() => countStreamEvents(parsedId.value));
+      const offset = (page - 1) * pageSize;
+      const data = readHistoryWithRetry(() =>
+        orderParam
+          ? getStreamHistory(parsedId.value, pageSize, offset, orderParam)
+          : getStreamHistory(parsedId.value, pageSize, offset),
+      );
+      const hasMore = offset + pageSize < total;
 
-    res.json({ data, total, page, pageSize, hasMore });
+      res.json({ data, total, page, pageSize, hasMore });
+    } catch (error: unknown) {
+      logger.error(
+        { err: error, streamId: parsedId.value },
+        "failed to read stream history",
+      );
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to fetch stream history.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        { code: normalizedError.code ?? "HISTORY_READ_FAILED" },
+      );
+    }
   },
 );
 
@@ -1883,7 +2373,28 @@ app.get(
       return;
     }
 
-    res.json({ data: getStreamEventSummary(parsedId.value) });
+    try {
+      const summary = readHistoryWithRetry(() =>
+        getStreamEventSummary(parsedId.value),
+      );
+      res.json({ data: summary });
+    } catch (error: unknown) {
+      logger.error(
+        { err: error, streamId: parsedId.value },
+        "failed to read stream history summary",
+      );
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to fetch stream history summary.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        { code: normalizedError.code ?? "HISTORY_READ_FAILED" },
+      );
+    }
   },
 );
 
@@ -1904,17 +2415,37 @@ app.get(
     }
 
     const progress = calculateProgress(stream);
-    const history = getStreamHistory(parsedId.value, 50, 0, 'asc');
+    try {
+      const history = readHistoryWithRetry(() =>
+        getStreamHistory(parsedId.value, 50, 0, "asc"),
+      );
 
-    res.json({
-      data: {
-        stream: {
-          ...stream,
-          progress,
+      res.json({
+        data: {
+          stream: {
+            ...stream,
+            progress,
+          },
+          history,
         },
-        history,
-      },
-    });
+      });
+    } catch (error: unknown) {
+      logger.error(
+        { err: error, streamId: parsedId.value },
+        "failed to read stream snapshot history",
+      );
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to fetch stream history.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        { code: normalizedError.code ?? "HISTORY_READ_FAILED" },
+      );
+    }
   },
 );
 
@@ -1990,6 +2521,8 @@ app.get(
         outcome: signal.outcome,
         outcomeCode: signal.outcomeCode,
         detail: signal.detail,
+        isNormalEmpty: signal.isNormalEmpty,
+        latencyMs: signal.latencyMs,
         counts: signal.counts,
       });
     } catch (error: any) {
@@ -2308,3 +2841,13 @@ app.delete("/api/streams/:id", adminAuth, (req: Request, res: Response) => {
     );
   }
 });
+
+// Validate the allowlist configuration at module load so that invalid
+// ALLOWED_ASSETS values fail fast on startup with an explicit error instead of
+// silently producing an empty or malformed list.
+try {
+  parseAllowedAssetsConfig(process.env.ALLOWED_ASSETS);
+} catch (error) {
+  logger.error({ err: error }, "invalid ALLOWED_ASSETS configuration");
+  throw error;
+}

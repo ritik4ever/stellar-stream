@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getStreamHistory, listAllEvents, StreamEvent } from "../services/api";
 
 interface StreamTimelineProps {
@@ -16,7 +16,11 @@ export function computeFilteredEvents(
   const filtered = activeFilters.size === 0
     ? events
     : events.filter((e) => activeFilters.has(e.eventType));
-  return [...filtered].sort((a, b) => a.timestamp - b.timestamp);
+  return [...filtered].sort((a, b) => a.timestamp - b.timestamp || a.id - b.id);
+}
+
+export function isConcurrentEvent(event: StreamEvent, allEvents: StreamEvent[]): boolean {
+  return allEvents.some((other) => other.id !== event.id && other.timestamp === event.timestamp);
 }
 
 export function toggleFilter(prev: Set<EventType>, type: EventType): Set<EventType> {
@@ -50,8 +54,14 @@ export const FILTER_BUTTONS: Array<{ type: EventType; label: string }> = [
 
 export function FilterBar({ activeFilters, onToggle, onClear }: FilterBarProps) {
   return (
-    <div className="flex flex-wrap gap-2 items-center p-3 bg-white border border-gray-200 rounded-lg">
-      <span className="text-sm font-medium text-gray-700">Filter by:</span>
+    <div
+      role="group"
+      aria-label="Filter events by type"
+      data-testid="timeline-filter-bar"
+      className="flex flex-wrap gap-2 items-center p-3 bg-white border border-gray-200 rounded-lg"
+      style={{ maxWidth: "100%", flexWrap: "wrap", gap: "0.5rem" }}
+    >
+      <span className="text-sm font-medium text-gray-700" style={{ wordBreak: "break-word" }}>Filter by:</span>
       {FILTER_BUTTONS.map(({ type, label }) => {
         const isActive = activeFilters.has(type);
         return (
@@ -59,6 +69,9 @@ export function FilterBar({ activeFilters, onToggle, onClear }: FilterBarProps) 
             key={type}
             onClick={() => onToggle(type)}
             aria-pressed={isActive}
+            aria-label={`Filter by ${label}`}
+            data-testid={`filter-btn-${type}`}
+            style={{ minHeight: "44px", minWidth: "44px", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
             className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
               isActive
                 ? "bg-blue-600 text-white hover:bg-blue-700"
@@ -72,6 +85,9 @@ export function FilterBar({ activeFilters, onToggle, onClear }: FilterBarProps) 
       {activeFilters.size > 0 && (
         <button
           onClick={onClear}
+          aria-label="Clear all active event filters"
+          data-testid="timeline-clear-filters-btn"
+          style={{ minHeight: "44px", minWidth: "44px", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
           className="ml-2 px-3 py-1.5 text-sm font-medium text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors"
         >
           Clear filters
@@ -158,7 +174,11 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
     [events, activeFilters],
   );
 
+  const inFlightRef = useRef(false);
+
   const loadHistory = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
       setLoading(true);
       setError(null);
@@ -171,6 +191,7 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
       setError(err instanceof Error ? err.message : "Failed to load stream history.");
     } finally {
       setLoading(false);
+      inFlightRef.current = false;
     }
   }, [streamId]);
 
@@ -180,7 +201,13 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
 
   if (loading) {
     return (
-      <div className="activity-feed">
+      <div
+        className="activity-feed"
+        role="status"
+        aria-label="Loading event history"
+        data-testid="timeline-loading-state"
+      >
+        <span className="sr-only">Loading event history…</span>
         {Array.from({ length: 3 }).map((_, idx) => (
           <div key={`activity-skeleton-${idx}`} className="skeleton skeleton-item" />
         ))}
@@ -190,12 +217,32 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
 
   if (error) {
     return (
-      <div className="activity-error">
-        <h3>Unable to load activity</h3>
-        <p>{error}</p>
-        <button type="button" className="retry-btn" onClick={loadHistory}>
-          Try again
-        </button>
+      <div className="activity-error" role="alert" data-testid="timeline-error-state">
+        <h3 data-testid="timeline-error-title">Unable to load activity</h3>
+        <p data-testid="timeline-error-message">{error}</p>
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.75rem", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="retry-btn"
+            data-testid="timeline-retry-btn"
+            style={{ minHeight: "44px", minWidth: "44px" }}
+            onClick={loadHistory}
+            disabled={loading}
+          >
+            {loading ? "Retrying…" : "Try again"}
+          </button>
+          {activeFilters.size > 0 && (
+            <button
+              type="button"
+              className="btn-ghost"
+              data-testid="timeline-reset-filter-btn"
+              style={{ minHeight: "44px", minWidth: "44px" }}
+              onClick={() => setActiveFilters(clearFilters())}
+            >
+              Reset filters
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -226,14 +273,38 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
   }
 
   return (
-    <div className="activity-feed">
+    <div
+      className="activity-feed"
+      role="feed"
+      aria-label="Stream event timeline"
+      data-testid="timeline-activity-feed"
+      style={{ maxWidth: "100%", overflowX: "hidden" }}
+    >
+      {/* Polite Screen Reader Live Announcement */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        data-testid="timeline-a11y-announcer"
+      >
+        {`Showing ${filteredEvents.length} events.${activeFilters.size > 0 ? ` Filtered by ${Array.from(activeFilters).join(", ")}.` : ""}`}
+      </div>
+
       {isGlobalFeed && (
-        <div className="activity-meta" style={{ justifyContent: "space-between" }}>
-          <span>
+        <div className="activity-meta" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
+          <span style={{ wordBreak: "break-word" }}>
             Latest across all streams
             {lastUpdatedAt ? ` · updated ${timeAgo(Math.floor(lastUpdatedAt / 1000))}` : ""}
           </span>
-          <button type="button" className="btn-ghost" onClick={loadHistory}>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={loadHistory}
+            aria-label="Refresh stream event history"
+            data-testid="timeline-refresh-btn"
+            style={{ minHeight: "44px", minWidth: "44px", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+          >
             Refresh
           </button>
         </div>
@@ -243,30 +314,69 @@ export function StreamTimeline({ streamId }: StreamTimelineProps) {
         onToggle={(type) => setActiveFilters((prev) => toggleFilter(prev, type))}
         onClear={() => setActiveFilters(clearFilters())}
       />
-      {filteredEvents.map((event) => (
-        <div key={event.id} className="activity-item">
-          <div className="activity-icon">{getEventIcon(event.eventType)}</div>
-          <div className="activity-content">
-            <p className="activity-title">{formatEventTitle(event.eventType)}</p>
-            <div className="activity-meta">
-              <span>{timeAgo(event.timestamp)}</span>
-              {isGlobalFeed && (
-                <a href={`#stream-${event.streamId}`} className="muted">
-                  Stream {event.streamId}
-                </a>
+      {filteredEvents.map((event, index) => {
+        const isConcurrent = isConcurrentEvent(event, filteredEvents);
+        return (
+          <article
+            key={event.id}
+            className="activity-item"
+            data-testid={`activity-item-${event.id}`}
+            aria-labelledby={`event-title-${event.id}`}
+            tabIndex={0}
+            aria-posinset={index + 1}
+            aria-setsize={filteredEvents.length}
+            style={{ minWidth: 0, maxWidth: "100%", overflowWrap: "break-word" }}
+          >
+            <div className="activity-icon" aria-hidden="true">{getEventIcon(event.eventType)}</div>
+            <div className="activity-content" style={{ minWidth: 0, maxWidth: "100%", wordBreak: "break-word", flex: "1 1 0%" }}>
+              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.5rem", minWidth: 0, maxWidth: "100%" }}>
+                <p id={`event-title-${event.id}`} className="activity-title" style={{ margin: 0, wordBreak: "break-word" }}>
+                  {formatEventTitle(event.eventType)}
+                </p>
+                {isConcurrent && (
+                  <span
+                    className="concurrent-event-badge"
+                    data-testid="concurrent-event-badge"
+                    aria-label="Simultaneous event occurred at the same ledger timestamp"
+                    style={{
+                      display: "inline-block",
+                      fontSize: "0.75rem",
+                      padding: "0.15rem 0.5rem",
+                      borderRadius: "9999px",
+                      backgroundColor: "#fef3c7",
+                      color: "#92400e",
+                      fontWeight: 600,
+                    }}
+                  >
+                    Simultaneous event
+                  </span>
+                )}
+              </div>
+              <div className="activity-meta" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
+                <span>{timeAgo(event.timestamp)}</span>
+                {isGlobalFeed && (
+                  <a
+                    href={`#stream-${event.streamId}`}
+                    className="muted"
+                    aria-label={`Navigate to Stream ${event.streamId}`}
+                    style={{ minHeight: "44px", display: "inline-flex", alignItems: "center" }}
+                  >
+                    Stream {event.streamId}
+                  </a>
+                )}
+              </div>
+              <div className="muted" style={{ marginTop: "0.35rem", wordBreak: "break-word", overflowWrap: "anywhere" }}>
+                {getEventDescription(event)}
+              </div>
+              {event.actor && (
+                <div style={{ marginTop: "0.5rem", maxWidth: "100%", overflowX: "hidden" }}>
+                  <CopyableAddress address={event.actor} truncationMode="end" />
+                </div>
               )}
             </div>
-            <div className="muted" style={{ marginTop: "0.35rem" }}>
-              {getEventDescription(event)}
-            </div>
-            {event.actor && (
-              <div style={{ marginTop: "0.5rem" }}>
-                <CopyableAddress address={event.actor} truncationMode="end" />
-              </div>
-            )}
-          </div>
-        </div>
-      ))}
+          </article>
+        );
+      })}
     </div>
   );
 }

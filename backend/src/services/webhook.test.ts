@@ -36,7 +36,7 @@ describe("Webhook Retry Logic", () => {
         expect(delay).toBe(900); // Last delay
     });
 
-    it("should have correct sequence: 5s, 15s, 60s, 300s, 900k", () => {
+    it("should have correct sequence: 5s, 15s, 60s, 300s, 900s", () => {
         const delays = [0, 1, 2, 3, 4].map((i) => getRetryDelaySeconds(i));
         expect(delays).toEqual([5, 15, 60, 300, 900]);
     });
@@ -73,7 +73,7 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
     let originalEnvUrl: string | undefined;
 
     beforeEach(() => {
-        process.env.DB_PATE = TEST_DB_PATE;
+        process.env.DB_PATH = TEST_DB_PATH;
         initDb();
         const db = getDb();
         db.exec("DELETE FROM stream_events");
@@ -91,7 +91,7 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
     afterEach(() => {
         const db = getDb();
         db.close();
-        if (fs.existsSync(TEST_DB_PATE)) {
+        if (fs.existsSync(TEST_DB_PATH)) {
             fs.unlinkSync(TEST_DB_PATH);
         }
         process.env.WEBHOOK_DESTINATION_URL = originalEnvUrl;
@@ -100,7 +100,10 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
 
     it("should insert a row with status = 'pending' and attempt = 0", async () => {
         const db = getDb();
-        db.prepare(`\n            INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?)\n        `).run("stream-123", "sender", "recipient", "USDC", 100, 3600, 0, 0);
+        db.prepare(`
+            INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run("stream-123", "sender", "recipient", "USDC", 100, 3600, 0, 0);
 
         await triggerWebhook("test_event", { stream_id: "stream-123", value: 100 });
         
@@ -139,7 +142,7 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
 
         expect(count.c).toBe(0);
         expect(logger.error).toHaveBeenCalledWith(
-            expect.objectContaining({ zeason: expect.stringContaining("private") }),
+            expect.objectContaining({ reason: expect.stringContaining("private") }),
             expect.stringContaining("destination URL is invalid"),
         );
     });
@@ -163,7 +166,7 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
         // Insert dummy dead letters out of order
         const stmt = db.prepare(`
             INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at)
-            VALUES ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?)
         `);
         
         stmt.run("s1", "event.created", "http://u1", "p1", "err", 1000);
@@ -183,7 +186,7 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
         const db = getDb();
         const stmt = db.prepare(`
             INSERT INTO webhook_dead_letters (stream_id, event, url, payload, failed_at)
-            VALUES ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?)
         `);
         stmt.run("old", "failed", "https://old.example", "{}", 999);
         stmt.run("boundary", "failed", "https://boundary.example", "{}", 1000);
@@ -195,9 +198,10 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
 
     it("clears the entire dead-letter queue and reports the deleted count", () => {
         const db = getDb();
-        const stmt = db.prepare(
-            `INSERT INTO webhook_dead_letters (stream_id, event, url, payload, failed_at)\n            VALUES ?, ?, ?, ?, )`
-        );
+        const stmt = db.prepare(`
+            INSERT INTO webhook_dead_letters (stream_id, event, url, payload, failed_at)
+            VALUES (?, ?, ?, ?, ?)
+        `);
         stmt.run("one", "failed", "https://one.example", "{}", 1000);
         stmt.run("two", "failed", "https://two.example", "{}", 2000);
 
@@ -207,7 +211,14 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
 
     it("should requeue a dead letter back to the delivery queue", () => {
         const db = getDb();
-        const stmt = db.prepare(`\n            INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at)\n            VALUES ?, ?, ?, ?, ?, )X
+        db.prepare(`
+            INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run("requeue-1", "sender", "recipient", "USDC", 100, 3600, 0, 0);
+
+        const stmt = db.prepare(`
+            INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at)
+            VALUES (?, ?, ?, ?, ?, ?)
         `);
         stmt.run("requeue-1", "event.created", "https://example.com/webhook", '{"data":"test"}', "temporary failure", 123456);
 
@@ -222,5 +233,58 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
         expect(delivery.status).toBe("pending");
         expect(delivery.attempt).toBe(0);
         expect(countDeadLetters()).toBe(0);
+    });
+
+    describe("Consistency rule: delivery ID and failure reason across dead-letter lifecycle (SSB-2026-158)", () => {
+        it("returns delivery ID on success and consistent failure reason on non-existent or error states", () => {
+            const db = getDb();
+            db.prepare(`
+                INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `).run("requeue-consistency", "sender", "recipient", "USDC", 100, 3600, 0, 0);
+
+            const stmt = db.prepare(`
+                INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `);
+            const dlResult = stmt.run("requeue-consistency", "stream.created", "https://example.com/webhook", '{"data":"consistency"}', "HTTP 500", 123456);
+            const dlId = Number(dlResult.lastInsertRowid);
+
+            // Requeue existing dead letter
+            const success = requeueDeadLetter(dlId);
+            expect(success).toBe(true);
+
+            // Verify newly committed delivery has valid delivery ID and matches DB
+            const delivery = db.prepare("SELECT * FROM webhook_deliveries WHERE stream_id = ?").get("requeue-consistency") as any;
+            expect(delivery).toBeDefined();
+            expect(delivery.id).toBeGreaterThan(0);
+            expect(delivery.attempt).toBe(0);
+            expect(delivery.status).toBe("pending");
+
+            // Verify non-existent dead letter returns false and does not claim state change
+            const nonexistent = requeueDeadLetter(99999);
+            expect(nonexistent).toBe(false);
+
+            // Verify error handling when transaction is aborted
+            db.exec(`
+                CREATE TRIGGER fail_requeue_insert
+                BEFORE INSERT ON webhook_deliveries
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced requeue failure');
+                END;
+            `);
+
+            // Insert another dead letter
+            const dl2 = stmt.run("requeue-fail", "stream.created", "https://example.com/webhook", '{"data":"fail"}', "HTTP 500", 123456);
+            try {
+                const failResult = requeueDeadLetter(Number(dl2.lastInsertRowid));
+                expect(failResult).toBe(false);
+                // Dead letter remains committed in table, not removed on failure
+                const dlAfterFail = db.prepare("SELECT * FROM webhook_dead_letters WHERE id = ?").get(Number(dl2.lastInsertRowid));
+                expect(dlAfterFail).toBeDefined();
+            } finally {
+                db.exec("DROP TRIGGER IF EXISTS fail_requeue_insert");
+            }
+        });
     });
 });

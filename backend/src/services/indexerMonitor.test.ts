@@ -43,6 +43,9 @@ function makeSnapshot(
     circuitState: "CLOSED",
     lastFailureKind: null,
     pollInFlight: false,
+    lastPollOutcome: null,
+    lastPollDurationMs: null,
+    pollCycleId: 0,
     ...overrides,
   } as unknown as IndexerMonitoringSnapshot;
 }

@@ -104,8 +104,8 @@ export function useStreamFilter(streams: Stream[]) {
       ) {
         return false;
       }
-      if (filters.q) {
-        const search = filters.q.toLowerCase();
+      const search = filters.q.trim().toLowerCase();
+      if (search) {
         const matches =
           stream.id.toLowerCase().includes(search) ||
           stream.sender.toLowerCase().includes(search) ||

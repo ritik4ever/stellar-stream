@@ -63,6 +63,8 @@ vi.mock("./metrics", () => ({
   indexerErrorsTotal,
   indexerCircuitState,
   indexerLastSuccessTimestampSeconds,
+  indexerEventsDedupedTotal: { inc: () => undefined },
+  indexerPollDurationMs: { set: () => undefined },
 }));
 
 // ── Real in-memory SQLite: exercises production transaction semantics ──────

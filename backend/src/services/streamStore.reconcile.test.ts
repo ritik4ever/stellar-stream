@@ -24,6 +24,9 @@ const mockState = vi.hoisted(() => ({
   upsertedStreams: [] as StoredStream[],
   createdEventIds: new Set<string>(),
   simulateTimeout: false,
+  streamFailures: new Map<number, Error>(),
+  streamTransientFailures: new Map<number, number>(),
+  eventInsertionFailure: false,
 }));
 
 const dbMocks = vi.hoisted(() => ({
@@ -33,7 +36,12 @@ const dbMocks = vi.hoisted(() => ({
 }));
 
 const eventHistoryMocks = vi.hoisted(() => ({
-  recordEventWithDb: vi.fn(),
+  recordEventWithDb: vi.fn((_db: any, streamId: string) => {
+    if (mockState.eventInsertionFailure) {
+      throw new Error("simulated event insertion failure");
+    }
+    mockState.createdEventIds.add(streamId);
+  }),
   streamHasEvent: vi.fn((streamId: string, eventType: string) => {
     return eventType === "created" && mockState.createdEventIds.has(streamId);
   }),
@@ -98,6 +106,15 @@ vi.mock("@stellar/stellar-sdk", () => {
 
       if (operation.method === "get_stream") {
         const streamId = Number(operation.args[0]);
+        const transientCount = mockState.streamTransientFailures.get(streamId) ?? 0;
+        if (transientCount > 0) {
+          mockState.streamTransientFailures.set(streamId, transientCount - 1);
+          throw new Error("timeout: transient RPC glitch");
+        }
+        const failError = mockState.streamFailures.get(streamId);
+        if (failError) {
+          throw failError;
+        }
         const chainStream = mockState.chainStreams.get(streamId);
         if (!chainStream) {
           return { kind: "error" };
@@ -143,7 +160,9 @@ function createDbMock() {
         return {
           run: (params: any) => {
             mockState.existingStreamIds.add(params.id);
-            mockState.upsertedStreams.push({
+            // Replace existing entry if already upserted to mimic ON CONFLICT DO UPDATE
+            const existingIdx = mockState.upsertedStreams.findIndex((s) => s.id === params.id);
+            const record = {
               id: params.id,
               sender: params.sender,
               recipient: params.recipient,
@@ -154,7 +173,12 @@ function createDbMock() {
               createdAt: params.createdAt,
               canceledAt: params.canceledAt,
               completedAt: params.completedAt,
-            });
+            };
+            if (existingIdx >= 0) {
+              mockState.upsertedStreams[existingIdx] = record;
+            } else {
+              mockState.upsertedStreams.push(record);
+            }
             return { changes: 1 };
           },
         };
@@ -163,7 +187,19 @@ function createDbMock() {
       throw new Error(`Unexpected SQL: ${sql}`);
     },
     transaction<T extends (...args: any[]) => any>(callback: T): T {
-      return ((...args: Parameters<T>) => callback(...args)) as T;
+      return ((...args: Parameters<T>) => {
+        const streamSnapshot = [...mockState.upsertedStreams];
+        const idSnapshot = new Set(mockState.existingStreamIds);
+        const eventSnapshot = new Set(mockState.createdEventIds);
+        try {
+          return callback(...args);
+        } catch (err) {
+          mockState.upsertedStreams = streamSnapshot;
+          mockState.existingStreamIds = idSnapshot;
+          mockState.createdEventIds = eventSnapshot;
+          throw err;
+        }
+      }) as T;
     },
   };
 }
@@ -183,6 +219,9 @@ describe("reconcileMissingStreams – sync correctness", () => {
     mockState.upsertedStreams = [];
     mockState.createdEventIds = new Set<string>();
     mockState.simulateTimeout = false;
+    mockState.streamFailures = new Map<number, Error>();
+    mockState.streamTransientFailures = new Map<number, number>();
+    mockState.eventInsertionFailure = false;
 
     dbMocks.getDb.mockReturnValue(createDbMock());
     dbMocks.initDb.mockImplementation(() => undefined);
@@ -375,5 +414,127 @@ describe("reconcileMissingStreams – sync correctness", () => {
     // Upsert is called twice on second run (upsert is idempotent by design via ON CONFLICT)
     // but recordEventWithDb must only be called for the first run
     expect(eventHistoryMocks.recordEventWithDb).toHaveBeenCalledTimes(2);
+  });
+
+  it("handles RPC outage mid-reconciliation: breaks early, preserves prior commits without duplicate state on recovery", async () => {
+    mockState.nextId = 4; // streams 1, 2, 3 missing
+    mockState.chainStreams.set(1, {
+      sender: "GSENDER1",
+      recipient: "GRECIPIENT1",
+      token: "USDC",
+      total_amount: 100,
+      start_time: 10,
+      end_time: 20,
+      canceled: false,
+    });
+    // Stream 2 triggers persistent RPC outage
+    mockState.streamFailures.set(2, new Error("timeout: RPC server outage"));
+    mockState.chainStreams.set(3, {
+      sender: "GSENDER3",
+      recipient: "GRECIPIENT3",
+      token: "USDC",
+      total_amount: 300,
+      start_time: 50,
+      end_time: 80,
+      canceled: false,
+    });
+
+    const { initSoroban, reconcileMissingStreams } = await import("./streamStore");
+    await initSoroban();
+
+    // First cycle: stream 1 succeeds, stream 2 experiences RPC outage, loop breaks early
+    const firstRepaired = await reconcileMissingStreams();
+    expect(firstRepaired).toBe(1);
+    expect(mockState.upsertedStreams).toHaveLength(1);
+    expect(mockState.upsertedStreams[0].id).toBe("1");
+    expect(mockState.existingStreamIds.has("1")).toBe(true);
+    expect(mockState.existingStreamIds.has("2")).toBe(false);
+    expect(mockState.existingStreamIds.has("3")).toBe(false);
+
+    // RPC recovers
+    mockState.streamFailures.clear();
+    mockState.chainStreams.set(2, {
+      sender: "GSENDER2",
+      recipient: "GRECIPIENT2",
+      token: "USDC",
+      total_amount: 200,
+      start_time: 20,
+      end_time: 40,
+      canceled: false,
+    });
+
+    // Second cycle: resumes safely, repairs remaining streams 2 and 3 without duplicating stream 1 or its events
+    const secondRepaired = await reconcileMissingStreams();
+    expect(secondRepaired).toBe(2);
+    expect(mockState.existingStreamIds.size).toBe(3);
+    // Exactly 3 unique streams and 3 created events recorded
+    expect(mockState.createdEventIds.size).toBe(3);
+    expect(eventHistoryMocks.recordEventWithDb).toHaveBeenCalledTimes(3);
+  });
+
+  it("rolls back stream record when event insertion fails inside the atomic transaction", async () => {
+    mockState.nextId = 2;
+    mockState.chainStreams.set(1, {
+      sender: "GSENDER1",
+      recipient: "GRECIPIENT1",
+      token: "USDC",
+      total_amount: 100,
+      start_time: 10,
+      end_time: 20,
+      canceled: false,
+    });
+    mockState.eventInsertionFailure = true;
+
+    const { initSoroban, reconcileMissingStreams } = await import("./streamStore");
+    await initSoroban();
+
+    const repaired = await reconcileMissingStreams();
+    expect(repaired).toBe(0);
+    // Rolled back cleanly: no stream inserted in SQLite
+    expect(mockState.existingStreamIds.has("1")).toBe(false);
+    expect(mockState.upsertedStreams).toHaveLength(0);
+  });
+
+  it("reconciles local state lagging a confirmed on-chain event without duplicating events or rows", async () => {
+    mockState.nextId = 2;
+    // Local state lags: stream 1 exists locally active
+    mockState.existingStreamIds.add("1");
+    mockState.createdEventIds.add("1");
+    mockState.upsertedStreams.push({
+      id: "1",
+      sender: "GSENDER1",
+      recipient: "GRECIPIENT1",
+      assetCode: "USDC",
+      totalAmount: 100,
+      durationSeconds: 10,
+      startAt: 10,
+      createdAt: 10,
+      canceledAt: null,
+      completedAt: null,
+    });
+
+    // Confirmed on-chain event: stream 1 was canceled on-chain
+    mockState.chainStreams.set(1, {
+      sender: "GSENDER1",
+      recipient: "GRECIPIENT1",
+      token: "USDC",
+      total_amount: 100,
+      start_time: 10,
+      end_time: 20,
+      canceled: true,
+    });
+
+    const { initSoroban, reconcileStream } = await import("./streamStore");
+    await initSoroban();
+
+    const updated = await reconcileStream("1");
+    expect(updated.canceledAt).toBeDefined();
+
+    // Verify stored state is updated without duplicating rows
+    const stored = mockState.upsertedStreams.filter((s) => s.id === "1");
+    expect(stored).toHaveLength(1);
+    expect(stored[0].canceledAt).toBeDefined();
+    // Created event must not be duplicated
+    expect(eventHistoryMocks.recordEventWithDb).not.toHaveBeenCalled();
   });
 });

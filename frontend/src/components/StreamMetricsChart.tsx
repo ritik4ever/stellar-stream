@@ -19,6 +19,8 @@ interface StreamMetricsChartProps {
   data: MetricsSnapshot[];
   loading?: boolean;
   error?: Error | null;
+  isStale?: boolean;
+  onRetry?: () => void;
 }
 
 /** Format a unix-ms timestamp as a short date label (e.g. "Jun 24"). */
@@ -29,7 +31,13 @@ function formatDate(timestamp: number): string {
   });
 }
 
-export function StreamMetricsChart({ data, loading = false, error = null }: StreamMetricsChartProps) {
+export function StreamMetricsChart({
+  data,
+  loading = false,
+  error = null,
+  isStale = false,
+  onRetry,
+}: StreamMetricsChartProps) {
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
   const [interactionMode, setInteractionMode] = useState<"pan" | "zoom">("pan");
   const [refAreaLeft, setRefAreaLeft] = useState<string | null>(null);
@@ -38,6 +46,7 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
   const [stats, setStats] = useState<StreamStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
   const [statsError, setStatsError] = useState<Error | null>(null);
+  const [a11yAnnouncement, setA11yAnnouncement] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startRange: [number, number]; active: boolean } | null>(null);
   const pinchRef = useRef<{ startDist: number; startRange: [number, number] } | null>(null);
@@ -98,6 +107,12 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
     if (currentData.length === 1) return formatDate(currentData[0].timestamp);
     return `${formatDate(currentData[0].timestamp)} – ${formatDate(currentData[currentData.length - 1].timestamp)}`;
   }, [currentData]);
+
+  useEffect(() => {
+    if (visibleDateRange) {
+      setA11yAnnouncement(`Metrics chart showing time range: ${visibleDateRange}.`);
+    }
+  }, [visibleDateRange]);
 
   const zoomInOut = useCallback((factor: number) => {
     setZoomRange((prev) => {
@@ -213,15 +228,25 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
   }
 
   if (error || statsError) {
+    const handleActionRetry = () => {
+      if (onRetry) {
+        onRetry();
+      }
+      if (statsError) {
+        handleRetry();
+      }
+    };
+
     return (
       <div className="chart-empty-state" role="alert">
         <div className="chart-empty-state__content">
           <span className="chart-empty-state__icon">⚠️</span>
           <h3>Failed to Load Chart</h3>
           <p>{error?.message || statsError?.message || "An error occurred while fetching metrics history."}</p>
-          {statsError && (
+          {(statsError || onRetry) && (
             <button
-              onClick={handleRetry}
+              onClick={handleActionRetry}
+              data-testid="metrics-retry-button"
               style={{
                 marginTop: "1rem",
                 padding: "0.5rem 1rem",
@@ -230,6 +255,8 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
                 border: "none",
                 borderRadius: "0.25rem",
                 cursor: "pointer",
+                minHeight: "44px",
+                minWidth: "80px",
               }}
             >
               Retry
@@ -242,11 +269,33 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
 
   if (data.length === 0) {
     return (
-      <div className="chart-empty-state">
+      <div
+        className="chart-empty-state"
+        data-testid="metrics-empty-state"
+        data-boundary-case="empty-data"
+      >
         <div className="chart-empty-state__content">
           <span className="chart-empty-state__icon">📊</span>
+          <span
+            className="badge"
+            data-testid="boundary-empty-badge"
+            style={{ marginBottom: "0.5rem", fontSize: "0.75rem" }}
+          >
+            Empty Data
+          </span>
           <h3>No Chart Data Yet</h3>
           <p>Metrics trends will appear here as data is collected over time.</p>
+          {onRetry && (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={onRetry}
+              data-testid="metrics-empty-retry-btn"
+              style={{ marginTop: "0.75rem", minHeight: "44px" }}
+            >
+              Check For Metrics
+            </button>
+          )}
         </div>
       </div>
     );
@@ -266,78 +315,252 @@ export function StreamMetricsChart({ data, loading = false, error = null }: Stre
   ] : [];
 
   return (
-    <div className="chart-container" style={{ position: "relative" }}>
+    <div
+      className="chart-container"
+      role="region"
+      aria-label="Stream metrics charts and trends"
+      style={{ position: "relative" }}
+    >
+      {isStale && (
+        <div
+          className="chart-stale-banner"
+          role="status"
+          data-testid="metrics-stale-banner"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            backgroundColor: "#fffbeb",
+            border: "1px solid #fef3c7",
+            borderRadius: "6px",
+            padding: "0.5rem 0.75rem",
+            color: "#92400e",
+            fontSize: "0.85rem",
+            marginBottom: "0.75rem",
+            flexWrap: "wrap",
+            gap: "0.5rem",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <span
+              className="badge"
+              data-testid="boundary-stale-badge"
+              style={{
+                backgroundColor: "#fef3c7",
+                color: "#92400e",
+                padding: "2px 6px",
+                borderRadius: "4px",
+                fontSize: "0.75rem",
+                fontWeight: 600,
+              }}
+            >
+              Stale Data
+            </span>
+            <span>Displaying cached metrics. Data may be stale.</span>
+          </div>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              data-testid="metrics-reconnect-button"
+              style={{
+                padding: "0.25rem 0.75rem",
+                backgroundColor: "#d97706",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: "pointer",
+                minHeight: "36px",
+                fontWeight: 500,
+              }}
+            >
+              Sync Latest
+            </button>
+          )}
+        </div>
+      )}
+
+      {data.length === 1 && (
+        <div
+          className="chart-single-point-banner"
+          data-testid="metrics-single-point-notice"
+          role="status"
+          style={{
+            backgroundColor: "#f0f9ff",
+            border: "1px solid #bae6fd",
+            borderRadius: "6px",
+            padding: "0.65rem 0.85rem",
+            color: "#0369a1",
+            fontSize: "0.85rem",
+            marginBottom: "0.75rem",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "0.5rem",
+          }}
+        >
+          <div>
+            <strong>Single Data Point:</strong> Recorded on {formatDate(data[0].timestamp)} (Active: {data[0].active}, Completed: {data[0].completed}). At least two snapshots are required to plot trend lines across a time range.
+          </div>
+          <span
+            className="badge"
+            data-testid="boundary-single-point-badge"
+            style={{
+              backgroundColor: "#e0f2fe",
+              color: "#0369a1",
+              padding: "2px 6px",
+              borderRadius: "4px",
+              fontSize: "0.75rem",
+              fontWeight: 600,
+            }}
+          >
+            Single Point
+          </span>
+        </div>
+      )}
       <div
         className="chart-header"
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          flexWrap: "wrap",
+          gap: "0.5rem",
           marginBottom: "1rem",
         }}
       >
-        <div style={{ color: "#9ca3af", fontSize: "0.875rem" }}>
+        <div
+          className="chart-header-range"
+          id="metrics-chart-range-description"
+          tabIndex={0}
+          aria-label={`Time range: ${visibleDateRange || "All time"}. Y-axis displays vested amounts in asset units and stream counts.`}
+          style={{ color: "#9ca3af", fontSize: "0.875rem", overflowWrap: "anywhere" }}
+          data-testid="chart-date-range"
+        >
           {visibleDateRange ? `Showing ${visibleDateRange}` : "Vested amount over time"}
         </div>
-        <div style={{ display: "flex", gap: "0.5rem" }}>
+        <div
+          className="chart-header-actions"
+          style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem" }}
+          data-testid="chart-header-controls"
+        >
           <button
-            onClick={() => setInteractionMode(prev => prev === "pan" ? "zoom" : "pan")}
+            type="button"
+            onClick={() => {
+              setInteractionMode(prev => {
+                const next = prev === "pan" ? "zoom" : "pan";
+                setA11yAnnouncement(`Switched to ${next === "zoom" ? "Zoom" : "Pan"} mode.`);
+                return next;
+              });
+            }}
+            disabled={data.length <= 1}
+            aria-disabled={data.length <= 1}
+            title={data.length <= 1 ? "Interaction modes require multiple data points" : undefined}
+            data-testid="metrics-mode-toggle-btn"
             style={{
-              padding: "0.25rem 0.5rem",
-              backgroundColor: interactionMode === "zoom" ? "#10b981" : "#3b82f6",
+              padding: "0.4rem 0.75rem",
+              backgroundColor: data.length <= 1 ? "#6b7280" : interactionMode === "zoom" ? "#10b981" : "#3b82f6",
               color: "#f9fafb",
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
-              cursor: "pointer",
-              marginRight: "0.5rem",
+              cursor: data.length <= 1 ? "not-allowed" : "pointer",
+              minHeight: "44px",
+              opacity: data.length <= 1 ? 0.6 : 1,
             }}
+            aria-label={interactionMode === "pan" ? "Switch to Box Zoom mode" : "Switch to Pan mode"}
           >
             {interactionMode === "pan" ? "✋ Pan Mode" : "🔍 Zoom Mode"}
           </button>
           <button
-            onClick={() => zoomInOut(1.5)}
+            type="button"
+            onClick={() => {
+              zoomInOut(1.5);
+              setA11yAnnouncement("Zoomed in to narrower time range.");
+            }}
+            disabled={data.length <= 1}
+            aria-disabled={data.length <= 1}
+            title={data.length <= 1 ? "Zoom requires multiple data points" : undefined}
+            data-testid="metrics-zoom-in-btn"
             style={{
-              padding: "0.25rem 0.5rem",
+              padding: "0.4rem 0.75rem",
               backgroundColor: "#374151",
               color: "#f9fafb",
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
-              cursor: "pointer",
+              cursor: data.length <= 1 ? "not-allowed" : "pointer",
+              minHeight: "44px",
+              minWidth: "44px",
+              opacity: data.length <= 1 ? 0.6 : 1,
             }}
+            aria-label="Zoom in metrics chart"
           >
             Zoom In
           </button>
           <button
-            onClick={() => zoomInOut(0.67)}
+            type="button"
+            onClick={() => {
+              zoomInOut(0.67);
+              setA11yAnnouncement("Zoomed out to wider time range.");
+            }}
+            disabled={data.length <= 1}
+            aria-disabled={data.length <= 1}
+            title={data.length <= 1 ? "Zoom requires multiple data points" : undefined}
+            data-testid="metrics-zoom-out-btn"
             style={{
-              padding: "0.25rem 0.5rem",
+              padding: "0.4rem 0.75rem",
               backgroundColor: "#374151",
               color: "#f9fafb",
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
-              cursor: "pointer",
+              cursor: data.length <= 1 ? "not-allowed" : "pointer",
+              minHeight: "44px",
+              minWidth: "44px",
+              opacity: data.length <= 1 ? 0.6 : 1,
             }}
+            aria-label="Zoom out metrics chart"
           >
             Zoom Out
           </button>
           <button
-            onClick={() => setZoomRange(null)}
+            type="button"
+            onClick={() => {
+              setZoomRange(null);
+              setA11yAnnouncement("Zoom reset to full time range.");
+            }}
+            disabled={data.length <= 1 || zoomRange === null}
+            aria-disabled={data.length <= 1 || zoomRange === null}
+            data-testid="metrics-zoom-reset-btn"
             style={{
-              padding: "0.25rem 0.5rem",
+              padding: "0.4rem 0.75rem",
               backgroundColor: "#374151",
               color: "#f9fafb",
               borderRadius: "0.25rem",
               fontSize: "0.875rem",
               border: "none",
-              cursor: "pointer",
+              cursor: data.length <= 1 || zoomRange === null ? "not-allowed" : "pointer",
+              minHeight: "44px",
+              minWidth: "44px",
+              opacity: data.length <= 1 || zoomRange === null ? 0.6 : 1,
             }}
+            aria-label="Reset zoom on metrics chart"
           >
             Reset
           </button>
         </div>
+      </div>
+
+      <div
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="metrics-a11y-announcement"
+      >
+        {a11yAnnouncement}
       </div>
 
       {barChartData.length > 0 && (

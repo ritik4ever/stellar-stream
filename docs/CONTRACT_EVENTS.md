@@ -263,6 +263,73 @@ Within a single transaction:
 
 ---
 
+## Claimable accounting and replay (#1132)
+
+The existing event payloads are sufficient for the scoped claim/cancel lifecycle;
+this contract does not emit an event for `claimable` or `get_claimable_batch` reads.
+A query is not a committed payment. No event fields or storage layout change is
+needed for this rule.
+
+For a successful `claim`, use `StreamClaimed.amount` as the transfer delta and
+`StreamClaimed.claimed_amount` as the authoritative cumulative value **after** the
+call. Its `stream_id`, `actor`, `recipient`, and ledger `timestamp` identify the
+stream, claimant and time. The token transfer and accounting write both succeed
+before the event is published. A failed claim has no committed `Claimed` or
+`Completed` event; failed-transaction diagnostic events must not be indexed as
+successful actions.
+
+At a timestamp `t`, let `V(t)` be cumulative vested base units and `C` be the
+current claimed total. Then `claimable(t) = max(V(t) - C, 0)`. The boundary
+examples below describe an unpaused linear stream with no cliff:
+
+- Before the start (and at the start), claimable is zero.
+- At or after the end, claimable is `total_amount - C`.
+- Within a linear schedule, `V(t) = floor(total_amount * elapsed / duration)`.
+  Rounding is applied to cumulative vesting, not to each transfer. Multiple
+  partial claims do not accumulate rounding loss; the final remainder is paid
+  at the end. Production arithmetic evaluates this quotient without overflowing
+  an intermediate multiplication.
+- After every successful claim, `C + claimable(t) <= total_amount`. A partial
+  claim emits exactly one `Claimed`. A draining claim emits `Claimed` and then
+  `Completed`; the completion's total is a status check, **not another payment**.
+
+For cancellation of such a stream, first apply the single `Canceled.refunded_amount` to the
+previous total: `new_total = old_total - refunded_amount`. Preserve the claimed
+total. The canceled end is `min(old_end, max(start_time, Canceled.timestamp))`.
+For an unpaused stream canceled during vesting, this leaves exactly the vested
+amount as the new cap; subsequent claims cannot exceed it. Cancellation before
+start leaves a zero cap and full refund. Cancellation at/after end refunds zero.
+A repeated cancellation emits no new event. Existing pause/cliff semantics remain
+in effect; process those lifecycle events before evaluating their schedules.
+
+### Exactly-once consumer rule
+
+Process successful events in ledger/transaction/event order. Use a durable RPC
+event identity, namespaced by network and emitting contract (or the transaction
+hash plus event ordinal), as the deduplication key. Commit that key, the event
+record and the projection update atomically; only then advance the checkpoint.
+Replaying an already processed page must not reapply transfers or refunds.
+
+Do **not** deduplicate by timestamp, amount or stream ID alone: two equal partial
+claims can succeed for the same stream in the same ledger. Their cumulative
+`claimed_amount` values are different. Set the projection to that cumulative
+value; do not add both it and `amount`. Process `Completed` only as a status
+transition after its corresponding `Claimed`.
+
+Example: a stream of 10 base units over three seconds vests 3, 6, then 10 units.
+Two 1-unit claims in the first second emit cumulative totals 1 and 2; a 4-unit
+claim in the second emits 6; the final 4-unit claim emits 10 followed by
+`Completed(total_amount = 10)`. Replaying these events still represents exactly
+10 units transferred. If canceled in the first second after the first claim,
+`Canceled(refunded_amount = 7)` reduces the cap to 3, leaving only 2 claimable.
+
+These are consumer requirements for the event contract, not a claim that every
+backend persistence path already implements transactional event-ID deduplication.
+Regression coverage in `contracts/src/claimable_events_test.rs` checks real token
+balances, stored accounting, event payloads/order and replay of duplicate pages.
+
+---
+
 ## Indexer Event Type Mapping
 
 The table below maps contract event names to the `eventType` strings stored in the

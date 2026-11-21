@@ -94,7 +94,13 @@ export const createStreamPayloadSchema = z
 export function createStreamPayloadWithAllowedAssetsSchema(
   allowedAssets: string[],
 ) {
-  const allowed = allowedAssets.map((asset) => asset.trim().toUpperCase());
+  const allowed = Array.from(
+    new Set(
+      allowedAssets
+        .map((asset) => (typeof asset === "string" ? asset.trim().toUpperCase() : ""))
+        .filter((asset) => asset.length > 0),
+    ),
+  ).sort();
 
   return createStreamPayloadSchema.superRefine((payload, ctx) => {
     if (!allowed.includes(payload.assetCode)) {

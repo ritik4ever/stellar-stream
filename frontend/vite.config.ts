@@ -58,7 +58,7 @@ export default defineConfig(({ command, mode }) => ({
     // Some CI environments cause workbox validation to fail; skipping the plugin
     // in CI ensures the build completes reliably. To test PWA locally, run
     // without CI=true.
-    ...(process.env.CI === 'true'
+    ...(process.env.CI?.trim() === 'true' || process.env.CI === 'true' || Boolean(process.env.GITHUB_ACTIONS)
       ? []
       : [
           VitePWA({
@@ -75,11 +75,15 @@ export default defineConfig(({ command, mode }) => ({
                       maxEntries: 100,
                       maxAgeSeconds: 60 * 5, // 5 minutes
                     },
-                    cacheKeyWillBeUsed: async ({ request }) => {
-                      const url = new URL(request.url);
-                      url.searchParams.delete('_t');
-                      return url.toString();
-                    },
+                    plugins: [
+                      {
+                        cacheKeyWillBeUsed: async ({ request }) => {
+                          const url = new URL(request.url);
+                          url.searchParams.delete('_t');
+                          return url.toString();
+                        },
+                      },
+                    ],
                   },
                 },
                 {

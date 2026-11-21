@@ -108,6 +108,13 @@ export function validateForm(values: FormValues): FieldErrors {
     const amountResult = totalAmountSchema.safeParse(amountRaw);
     if (!amountResult.success) {
       errors.totalAmount = amountResult.error.issues[0]?.message;
+    } else {
+      // Stellar assets use at most 7 decimal places (stroops).
+      const decimals = amountRaw.split(".")[1]?.length ?? 0;
+      if (decimals > 7) {
+        errors.totalAmount =
+          "Amount supports at most 7 decimal places (Stellar precision).";
+      }
     }
   }
 

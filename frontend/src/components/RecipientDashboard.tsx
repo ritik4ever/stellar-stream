@@ -86,8 +86,9 @@ function ClaimButton({
 
   let label = `Claim ${claimableAmount} ${assetCode}`;
   if (!walletConnected) label = "Connect wallet";
-  if (isPending) label = "Claiming…";
-  if (isConfirmed) label = "Claimed ✓";
+  else if (claimableAmount <= 0) label = "Nothing to claim";
+  else if (isPending) label = "Claiming…";
+  else if (isConfirmed) label = "Claimed ✓";
 
   return (
     <button
@@ -209,6 +210,14 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
     handleClaimFailure,
   );
 
+  // Safely dismiss modals and pending operations if recipient switches account mid-request
+  useEffect(() => {
+    setBatchModalOpen(false);
+    setPendingBatchInputs([]);
+    resetBatch();
+    setToast(null);
+  }, [recipientAddress, resetBatch]);
+
   // Load streams on mount / address change
   useEffect(() => {
     if (!recipientAddress) {
@@ -275,10 +284,38 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
     return (
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Recipient Dashboard</h2>
-        <div className="activity-error">
+        <div className="activity-error" role="alert">
           <span style={{ fontSize: "2rem", display: "block", marginBottom: "0.5rem" }}>⚠️</span>
           <h3>Dashboard Load Failed</h3>
           <p className="muted">{error}</p>
+          <button
+            type="button"
+            className="btn-primary"
+            data-testid="recipient-retry-btn"
+            style={{
+              marginTop: "1rem",
+              padding: "0.5rem 1rem",
+              backgroundColor: "#3b82f6",
+              color: "white",
+              border: "none",
+              borderRadius: "6px",
+              cursor: "pointer",
+              minHeight: "44px",
+              minWidth: "80px",
+            }}
+            onClick={() => {
+              if (recipientAddress) {
+                setLoading(true);
+                setError(null);
+                listRecipientStreams(recipientAddress)
+                  .then((data) => setStreams(data))
+                  .catch((err) => setError(err instanceof Error ? err.message : "Failed to load streams."))
+                  .finally(() => setLoading(false));
+              }
+            }}
+          >
+            Retry
+          </button>
         </div>
       </div>
     );
@@ -352,6 +389,19 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
         />
       )}
 
+      {/* A11Y: Polite live region for changed recipient status without repeating alerts */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        data-testid="recipient-status-announcer"
+      >
+        {activeStreams.length > 0 && totalClaimable === 0
+          ? "No claimable balance yet. Streams are active, but funds have not vested yet."
+          : ""}
+      </div>
+
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Recipient Dashboard</h2>
         <p className="muted recipient-dashboard-subtitle">
@@ -377,6 +427,25 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
           </article>
         </section>
 
+        {activeStreams.length > 0 && totalClaimable === 0 && (
+          <div
+            className="recipient-no-claimable-notice"
+            role="status"
+            data-testid="no-claimable-notice"
+            style={{
+              padding: "0.75rem 1rem",
+              backgroundColor: "#f3f4f6",
+              border: "1px solid #e5e7eb",
+              borderRadius: "8px",
+              color: "#4b5563",
+              fontSize: "0.875rem",
+              marginBottom: "1rem",
+            }}
+          >
+            <strong>No claimable balance yet.</strong> Streams are active, but funds have not vested yet. Check back as vesting progresses.
+          </div>
+        )}
+
         {activeStreams.length > 0 && (
           <section className="recipient-dashboard-section">
             <div
@@ -394,7 +463,8 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
                 <button
                   type="button"
                   className="btn-claim"
-                  disabled={isPending || isBatchClaiming}
+                  disabled={isPending || isBatchClaiming || totalClaimable <= 0}
+                  aria-label={totalClaimable <= 0 ? "No claimable streams to claim" : "Claim all streams"}
                   onClick={async () => {
                     const inputs: BatchClaimInput[] = activeStreams.map((s) => ({
                       streamId: s.id,
@@ -422,16 +492,16 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
               )}
             </div>
             <div className="table-wrap">
-              <table>
+              <table aria-label="Active streams">
                 <thead>
                   <tr>
-                    <th>From</th>
-                    <th>Asset</th>
-                    <th>Claimable</th>
-                    <th>Total</th>
-                    <th>Status</th>
-                    <th>Progress</th>
-                    <th>Action</th>
+                    <th scope="col">From</th>
+                    <th scope="col">Asset</th>
+                    <th scope="col">Claimable</th>
+                    <th scope="col">Total</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Progress</th>
+                    <th scope="col">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -495,14 +565,14 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
           <section className="recipient-dashboard-section">
             <h3 className="recipient-dashboard-section-title">Completed streams</h3>
             <div className="table-wrap">
-              <table>
+              <table aria-label="Completed streams">
                 <thead>
                   <tr>
-                    <th>From</th>
-                    <th>Asset</th>
-                    <th>Claimed</th>
-                    <th>Total</th>
-                    <th>Status</th>
+                    <th scope="col">From</th>
+                    <th scope="col">Asset</th>
+                    <th scope="col">Claimed</th>
+                    <th scope="col">Total</th>
+                    <th scope="col">Status</th>
                   </tr>
                 </thead>
                 <tbody>

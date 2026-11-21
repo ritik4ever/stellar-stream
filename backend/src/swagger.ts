@@ -448,6 +448,112 @@ export const swaggerDocument = {
           },
         },
       },
+      ConflictError: {
+        type: "object",
+        required: ["error", "statusCode", "code"],
+        properties: {
+          error: {
+            type: "string",
+            example: "Stream is already cancelled or completed.",
+          },
+          statusCode: {
+            type: "integer",
+            example: 409,
+          },
+          requestId: {
+            type: "string",
+            example: "req_123456789",
+          },
+          correlationId: {
+            type: "string",
+            example: "corr_987654321",
+          },
+          code: {
+            type: "string",
+            example: "STREAM_STATE_CONFLICT",
+          },
+        },
+      },
+    },
+    responses: {
+      BadRequest: {
+        description: "Bad Request - Invalid parameters or validation error",
+        content: {
+          "application/json": {
+            schema: {
+              $ref: "#/components/schemas/Error",
+            },
+            examples: {
+              validationError: {
+                summary: "Validation failure",
+                value: {
+                  error: "Validation error: durationSeconds must be at least 60",
+                  statusCode: 400,
+                  code: "VALIDATION_ERROR",
+                  requestId: "req_01HPX7...",
+                  details: [
+                    {
+                      field: "durationSeconds",
+                      message: "Number must be greater than or equal to 60",
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      },
+      NotFound: {
+        description: "Resource Not Found",
+        content: {
+          "application/json": {
+            schema: {
+              $ref: "#/components/schemas/Error",
+            },
+            examples: {
+              streamNotFound: {
+                summary: "Stream not found",
+                value: {
+                  error: "Stream not found.",
+                  statusCode: 404,
+                  code: "NOT_FOUND",
+                  requestId: "req_01HPX7...",
+                },
+              },
+            },
+          },
+        },
+      },
+      Conflict: {
+        description: "Conflict - State conflict or concurrent mutation",
+        content: {
+          "application/json": {
+            schema: {
+              $ref: "#/components/schemas/Error",
+            },
+            examples: {
+              terminalStateConflict: {
+                summary: "Stream state conflict",
+                value: {
+                  error: "Stream is already cancelled or completed.",
+                  statusCode: 409,
+                  code: "STREAM_STATE_CONFLICT",
+                  requestId: "req_01HPX7...",
+                },
+              },
+              idempotencyConflict: {
+                summary: "Idempotency key conflict",
+                value: {
+                  error: "An in-flight mutation with this idempotency key already exists.",
+                  statusCode: 409,
+                  code: "IDEMPOTENCY_CONFLICT",
+                  requestId: "req_01HPX7...",
+                },
+              },
+            },
+          },
+        },
+      },
     },
   },
   paths: {
@@ -525,7 +631,21 @@ export const swaggerDocument = {
     "/api/assets": {
       get: {
         summary: "List allowed assets",
-        description: "Returns the normalized list of allowed asset codes.",
+        description:
+          "Returns the canonical normalized sorted asset list (trimmed, uppercased, deduplicated, and sorted lexicographically `A–Z`, `0–9`) of active allowed asset codes for payment streams. " +
+          "Supports linking telemetry logs to a stream ID via the streamId query parameter.\n\n" +
+          "**Consistency rule (SSB-2026-123):** `GET /api/assets`, `GET /api/admin/assets`, `POST /api/admin/assets`, and `DELETE /api/admin/assets/{code}` all return the same normalized sorted asset list reflecting the committed database state. On validation or storage failure, mutation endpoints return an error status (`400`/`500`) without mutating state or claiming a change.",
+        parameters: [
+          {
+            name: "streamId",
+            in: "query",
+            required: false,
+            description: "Optional stream ID to correlate log signals with a specific stream.",
+            schema: {
+              type: "string",
+            },
+          },
+        ],
         responses: {
           "200": {
             description: "Allowed assets list.",
@@ -546,6 +666,125 @@ export const swaggerDocument = {
               },
             },
           },
+        },
+      },
+    },
+    "/api/admin/assets": {
+      get: {
+        summary: "List allowed assets (admin)",
+        description:
+          "Returns the committed normalized sorted asset list (`trim()`, `toUpperCase()`, deduplicated, sorted lexicographically). Requires an admin Bearer JWT.",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "200": {
+            description: "Committed normalized sorted allowed assets list.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: { type: "string", example: "USDC" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "401": { description: "Missing or invalid authorization token." },
+          "403": { description: "Forbidden — admin privileges required." },
+        },
+      },
+      post: {
+        summary: "Add an allowed asset code (admin)",
+        description:
+          "Validates, normalizes (`trim().toUpperCase()`), and persists an asset code (`1–12` alphanumeric characters) into the allowlist. " +
+          "Duplicate or mixed-case variants of an existing code are idempotent no-ops. " +
+          "Returns `200` with the committed normalized sorted asset list on success; returns `400` or `500` on validation or storage failure without claiming a change.",
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["code"],
+                properties: {
+                  code: {
+                    type: "string",
+                    pattern: "^[A-Za-z0-9]{1,12}$",
+                    example: "USDC",
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Committed normalized sorted allowed assets list.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: { type: "string", example: "USDC" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": { $ref: "#/components/responses/BadRequest" },
+          "401": { description: "Missing or invalid authorization token." },
+          "403": { description: "Forbidden — admin privileges required." },
+          "500": { description: "Storage failure — no allowlist state change was committed." },
+        },
+      },
+    },
+    "/api/admin/assets/{code}": {
+      delete: {
+        summary: "Remove an allowed asset code (admin)",
+        description:
+          "Validates, normalizes (`trim().toUpperCase()`), and removes an asset code from the allowlist (case-insensitive). " +
+          "Returns `200` with the committed normalized sorted asset list on success; returns `400` or `500` on validation or storage failure without claiming a change.",
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: "code",
+            in: "path",
+            required: true,
+            schema: {
+              type: "string",
+              pattern: "^[A-Za-z0-9]{1,12}$",
+              example: "XLM",
+            },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Committed normalized sorted allowed assets list.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: { type: "string", example: "USDC" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": { $ref: "#/components/responses/BadRequest" },
+          "401": { description: "Missing or invalid authorization token." },
+          "403": { description: "Forbidden — admin privileges required." },
+          "500": { description: "Storage failure — no allowlist state change was committed." },
         },
       },
     },
@@ -636,7 +875,9 @@ export const swaggerDocument = {
           "- **assetCode only** → multi-asset match (comma-separated, case-insensitive).\n" +
           "- **q + asset (AND)** → asset filter pins the asset; q searches id, sender, and recipient only (not asset code).\n" +
           "- **q + assetCode (AND)** → same as q + asset but for multi-asset.\n" +
-          "- **any combination** → every supplied filter must be satisfied simultaneously.",
+          "- **any combination** → every supplied filter must be satisfied simultaneously.\n" +
+          "\n" +
+          "**Response consistency:** `total` equals the number of streams matching all supplied filters at request time, before pagination. Every row in `data` satisfies every supplied filter. The server-side 5-second cache is invalidated by every stream mutation (`createStream`, `cancelStream`, `pauseStream`, `resumeStream`, `updateStreamStartAt`, `markStreamComplete`, `deleteStreamById`), so a read following a committed write returns the updated state. If a mutation fails, no cache entry is invalidated and no state change is committed.",
         parameters: [
           {
             name: "status",
@@ -984,15 +1225,14 @@ export const swaggerDocument = {
               },
             },
           },
+          "400": {
+            $ref: "#/components/responses/BadRequest",
+          },
           "404": {
-            description: "Stream not found.",
-            content: {
-              "application/json": {
-                schema: {
-                  $ref: "#/components/schemas/Error",
-                },
-              },
-            },
+            $ref: "#/components/responses/NotFound",
+          },
+          "409": {
+            $ref: "#/components/responses/Conflict",
           },
         },
       },
@@ -1164,11 +1404,26 @@ export const swaggerDocument = {
             },
           },
           "400": {
-            description: "Invalid request.",
+            description: "Invalid request (invalid Stellar account ID format or checksum, or invalid query parameter).",
             content: {
               "application/json": {
                 schema: {
                   $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
+          "503": {
+            description: "Database query timeout error when transient database locks persist.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
+                },
+                example: {
+                  error: "Database query timed out while fetching recipient streams.",
+                  statusCode: 503,
+                  code: "DATABASE_TIMEOUT",
                 },
               },
             },
@@ -1536,10 +1791,23 @@ export const swaggerDocument = {
             },
           },
           "400": {
-            description: "Invalid Stellar address format or query parameter.",
+            description: "Invalid Stellar address format or checksum, or invalid query parameter.",
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+          "503": {
+            description: "Database query timeout error when transient database locks persist.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+                example: {
+                  error: "Database query timed out while fetching recipient streams.",
+                  statusCode: 503,
+                  code: "DATABASE_TIMEOUT",
+                },
               },
             },
           },

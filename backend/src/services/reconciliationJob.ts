@@ -15,24 +15,31 @@ async function runReconciliationCycle(): Promise<void> {
   try {
     await reconcileMissingStreams();
     await checkStreamCountDiscrepancy();
+  } catch (err) {
+    logger.error({ err }, "reconciliation cycle encountered an error");
+    throw err;
   } finally {
     reconciliationInFlight = false;
   }
 }
 
 async function checkStreamCountDiscrepancy(): Promise<void> {
-  const onChainCount = await getOnChainStreamCount();
-  if (onChainCount === null) return;
+  try {
+    const onChainCount = await getOnChainStreamCount();
+    if (onChainCount === null) return;
 
-  const db = getDb();
-  const row = db.prepare("SELECT COUNT(*) AS total FROM streams").get() as { total: number };
-  const localCount = row.total;
+    const db = getDb();
+    const row = db.prepare("SELECT COUNT(*) AS total FROM streams").get() as { total: number } | undefined;
+    const localCount = row?.total ?? 0;
 
-  if (onChainCount !== localCount) {
-    logger.warn(
-      { onChainStreamCount: onChainCount, localStreamCount: localCount },
-      "stream count discrepancy detected between on-chain and local database",
-    );
+    if (onChainCount !== localCount) {
+      logger.warn(
+        { onChainStreamCount: onChainCount, localStreamCount: localCount },
+        "stream count discrepancy detected between on-chain and local database",
+      );
+    }
+  } catch (err) {
+    logger.warn({ err }, "failed to check stream count discrepancy during reconciliation cycle");
   }
 }
 

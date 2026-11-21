@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { logger } from '../logger';
-
+import { redactSecrets } from './redactSecrets';
+import { validateRotationConfig } from "./validateRotation";
 /**
  * Validates Soroban-related environment variables at startup.
  * Fails fast with helpful messages if config is invalid.
@@ -82,6 +83,14 @@ function resolveStellarNetwork(): { name: StellarNetworkName; source: string } {
     process.exit(1);
     throw new Error('Environment validation failed');
   }
+
+  const rotation = validateRotationConfig(process.env);
+rotation.warnings.forEach((w) => logger.warn(w));
+if (rotation.errors.length > 0) {
+  rotation.errors.forEach((e) => logger.error(`Invalid secrets rotation config: ${e}`));
+  process.exit(1);
+}
+
   if (
     process.env.NETWORK_PASSPHRASE ===
     NETWORK_PROFILES.mainnet.networkPassphrase
@@ -591,8 +600,13 @@ export function validateEnv(): ValidatedConfig {
       adminApiKey = process.env.ADMIN_API_KEY;
     }
   } else if (isProduction) {
+    logger.error(
+      'ADMIN_API_KEY is not set in production — refusing to start',
+    );
+    throw new Error('Environment validation failed');
+  } else {
     logger.warn(
-      'ADMIN_API_KEY is not set in production — admin endpoints will be inaccessible',
+      'ADMIN_API_KEY is not set — admin endpoints will be inaccessible in this environment',
     );
   }
 

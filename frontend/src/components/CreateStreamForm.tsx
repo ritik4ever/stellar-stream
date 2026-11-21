@@ -1,4 +1,4 @@
-import { useState, useEffect, FormEvent } from "react";
+import { useState, useEffect, useCallback, FormEvent } from "react";
 import {
   estimateCreateStreamFee,
   getConfig,
@@ -58,6 +58,12 @@ function humaniseApiError(raw: string): { title: string; hint: string } {
       hint: raw,
     };
   }
+  if (lower.includes("insufficient") || lower.includes("balance")) {
+    return {
+      title: "Insufficient or stale balance",
+      hint: "The sender's balance may be stale or too low. Refresh your wallet, confirm the available balance, and try again.",
+    };
+  }
   if (lower.includes("amount")) {
     return {
       title: "Invalid amount",
@@ -68,6 +74,18 @@ function humaniseApiError(raw: string): { title: string; hint: string } {
     return {
       title: "Invalid duration",
       hint: "Stream duration must be at least 1 minute (60 seconds). Increase the duration and try again.",
+    };
+  }
+  if (
+    lower.includes("clock") ||
+    lower.includes("timezone") ||
+    lower.includes("skew") ||
+    lower.includes("time mismatch") ||
+    lower.includes("timestamp")
+  ) {
+    return {
+      title: "Device clock or timezone mismatch",
+      hint: "Your device clock differs from Stellar network time. Please ensure automatic time sync is enabled in your OS settings and retry.",
     };
   }
   if (lower.includes("not found")) {
@@ -100,7 +118,7 @@ function AccountHint({ value }: { value: string }) {
 
   if (valid) {
     return (
-      <span className="field-hint field-hint--ok" aria-live="polite">
+      <span id="recipient-hint" className="field-hint field-hint--ok" aria-live="polite">
         ✓ Valid Stellar account ({len}/56)
       </span>
     );
@@ -108,14 +126,14 @@ function AccountHint({ value }: { value: string }) {
 
   if (!trimmed.startsWith("G")) {
     return (
-      <span className="field-hint field-hint--warn" aria-live="polite">
+      <span id="recipient-hint" className="field-hint field-hint--warn" aria-live="polite">
         Account IDs must start with the letter G ({len}/56 chars)
       </span>
     );
   }
 
   return (
-    <span className="field-hint field-hint--warn" aria-live="polite">
+    <span id="recipient-hint" className="field-hint field-hint--warn" aria-live="polite">
       {len < 56
         ? `${56 - len} more character${56 - len !== 1 ? "s" : ""} needed`
         : "Too long — must be exactly 56 characters"}{" "}
@@ -139,7 +157,27 @@ const DEFAULT_ALLOWED_ASSETS = ["USDC", "XLM"];
 
 /**
  * Form component for creating a new payment stream.
- * Includes validation, draft autosave, and estimated end date calculation.
+ * 
+ * Features:
+ * - Validation of form fields (amounts, addresses, duration, cliff).
+ * - Draft autosave: Form state is automatically persisted to localStorage
+ *   and recovered on page reload (via useDraftAutosave hook).
+ * - Fee estimation: Clicking "Create Stream" estimates the network fee and
+ *   displays a confirmation modal with the fee preview.
+ * - Recovery paths:
+ *   * Fee estimation failure: Shows inline error with "Retry Estimation" button.
+ *     Clicking retry re-runs fee estimation with the current form input (preserved).
+ *   * Stream creation failure (e.g., stale balance, rejected submission):
+ *     Shows error in the modal with "Retry Confirmation" button to re-attempt,
+ *     and "Edit" button to go back and modify the form input.
+ * - Duplicate submission prevention: isConfirming flag prevents multiple
+ *   confirmations from being sent if the user clicks "Confirm" repeatedly.
+ * 
+ * Note on stale balance detection:
+ * - Currently, stale balance is detected reactively when the backend rejects
+ *   the submission (e.g., "Insufficient balance" error).
+ * - A proactive check (before submit) would require a wallet balance API endpoint,
+ *   which is deferred to a future iteration.
  * 
  * @param props - The component props.
  * @returns The rendered CreateStreamForm component.
@@ -190,34 +228,42 @@ export function CreateStreamForm({
   ]);
   const [splitErrors, setSplitErrors] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function fetchConfig() {
-      try {
-        const config = await getConfig();
-        setAllowedAssets(config.allowedAssets);
-        
-        // Handle defaulting logic
-        const currentAsset = values.assetCode;
-        const isCurrentValid = config.allowedAssets.includes(currentAsset);
-        
-        if (!isCurrentValid) {
-          if (config.allowedAssets.includes("USDC")) {
-            setValues(prev => ({ ...prev, assetCode: "USDC" }));
-          } else if (config.allowedAssets.length > 0) {
-            setValues(prev => ({ ...prev, assetCode: config.allowedAssets[0] }));
-          }
+  const [isFetchingConfig, setIsFetchingConfig] = useState(false);
+
+  const fetchConfig = useCallback(async () => {
+    setIsFetchingConfig(true);
+    try {
+      const config = await getConfig();
+      setAllowedAssets(config.allowedAssets);
+      setConfigFetchFailed(false);
+      
+      // Handle defaulting logic
+      const currentAsset = values.assetCode;
+      const isCurrentValid = config.allowedAssets.includes(currentAsset);
+      
+      if (!isCurrentValid) {
+        if (config.allowedAssets.includes("USDC")) {
+          setValues(prev => ({ ...prev, assetCode: "USDC" }));
+        } else if (config.allowedAssets.length > 0) {
+          setValues(prev => ({ ...prev, assetCode: config.allowedAssets[0] }));
         }
-      } catch (err) {
-        console.error("Failed to fetch config:", err);
-        setConfigFetchFailed(true);
       }
+    } catch (err) {
+      console.error("Failed to fetch config:", err);
+      setConfigFetchFailed(true);
+    } finally {
+      setIsFetchingConfig(false);
     }
-    fetchConfig();
+  }, [values.assetCode, setValues]);
+
+  useEffect(() => {
+    void fetchConfig();
   }, []); // Only fetch once on mount
   const [touched, setTouched] = useState<
     Partial<Record<keyof FormValues, boolean>>
   >({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isConfirming, setIsConfirming] = useState(false);
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [feePreview, setFeePreview] = useState<FeePreview | null>(null);
   const [simulationError, setSimulationError] = useState<string | null>(null);
@@ -348,7 +394,19 @@ export function CreateStreamForm({
   async function confirmCreateStream() {
     if (!feePreview) return;
 
-    setIsSubmitting(true);
+    // Prevent duplicate submissions during confirmation
+    if (isConfirming) return;
+
+    if (!walletAddress) {
+      setSimulationError("Wallet disconnected. Please reconnect before confirming.");
+      return;
+    }
+    if (feePreview.payload.sender && walletAddress !== feePreview.payload.sender) {
+      setSimulationError("Connected wallet does not match the stream sender. Please switch back to the original account.");
+      return;
+    }
+
+    setIsConfirming(true);
     setSimulationError(null);
     try {
       await onCreate(feePreview.payload);
@@ -356,12 +414,45 @@ export function CreateStreamForm({
       setTouched({});
       setSubmitAttempted(false);
       setFeePreview(null);
+    } catch (err) {
+      // On error, keep the modal open with the error message and retry buttons visible
+      setSimulationError(
+        err instanceof Error ? err.message : "Failed to create stream.",
+      );
+    } finally {
+      setIsConfirming(false);
+    }
+  }
+
+  /**
+   * Retry fee estimation from the current form state.
+   * Preserves form input via useDraftAutosave.
+   */
+  async function retryFeeEstimation() {
+    setSimulationError(null);
+    setIsSubmitting(true);
+    try {
+      if (!formValid) return;
+      const payload = buildCreateStreamPayload(values);
+      const estimate = await estimateCreateStreamFee(payload);
+      setFeePreview({ payload, estimate });
+    } catch (err) {
+      setSimulationError(
+        err instanceof Error ? err.message : "Failed to estimate network fee.",
+      );
     } finally {
       setIsSubmitting(false);
     }
   }
 
   const parsedApiError = apiError ? humaniseApiError(apiError) : null;
+  const isClockMismatch = Boolean(
+    apiError && (
+      apiError.toLowerCase().includes("clock") ||
+      apiError.toLowerCase().includes("timezone") ||
+      apiError.toLowerCase().includes("skew")
+    )
+  );
 
   const startInMinsNum = Number(values.startInMinutes);
   const durationMinsNum = Number(values.durationMinutes);
@@ -380,6 +471,21 @@ export function CreateStreamForm({
     const startAt =
       startInMinsNum > 0 ? nowSeconds + Math.floor(startInMinsNum * 60) : nowSeconds;
     const endAt = startAt + Math.floor(durationMinsNum * 60);
+
+    const startDate = new Date(startAt * 1000);
+    const startDatePart = new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      timeZone: "UTC",
+    }).format(startDate);
+    const startTimePart = new Intl.DateTimeFormat("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: "UTC",
+    }).format(startDate);
+
     const endDate = new Date(endAt * 1000);
     const datePart = new Intl.DateTimeFormat("en-US", {
       month: "short",
@@ -393,7 +499,12 @@ export function CreateStreamForm({
       hour12: false,
       timeZone: "UTC",
     }).format(endDate);
-    return `Ends: ${datePart} at ${timePart} UTC`;
+
+    const startDesc =
+      startInMinsNum === 0
+        ? "Starts immediately (current minute)"
+        : `Starts: ${startDatePart} at ${startTimePart} UTC`;
+    return `${startDesc} · Ends: ${datePart} at ${timePart} UTC`;
   })();
 
   return (
@@ -511,6 +622,40 @@ export function CreateStreamForm({
             spellCheck={false}
           />
           <AccountHint value={values.recipient} />
+          {errors.recipient && errors.recipient.includes("same as sender") && (
+            <span
+              className="recipient-boundary-tag recipient-boundary-tag--self"
+              data-testid="boundary-self-addressed"
+              style={{
+                display: "inline-block",
+                padding: "2px 8px",
+                marginTop: "4px",
+                fontSize: "0.8rem",
+                borderRadius: "4px",
+                background: "rgba(220, 38, 38, 0.12)",
+                color: "#dc2626",
+              }}
+            >
+              Self-addressed boundary
+            </span>
+          )}
+          {errors.recipient && !errors.recipient.includes("same as sender") && values.recipient.trim().length > 0 && (
+            <span
+              className="recipient-boundary-tag recipient-boundary-tag--malformed"
+              data-testid="boundary-malformed-recipient"
+              style={{
+                display: "inline-block",
+                padding: "2px 8px",
+                marginTop: "4px",
+                fontSize: "0.8rem",
+                borderRadius: "4px",
+                background: "rgba(234, 88, 12, 0.12)",
+                color: "#ea580c",
+              }}
+            >
+              Malformed address boundary
+            </span>
+          )}
           {errors.recipient && (
             <span id="recipient-error" className="field-error" role="alert">
               {errors.recipient}
@@ -597,12 +742,68 @@ export function CreateStreamForm({
         <div
           className={`field-group${errors.assetCode ? " field-group--error" : ""}`}
         >
-          <label htmlFor="stream-asset">
-            Asset Code
-            <span className="field-required" aria-hidden>
-              *
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.35rem" }}>
+            <label htmlFor="stream-asset">
+              Asset Code
+              <span className="field-required" aria-hidden>
+                *
+              </span>
+            </label>
+            {configFetchFailed && (
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => void fetchConfig()}
+                disabled={isFetchingConfig}
+                data-testid="retry-asset-config"
+                aria-label="Retry loading asset configuration"
+                style={{ fontSize: "0.8rem", padding: "4px 8px", minHeight: "36px" }}
+              >
+                {isFetchingConfig ? "Retrying..." : "Retry Loading Assets"}
+              </button>
+            )}
+          </div>
+
+          {configFetchFailed && (
+            <span
+              className="asset-boundary-tag asset-boundary-tag--failed"
+              data-testid="boundary-metadata-failed"
+              style={{
+                display: "inline-block",
+                padding: "2px 8px",
+                marginBottom: "4px",
+                fontSize: "0.8rem",
+                borderRadius: "4px",
+                background: "rgba(220, 38, 38, 0.12)",
+                color: "#dc2626",
+                wordBreak: "break-word",
+                maxWidth: "100%",
+              }}
+            >
+              Asset metadata failed to load
             </span>
-          </label>
+          )}
+
+          {!configFetchFailed && allowedAssets.length === 0 && (
+            <span
+              className="asset-boundary-tag asset-boundary-tag--empty"
+              data-testid="boundary-empty-assets"
+              style={{
+                display: "inline-block",
+                padding: "2px 8px",
+                marginBottom: "4px",
+                fontSize: "0.8rem",
+                borderRadius: "4px",
+                background: "rgba(234, 88, 12, 0.12)",
+                color: "#ea580c",
+                wordBreak: "break-word",
+                maxWidth: "100%",
+              }}
+            >
+              No allowed assets configured
+            </span>
+          )}
+
           {!configFetchFailed && allowedAssets.length > 0 ? (
             <select
               id="stream-asset"
@@ -612,6 +813,7 @@ export function CreateStreamForm({
               aria-describedby={errors.assetCode ? "asset-error" : "asset-hint"}
               aria-invalid={!!errors.assetCode}
               required
+              style={{ minHeight: "44px", width: "100%", maxWidth: "100%", boxSizing: "border-box" }}
             >
               {allowedAssets.map((a) => (
                 <option key={a} value={a}>
@@ -630,8 +832,18 @@ export function CreateStreamForm({
               aria-describedby={errors.assetCode ? "asset-error" : "asset-hint"}
               aria-invalid={!!errors.assetCode}
               required
+              style={{ minHeight: "44px", width: "100%", maxWidth: "100%", boxSizing: "border-box" }}
             />
           )}
+          <span
+            id="asset-hint"
+            className="field-hint"
+            role="status"
+            aria-live="polite"
+            style={{ wordBreak: "break-all", overflowWrap: "anywhere", display: "block" }}
+          >
+            Selected asset: {values.assetCode || "None"}
+          </span>
           {errors.assetCode && (
             <span id="asset-error" className="field-error" role="alert">
               {errors.assetCode}
@@ -662,8 +874,9 @@ export function CreateStreamForm({
             aria-describedby={errors.totalAmount ? "amount-error" : "amount-hint"}
             aria-invalid={!!errors.totalAmount}
             required
+            style={{ minHeight: "44px" }}
           />
-          <span id="amount-hint" className="field-hint">
+          <span id="amount-hint" className="field-hint" aria-live="polite">
             Enter a positive number
           </span>
           {errors.totalAmount && (
@@ -785,31 +998,87 @@ export function CreateStreamForm({
       </div>
 
       {estimatedEndLabel && (
-        <div className="field-hint" style={{ marginTop: "-0.5rem", marginBottom: "1rem", color: "var(--color-success-text, #2e7d32)", fontWeight: 500 }}>
+        <div
+          className="field-hint schedule-preview-box"
+          data-testid="schedule-preview"
+          role="status"
+          aria-live="polite"
+          style={{
+            marginTop: "-0.5rem",
+            marginBottom: "1rem",
+            color: "var(--color-success-text, #2e7d32)",
+            fontWeight: 500,
+            overflowWrap: "anywhere",
+            wordBreak: "break-word",
+          }}
+        >
+          {startInMinsNum === 0 && (
+            <span
+              className="schedule-boundary-tag schedule-boundary-tag--immediate"
+              data-testid="boundary-current-minute"
+              style={{
+                display: "inline-block",
+                padding: "2px 8px",
+                marginRight: "6px",
+                fontSize: "0.8rem",
+                borderRadius: "4px",
+                background: "rgba(46, 125, 50, 0.12)",
+                color: "#2e7d32",
+              }}
+            >
+              Current-minute boundary
+            </span>
+          )}
           {estimatedEndLabel}
         </div>
       )}
 
-      <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginTop: "1rem" }}>
-        {simulationError && (
+      <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginTop: "1rem", flexWrap: "wrap" }}>
+        {simulationError && !feePreview && (
           <span className="field-error" role="alert">
             {simulationError}
           </span>
         )}
-        <button
-          className="btn-primary"
-          type="submit"
-          disabled={isSubmitting || (streamMode === "single" ? !formValid : !isSplitValid)}
-          aria-busy={isSubmitting}
-        >
-          {isSubmitting
-            ? (streamMode === "split" ? "Creating..." : "Estimating fee...")
-            : (streamMode === "split" ? "Create Split Stream" : "Create Stream")}
-        </button>
+        {simulationError && !feePreview && (
+          <button
+            type="button"
+            className="btn-primary"
+            style={{ minHeight: "44px" }}
+            onClick={() => void retryFeeEstimation()}
+            disabled={isSubmitting || (streamMode === "single" ? !formValid : !isSplitValid)}
+            aria-busy={isSubmitting}
+          >
+            {isSubmitting ? "Estimating..." : "Retry Estimation"}
+          </button>
+        )}
+        {!simulationError && (
+          <button
+            className="btn-primary create-stream-submit-btn"
+            type="submit"
+            style={{ minHeight: "44px" }}
+            disabled={isSubmitting || (streamMode === "single" ? !formValid : !isSplitValid) || isClockMismatch}
+            aria-busy={isSubmitting}
+            title={isClockMismatch ? "Device clock mismatch — please sync your device time to proceed" : undefined}
+          >
+            {isClockMismatch
+              ? "Clock Out of Sync"
+              : isSubmitting
+              ? (streamMode === "split" ? "Creating..." : "Estimating fee...")
+              : (streamMode === "split" ? "Create Split Stream" : "Create Stream")}
+          </button>
+        )}
       </div>
     </form>
     {feePreview && (
-      <div className="modal-backdrop" role="presentation">
+      <div
+        className="modal-backdrop"
+        role="presentation"
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && !isConfirming) {
+            setFeePreview(null);
+          }
+        }}
+      >
         <div
           className="modal-panel"
           role="dialog"
@@ -825,26 +1094,96 @@ export function CreateStreamForm({
               className="modal-close"
               aria-label="Cancel fee preview"
               onClick={() => setFeePreview(null)}
-              disabled={isSubmitting}
+              disabled={isConfirming}
             >
               x
             </button>
           </div>
 
+          {simulationError && (
+            <div className="api-error-box" role="alert">
+              <div className="api-error-box__title">
+                {simulationError.toLowerCase().includes("clock") ||
+                simulationError.toLowerCase().includes("timezone") ||
+                simulationError.toLowerCase().includes("skew")
+                  ? "Device clock or timezone mismatch"
+                  : "Submission failed"}
+              </div>
+              <div className="api-error-box__hint">
+                {simulationError.toLowerCase().includes("clock") ||
+                simulationError.toLowerCase().includes("timezone") ||
+                simulationError.toLowerCase().includes("skew")
+                  ? "Your device clock differs from Stellar network time. Re-attempting will recompute timestamps against current network time."
+                  : simulationError}
+              </div>
+            </div>
+          )}
+
           <dl className="fee-preview-list">
-            <div>
-              <dt>Total amount</dt>
-              <dd>
+            <div className="fee-preview-item">
+              <dt id="review-sender-dt">Sender</dt>
+              <dd
+                className="account-preview-val"
+                data-testid="preview-sender"
+                aria-labelledby="review-sender-dt"
+                style={{ wordBreak: "break-all", overflowWrap: "anywhere" }}
+              >
+                {feePreview.payload.sender}
+              </dd>
+            </div>
+            <div className="fee-preview-item">
+              <dt id="review-recipient-dt">Recipient</dt>
+              <dd
+                className="account-preview-val"
+                data-testid="preview-recipient"
+                aria-labelledby="review-recipient-dt"
+                style={{ wordBreak: "break-all", overflowWrap: "anywhere" }}
+              >
+                {feePreview.payload.recipient}
+              </dd>
+            </div>
+            <div className="fee-preview-item">
+              <dt id="review-duration-dt">Duration</dt>
+              <dd aria-labelledby="review-duration-dt">
+                {Math.round(feePreview.payload.durationSeconds / 60)} minutes
+              </dd>
+            </div>
+            <div className="fee-preview-item">
+              <dt id="review-asset-code-dt">Asset code</dt>
+              <dd
+                className="asset-preview-val"
+                data-testid="preview-asset-code"
+                aria-labelledby="review-asset-code-dt"
+              >
+                {feePreview.payload.assetCode}
+              </dd>
+            </div>
+            <div className="fee-preview-item">
+              <dt id="review-total-amount-dt">Total amount</dt>
+              <dd
+                data-testid="preview-total-amount"
+                aria-labelledby="review-total-amount-dt"
+              >
                 {feePreview.payload.totalAmount} {feePreview.payload.assetCode}
               </dd>
             </div>
-            <div>
-              <dt>Stream rate</dt>
-              <dd>{formatStreamRate(feePreview.payload)}</dd>
+            <div className="fee-preview-item">
+              <dt id="review-stream-rate-dt">Stream rate</dt>
+              <dd
+                data-testid="preview-stream-rate"
+                aria-labelledby="review-stream-rate-dt"
+              >
+                {formatStreamRate(feePreview.payload)}
+              </dd>
             </div>
-            <div>
-              <dt>Network fee estimate</dt>
-              <dd>{feePreview.estimate.feeXlm} XLM</dd>
+            <div className="fee-preview-item">
+              <dt id="review-fee-dt">Network fee estimate</dt>
+              <dd
+                data-testid="preview-fee"
+                aria-labelledby="review-fee-dt"
+              >
+                {feePreview.estimate.feeXlm} XLM
+              </dd>
             </div>
           </dl>
 
@@ -853,19 +1192,34 @@ export function CreateStreamForm({
               type="button"
               className="btn-ghost"
               onClick={() => setFeePreview(null)}
-              disabled={isSubmitting}
+              disabled={isConfirming}
+              style={{ minHeight: "44px" }}
             >
-              Cancel
+              {simulationError ? "Edit" : "Cancel"}
             </button>
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={() => void confirmCreateStream()}
-              disabled={isSubmitting}
-              aria-busy={isSubmitting}
-            >
-              {isSubmitting ? "Creating..." : "Confirm"}
-            </button>
+            {simulationError ? (
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => void confirmCreateStream()}
+                disabled={isConfirming}
+                aria-busy={isConfirming}
+                style={{ minHeight: "44px" }}
+              >
+                {isConfirming ? "Retrying..." : "Retry Confirmation"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => void confirmCreateStream()}
+                disabled={isConfirming}
+                aria-busy={isConfirming}
+                style={{ minHeight: "44px" }}
+              >
+                {isConfirming ? "Creating..." : "Confirm"}
+              </button>
+            )}
           </div>
         </div>
       </div>

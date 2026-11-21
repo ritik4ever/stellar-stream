@@ -14,6 +14,10 @@ vi.mock("./services/metrics", () => ({
   lastIndexedLedger: { set: vi.fn() },
   indexerErrorsTotal: { inc: vi.fn() },
   indexerCircuitState: { set: vi.fn() },
+  indexerLatestLedger: { set: vi.fn() },
+  indexerLedgerLag: { set: vi.fn() },
+  indexerEventsDedupedTotal: { inc: vi.fn() },
+  indexerPollDurationMs: { set: vi.fn() },
 }));
 
 vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
