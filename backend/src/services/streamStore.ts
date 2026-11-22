@@ -34,6 +34,15 @@ import {
   type StreamProgressOutcome,
   type StreamProgressOutcomeSignal,
 } from "./streamProgressOutcome";
+import {
+  buildReconciliationRpcOutageDetail,
+  classifyReconciliationErrorKind,
+  describeReconciliationErrorKind,
+  emitReconciliationSignal,
+  isReconciliationRpcOutage,
+  type ReconciliationErrorKind,
+  type ReconciliationSignalContext,
+} from "./reconciliationOutcome";
 
 export {
   SorobanSubmitError,
@@ -708,14 +717,41 @@ export async function syncStreams() {
   }
 }
 
-export async function reconcileStream(streamId: string): Promise<StreamRecord> {
+export async function reconcileStream(
+  streamId: string,
+  context: ReconciliationSignalContext = {},
+): Promise<StreamRecord> {
+  const startedAt = Date.now();
+  const latencyMs = () => Math.max(0, Date.now() - startedAt);
   const sorobanContext = getSorobanContext();
   if (!sorobanContext) {
+    emitReconciliationSignal({
+      outcome: "failure",
+      detail: "Stream reconciliation failed because Soroban RPC is not configured. Owner action: configure RPC_URL and CONTRACT_ID.",
+      isNormalEmpty: false,
+      latencyMs: latencyMs(),
+      stage: "not_configured",
+      repairedCount: 0,
+      missingCount: 0,
+      streamId,
+      ...context,
+    });
     throw new Error("Soroban not configured");
   }
 
   const id = Number(streamId);
   if (isNaN(id) || id <= 0) {
+    emitReconciliationSignal({
+      outcome: "failure",
+      detail: `Stream reconciliation rejected an invalid stream ID. Owner action: verify the reconciled stream identifier.`,
+      isNormalEmpty: false,
+      latencyMs: latencyMs(),
+      stage: "validation",
+      repairedCount: 0,
+      missingCount: 0,
+      streamId,
+      ...context,
+    });
     throw new Error("Invalid stream ID");
   }
 
@@ -742,17 +778,55 @@ export async function reconcileStream(streamId: string): Promise<StreamRecord> {
       recordBackfilledCreatedEvent(onChainStream, db);
     })();
 
+    emitReconciliationSignal({
+      outcome: "success",
+      detail: `Local state for stream ${streamId} synchronized with confirmed on-chain state without duplicate rows or events.`,
+      isNormalEmpty: false,
+      latencyMs: latencyMs(),
+      stage: "stream_reconcile",
+      repairedCount: 1,
+      missingCount: 0,
+      streamId,
+      ...context,
+    });
     logger.info({ streamId }, "stream reconciled with on-chain state");
     return onChainStream;
   } catch (err) {
-    logger.error({ err, streamId }, "failed to reconcile stream");
+    const errorKind = classifyReconciliationErrorKind(err);
+    const isRpcOutage = isReconciliationRpcOutage(err);
+    emitReconciliationSignal({
+      outcome: isRpcOutage ? "rpc_outage" : "failure",
+      detail: isRpcOutage
+        ? buildReconciliationRpcOutageDetail("stream_reconcile", errorKind, streamId)
+        : `Stream reconciliation failed while committing on-chain state for stream ${streamId} (${describeReconciliationErrorKind(errorKind)}). Owner action: inspect the service error log for this stream.`,
+      isNormalEmpty: false,
+      latencyMs: latencyMs(),
+      stage: "stream_reconcile",
+      repairedCount: 0,
+      missingCount: 0,
+      errorKind,
+      streamId,
+      ...context,
+    });
+    logger.error({ errorKind, isRpcOutage, streamId }, "failed to reconcile stream");
     throw err;
   }
 }
 
 export async function reconcileMissingStreams(): Promise<number> {
+  const startedAt = Date.now();
+  const latencyMs = () => Math.max(0, Date.now() - startedAt);
   const sorobanContext = getSorobanContext();
   if (!sorobanContext) {
+    emitReconciliationSignal({
+      outcome: "success",
+      detail: "Normal empty reconciliation: Soroban RPC is not configured, so no local state was changed.",
+      isNormalEmpty: true,
+      latencyMs: latencyMs(),
+      stage: "not_configured",
+      repairedCount: 0,
+      missingCount: 0,
+    });
     return 0;
   }
 
@@ -765,12 +839,35 @@ export async function reconcileMissingStreams(): Promise<number> {
         2,
       );
     } catch (err) {
-      logger.error({ err }, "failed to fetch next on-chain stream ID due to RPC outage");
+      const errorKind = classifyReconciliationErrorKind(err);
+      logger.error(
+        { errorKind, stage: "next_stream_id" },
+        "failed to fetch next on-chain stream ID due to RPC outage",
+      );
+      emitReconciliationSignal({
+        outcome: "rpc_outage",
+        detail: buildReconciliationRpcOutageDetail("next_stream_id", errorKind),
+        isNormalEmpty: false,
+        latencyMs: latencyMs(),
+        stage: "next_stream_id",
+        repairedCount: 0,
+        missingCount: 0,
+        errorKind,
+      });
       return 0;
     }
 
     if (nextId === null || nextId <= 1) {
       logger.info("no on-chain streams available to reconcile");
+      emitReconciliationSignal({
+        outcome: "success",
+        detail: "Normal empty reconciliation: no on-chain streams are available to reconcile.",
+        isNormalEmpty: true,
+        latencyMs: latencyMs(),
+        stage: "next_stream_id",
+        repairedCount: 0,
+        missingCount: 0,
+      });
       return 0;
     }
 
@@ -785,12 +882,22 @@ export async function reconcileMissingStreams(): Promise<number> {
 
     if (missingIds.length === 0) {
       logger.info("no missing local streams detected");
+      emitReconciliationSignal({
+        outcome: "success",
+        detail: "Normal empty reconciliation: local state is current and no missing streams were detected.",
+        isNormalEmpty: true,
+        latencyMs: latencyMs(),
+        stage: "missing_streams",
+        repairedCount: 0,
+        missingCount: 0,
+      });
       return 0;
     }
 
     logger.warn({ missingCount: missingIds.length, missingIds }, "missing local streams detected");
 
     let repairedCount = 0;
+    let interrupted = false;
     const db = getDb();
 
     for (const missingId of missingIds) {
@@ -810,8 +917,6 @@ export async function reconcileMissingStreams(): Promise<number> {
           continue;
         }
 
-        // Atomically commit stream and event in a single transaction.
-        // If event recording or upsert fails, the entire stream insertion rolls back cleanly.
         db.transaction(() => {
           upsertStream(stream);
           recordBackfilledCreatedEvent(stream, db);
@@ -819,17 +924,62 @@ export async function reconcileMissingStreams(): Promise<number> {
 
         repairedCount += 1;
       } catch (err) {
-        logger.error({ err, streamId: missingId }, "failed to backfill missing stream due to RPC outage or error");
-        // On persistent RPC outage, abort remaining missing streams in this cycle to avoid hammering a down RPC provider,
-        // while preserving already committed streams.
+        const errorKind = classifyReconciliationErrorKind(err);
+        const isRpcOutage = isReconciliationRpcOutage(err);
+        logger.error(
+          { errorKind, isRpcOutage, stage: "stream_backfill", streamId: missingId },
+          "failed to backfill missing stream due to RPC outage or error",
+        );
+        emitReconciliationSignal({
+          outcome: isRpcOutage ? "rpc_outage" : "failure",
+          detail: isRpcOutage
+            ? buildReconciliationRpcOutageDetail(
+                "stream_backfill",
+                errorKind,
+                missingId.toString(),
+                repairedCount,
+                missingIds.length,
+              )
+            : `Reconciliation failed while backfilling stream ${missingId} (${describeReconciliationErrorKind(errorKind)}). Owner action: inspect the service error log for this stream.`,
+          isNormalEmpty: false,
+          latencyMs: latencyMs(),
+          stage: "stream_backfill",
+          repairedCount,
+          missingCount: missingIds.length,
+          errorKind,
+          streamId: missingId.toString(),
+        });
+        interrupted = true;
         break;
       }
     }
 
     logger.info({ repairedCount, missingCount: missingIds.length }, "missing local streams repaired");
+    if (!interrupted) {
+      emitReconciliationSignal({
+        outcome: "success",
+        detail: `Reconciliation restored ${repairedCount} missing local stream(s) from confirmed on-chain state.`,
+        isNormalEmpty: false,
+        latencyMs: latencyMs(),
+        stage: "missing_streams",
+        repairedCount,
+        missingCount: missingIds.length,
+      });
+    }
     return repairedCount;
   } catch (err) {
-    logger.error({ err }, "reconciliation failed");
+    const errorKind = classifyReconciliationErrorKind(err);
+    logger.error({ errorKind, stage: "missing_streams" }, "reconciliation failed");
+    emitReconciliationSignal({
+      outcome: "failure",
+      detail: `Reconciliation cycle failed before completion (${describeReconciliationErrorKind(errorKind)}). Owner action: inspect the service error log; no partial state changes were committed by this signal.`,
+      isNormalEmpty: false,
+      latencyMs: latencyMs(),
+      stage: "missing_streams",
+      repairedCount: 0,
+      missingCount: 0,
+      errorKind,
+    });
     return 0;
   }
 }

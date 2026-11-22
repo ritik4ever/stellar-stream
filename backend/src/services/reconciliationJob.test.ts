@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const reconcileMock = vi.hoisted(() => vi.fn());
 const getOnChainStreamCountMock = vi.hoisted(() => vi.fn());
+const correlationMock = vi.hoisted(() => ({
+  getCorrelationId: vi.fn(),
+  runWithCorrelation: vi.fn((_correlationId: string, fn: () => unknown) => fn()),
+}));
 const loggerMock = vi.hoisted(() => ({
   info: vi.fn(),
   warn: vi.fn(),
@@ -25,6 +29,8 @@ vi.mock("../logger", () => ({
   logger: loggerMock,
 }));
 
+vi.mock("../correlationContext", () => correlationMock);
+
 describe("reconciliationJob – missing stream detection", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -45,6 +51,17 @@ describe("reconciliationJob – missing stream detection", () => {
     startReconciliationJob(60000);
     await vi.advanceTimersByTimeAsync(0);
     expect(reconcileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs each cycle in a generated correlation context for log linking", async () => {
+    const { startReconciliationJob } = await import("./reconciliationJob");
+    startReconciliationJob(60000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(correlationMock.runWithCorrelation).toHaveBeenCalledTimes(1);
+    const [correlationId, callback] = correlationMock.runWithCorrelation.mock.calls[0];
+    expect(correlationId).toMatch(/^reconciliation-[0-9a-f-]+$/);
+    expect(typeof callback).toBe("function");
   });
 
   it("detects missing streams — repair count propagates from reconcileMissingStreams", async () => {

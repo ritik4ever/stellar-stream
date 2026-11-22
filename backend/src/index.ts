@@ -2230,7 +2230,10 @@ app.post(
     }
 
     try {
-      const updated = await reconcileStream(parsedId.value);
+      const updated = await reconcileStream(parsedId.value, {
+        requestId: req.requestId,
+        correlationId: req.correlationId,
+      });
       res.json({ data: { ...updated, progress: calculateProgress(updated) } });
     } catch (error: any) {
       logger.error({ err: error, streamId: parsedId.value }, "failed to reconcile stream");
