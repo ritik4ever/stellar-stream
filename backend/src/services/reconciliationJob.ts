@@ -1,6 +1,9 @@
+import { randomUUID } from "crypto";
 import { reconcileMissingStreams, getOnChainStreamCount } from "./streamStore";
 import { getDb } from "./db";
 import { logger } from "../logger";
+import { runWithCorrelation } from "../correlationContext";
+import { classifyReconciliationErrorKind } from "./reconciliationOutcome";
 
 let reconciliationInterval: NodeJS.Timeout | null = null;
 let reconciliationInFlight = false;
@@ -13,10 +16,15 @@ async function runReconciliationCycle(): Promise<void> {
 
   reconciliationInFlight = true;
   try {
-    await reconcileMissingStreams();
-    await checkStreamCountDiscrepancy();
+    await runWithCorrelation(`reconciliation-${randomUUID()}`, async () => {
+      await reconcileMissingStreams();
+      await checkStreamCountDiscrepancy();
+    });
   } catch (err) {
-    logger.error({ err }, "reconciliation cycle encountered an error");
+    logger.error(
+      { errorKind: classifyReconciliationErrorKind(err) },
+      "reconciliation cycle encountered an error",
+    );
     throw err;
   } finally {
     reconciliationInFlight = false;
@@ -39,7 +47,10 @@ async function checkStreamCountDiscrepancy(): Promise<void> {
       );
     }
   } catch (err) {
-    logger.warn({ err }, "failed to check stream count discrepancy during reconciliation cycle");
+    logger.warn(
+      { errorKind: classifyReconciliationErrorKind(err) },
+      "failed to check stream count discrepancy during reconciliation cycle",
+    );
   }
 }
 
@@ -52,12 +63,18 @@ export function startReconciliationJob(intervalMs = 60000): void {
 
   reconciliationInterval = setInterval(() => {
     runReconciliationCycle().catch((err) => {
-      logger.error({ err }, "reconciliation job cycle failed");
+      logger.error(
+        { errorKind: classifyReconciliationErrorKind(err) },
+        "reconciliation job cycle failed",
+      );
     });
   }, intervalMs);
 
   runReconciliationCycle().catch((err) => {
-    logger.error({ err }, "initial reconciliation failed");
+    logger.error(
+      { errorKind: classifyReconciliationErrorKind(err) },
+      "initial reconciliation failed",
+    );
   });
 }
 

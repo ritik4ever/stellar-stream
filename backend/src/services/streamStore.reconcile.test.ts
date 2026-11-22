@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReconciliationOutcomeSignal } from "./reconciliationOutcome";
 
 // ---------------------------------------------------------------------------
 // Shared mock state
@@ -209,9 +210,15 @@ function createDbMock() {
 // ---------------------------------------------------------------------------
 
 describe("reconcileMissingStreams – sync correctness", () => {
-  beforeEach(() => {
+  let getLastReconciliationSignal: () => ReconciliationOutcomeSignal | null;
+
+  beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+
+    const outcomeModule = await import("./reconciliationOutcome");
+    outcomeModule.resetReconciliationOutcomeForTesting();
+    getLastReconciliationSignal = outcomeModule.getLastReconciliationSignal;
 
     mockState.nextId = 1;
     mockState.existingStreamIds = new Set<string>();
@@ -299,6 +306,17 @@ describe("reconcileMissingStreams – sync correctness", () => {
       1000,
       expect.objectContaining({ source: "reconciliation" }),
     );
+
+    const signal = getLastReconciliationSignal();
+    expect(signal).toMatchObject({
+      outcome: "success",
+      outcomeCode: 0,
+      stage: "missing_streams",
+      repairedCount: 2,
+      missingCount: 2,
+      isNormalEmpty: false,
+    });
+    expect(signal?.latencyMs).toBeGreaterThanOrEqual(0);
   });
 
   it("does not duplicate rows for streams already present in local DB", async () => {
@@ -333,6 +351,17 @@ describe("reconcileMissingStreams – sync correctness", () => {
     expect(repaired).toBe(0);
     expect(mockState.upsertedStreams).toHaveLength(0);
     expect(eventHistoryMocks.recordEventWithDb).not.toHaveBeenCalled();
+
+    const signal = getLastReconciliationSignal();
+    expect(signal).toMatchObject({
+      outcome: "success",
+      outcomeCode: 0,
+      stage: "missing_streams",
+      isNormalEmpty: true,
+      repairedCount: 0,
+      missingCount: 0,
+    });
+    expect(signal?.detail).toContain("Normal empty reconciliation");
   });
 
   it("only backfills the missing stream when some are present and some are not", async () => {
@@ -376,6 +405,21 @@ describe("reconcileMissingStreams – sync correctness", () => {
     expect(repaired).toBe(0);
     expect(errorSpy).toHaveBeenCalled();
     expect(mockState.upsertedStreams).toHaveLength(0);
+
+    const signal = getLastReconciliationSignal();
+    expect(signal).toMatchObject({
+      outcome: "rpc_outage",
+      outcomeCode: 1,
+      stage: "next_stream_id",
+      errorKind: "timeout",
+      isNormalEmpty: false,
+      repairedCount: 0,
+      missingCount: 0,
+    });
+    expect(signal?.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(signal?.detail).toContain("Owner action");
+    expect(JSON.stringify(signal)).not.toContain("https://rpc.test");
+    expect(JSON.stringify(signal)).not.toContain("timeout: RPC server did not respond");
 
     errorSpy.mockClear();
   });
@@ -451,6 +495,19 @@ describe("reconcileMissingStreams – sync correctness", () => {
     expect(mockState.existingStreamIds.has("2")).toBe(false);
     expect(mockState.existingStreamIds.has("3")).toBe(false);
 
+    const outageSignal = getLastReconciliationSignal();
+    expect(outageSignal).toMatchObject({
+      outcome: "rpc_outage",
+      outcomeCode: 1,
+      stage: "stream_backfill",
+      streamId: "2",
+      repairedCount: 1,
+      missingCount: 3,
+      isNormalEmpty: false,
+    });
+    expect(outageSignal?.detail).toContain("committing 1 stream(s)");
+    expect(outageSignal?.detail).toContain("2 remain for the next cycle");
+
     // RPC recovers
     mockState.streamFailures.clear();
     mockState.chainStreams.set(2, {
@@ -470,6 +527,16 @@ describe("reconcileMissingStreams – sync correctness", () => {
     // Exactly 3 unique streams and 3 created events recorded
     expect(mockState.createdEventIds.size).toBe(3);
     expect(eventHistoryMocks.recordEventWithDb).toHaveBeenCalledTimes(3);
+
+    const recoverySignal = getLastReconciliationSignal();
+    expect(recoverySignal).toMatchObject({
+      outcome: "success",
+      outcomeCode: 0,
+      stage: "missing_streams",
+      repairedCount: 2,
+      missingCount: 2,
+      isNormalEmpty: false,
+    });
   });
 
   it("rolls back stream record when event insertion fails inside the atomic transaction", async () => {
@@ -536,5 +603,16 @@ describe("reconcileMissingStreams – sync correctness", () => {
     expect(stored[0].canceledAt).toBeDefined();
     // Created event must not be duplicated
     expect(eventHistoryMocks.recordEventWithDb).not.toHaveBeenCalled();
+
+    const signal = getLastReconciliationSignal();
+    expect(signal).toMatchObject({
+      outcome: "success",
+      outcomeCode: 0,
+      stage: "stream_reconcile",
+      streamId: "1",
+      repairedCount: 1,
+      isNormalEmpty: false,
+    });
+    expect(signal?.detail).toContain("Local state for stream 1 synchronized with confirmed on-chain state");
   });
 });
