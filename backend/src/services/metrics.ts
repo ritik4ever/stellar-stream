@@ -188,3 +188,21 @@ export const assetAllowlistDuplicatesTotal = new Counter({
   registers: [register],
 });
 
+export const reconciliationOutcome = new Gauge({
+  name: "reconciliation_outcome",
+  help: "Reconciliation worker outcome: 0=success, 1=rpc_outage, 2=failure",
+  registers: [register],
+});
+
+export const reconciliationLatencyMs = new Gauge({
+  name: "reconciliation_latency_ms",
+  help: "Wall-clock duration of the most recent reconciliation in milliseconds",
+  registers: [register],
+});
+
+export const reconciliationRpcOutagesTotal = new Counter({
+  name: "reconciliation_rpc_outages_total",
+  help: "Total reconciliation runs interrupted by an RPC outage",
+  registers: [register],
+});
+

@@ -10,6 +10,7 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 6. [Archive Old Streams Manually](#archive-old-streams-manually)
 7. [Indexer Falls Behind](#indexer-falls-behind)
 8. [Indexer Monitoring Outcome Signal](#indexer-monitoring-outcome-signal)
+<<<<<<< HEAD
 9. [Verify Indexer Monitoring (repeatable)](#verify-indexer-monitoring-repeatable)
 10. [Verify SQLite Restore Before Start](#verify-sqlite-restore-before-start)
 11. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
@@ -18,6 +19,15 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 14. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
 15. [Contract Invocation Timeout](#contract-invocation-timeout)
 16. [Docker Compose Startup Failure](#docker-compose-startup-failure)
+=======
+9. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
+10. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
+11. [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal)
+12. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
+13. [Contract Invocation Timeout](#contract-invocation-timeout)
+14. [Docker Compose Startup Failure](#docker-compose-startup-failure)
+15. [Reconciliation Worker Outcome Signal](#reconciliation-worker-outcome-signal)
+>>>>>>> up/main
 
 ---
 
@@ -1084,3 +1094,18 @@ After you fix the cause, re-run `npm run compose:up`. To check the script itself
    Verify that recently modified components in `frontend/src` have matching type definitions and unit tests.
 3. **Transient Delay Recovery:**
    If the job failed solely due to runner timeout with zero type or syntax errors, trigger a re-run of failed jobs from the GitHub Actions UI.
+
+---
+
+### Reconciliation Worker Outcome Signal
+
+The reconciliation worker emits a structured outcome and latency signal on every cycle and on each `POST /api/streams/:id/reconcile` call. See [docs/reconciliation-monitoring.md](docs/reconciliation-monitoring.md) for the full schema.
+
+| Signal | Code | Operator action |
+|---|---:|---|
+| `success` + `isNormalEmpty: true` | 0 | None. No on-chain streams, no missing local streams, or Soroban intentionally disabled. |
+| `success` + `isNormalEmpty: false` | 0 | None. Missing local state was repaired from confirmed on-chain state. |
+| `rpc_outage` | 1 | Verify RPC availability and provider rate-limit status. Committed streams are preserved and the next cycle retries. |
+| `failure` | 2 | Inspect the service error log for the cycle/stream correlation ID and fix the non-RPC cause. |
+
+Filter worker logs with `correlation_id` (generated per cycle as `reconciliation-…`). For API-triggered reconciliation, use `requestId` and `streamId`. Alerts can use `reconciliation_outcome`, `reconciliation_latency_ms`, and `reconciliation_rpc_outages_total` from `/metrics`. Raw errors, RPC URLs, and credentials are never emitted; only enumerated `errorKind`, counts, latency, and public identifiers are logged.
