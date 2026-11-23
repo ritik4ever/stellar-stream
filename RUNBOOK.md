@@ -10,7 +10,6 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 6. [Archive Old Streams Manually](#archive-old-streams-manually)
 7. [Indexer Falls Behind](#indexer-falls-behind)
 8. [Indexer Monitoring Outcome Signal](#indexer-monitoring-outcome-signal)
-<<<<<<< HEAD
 9. [Verify Indexer Monitoring (repeatable)](#verify-indexer-monitoring-repeatable)
 10. [Verify SQLite Restore Before Start](#verify-sqlite-restore-before-start)
 11. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
@@ -19,15 +18,7 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 14. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
 15. [Contract Invocation Timeout](#contract-invocation-timeout)
 16. [Docker Compose Startup Failure](#docker-compose-startup-failure)
-=======
-9. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
-10. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
-11. [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal)
-12. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
-13. [Contract Invocation Timeout](#contract-invocation-timeout)
-14. [Docker Compose Startup Failure](#docker-compose-startup-failure)
-15. [Reconciliation Worker Outcome Signal](#reconciliation-worker-outcome-signal)
->>>>>>> up/main
+17. [Reconciliation Worker Outcome Signal](#reconciliation-worker-outcome-signal)
 
 ---
 
