@@ -893,6 +893,15 @@ impl StellarStreamContract {
     /// after the recipient has already authorized reverts the whole call and
     /// emits no event, so the indexer reconstructs exactly the payouts that
     /// actually happened and no phantom claim for a rolled-back one.
+    ///
+    /// # Boundary / edge behavior
+    ///
+    /// | Condition | Result |
+    /// |---|---|
+    /// | `amount <= 0` (including `0` and `i128::MIN`) | panics with `"amount must be positive"`; state and balances unchanged |
+    /// | `amount > claimable` (including `0` vested before start/cliff) | panics with `"amount exceeds claimable"`; state and balances unchanged |
+    /// | `amount` in `1..=claimable` | transfers `amount` integer token units, updates `claimed_amount` via `checked_add`, emits `StreamClaimed` (and `StreamCompleted` if `claimed_amount >= total_amount`) |
+    /// | token transfer fails after recipient authorization | transaction reverts atomically; `claimed_amount`, `last_claim_time`, balances, and events are unchanged |
     pub fn claim(
         env: Env,
         stream_id: u64,
@@ -955,7 +964,10 @@ impl StellarStreamContract {
 
         token_client.transfer(&contract_address, &recipient, &amount);
 
-        stream.claimed_amount += amount;
+        stream.claimed_amount = stream
+            .claimed_amount
+            .checked_add(amount)
+            .expect("claimed amount overflow");
         stream.last_claim_time = now;
         env.storage()
             .persistent()
@@ -1122,7 +1134,7 @@ impl StellarStreamContract {
         let mut stream = read_stream(&env, stream_id);
         let now = env.ledger().timestamp();
         let vested = vested_amount(&stream, now);
-        let unclaimed_vested = vested - stream.claimed_amount;
+        let unclaimed_vested = vested.checked_sub(stream.claimed_amount).unwrap_or(0).max(0);
 
         let actual_clawback = if amount > unclaimed_vested {
             unclaimed_vested
@@ -1144,7 +1156,10 @@ impl StellarStreamContract {
             let contract_address = env.current_contract_address();
             token_client.transfer(&contract_address, &admin, &actual_clawback);
 
-            stream.claimed_amount += actual_clawback;
+            stream.claimed_amount = stream
+                .claimed_amount
+                .checked_add(actual_clawback)
+                .expect("claimed amount overflow");
             env.storage()
                 .persistent()
                 .set(&DataKey::Stream(stream_id), &stream);
@@ -1344,7 +1359,7 @@ pub(crate) fn settle_cancel(
     stream.canceled = true;
 
     let vested = vested_amount(stream, now);
-    let sender_refund = stream.total_amount - vested;
+    let sender_refund = stream.total_amount.checked_sub(vested).unwrap_or(0).max(0);
 
     let min_end = if now > stream.start_time {
         now
@@ -1599,11 +1614,17 @@ fn vested_amount(stream: &Stream, at_time: u64) -> i128 {
     let whole = total / duration;
     let remainder = total % duration;
 
-    let whole_part = whole * elapsed as i128;
-    let fraction_part =
-        ((remainder as u128) * (elapsed as u128) / (total_duration as u128)) as i128;
+    let whole_part = whole
+        .checked_mul(elapsed as i128)
+        .expect("vested amount overflow");
+    let fraction_part = ((remainder as u128)
+        .checked_mul(elapsed as u128)
+        .expect("vested fraction overflow")
+        / (total_duration as u128)) as i128;
 
-    whole_part + fraction_part
+    whole_part
+        .checked_add(fraction_part)
+        .expect("vested amount overflow")
 }
 
 #[cfg(test)]
