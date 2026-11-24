@@ -7924,6 +7924,86 @@ fn test_1138_transfer_failure_after_authorization_rolls_back() {
     assert_eq!(ev.claimed_amount, 500);
 }
 
+#[test]
+fn test_1138_one_unit_claim_boundary_amounts_and_completing_transfer_failure() {
+    // 1. Minimum stream for a one-unit partial claim followed by remaining one-unit claim (total = 2).
+    let env = Env::default();
+    let f = reg_fixture(&env, 2, 1_000, 2_000);
+    f.set_time(1_500);
+    assert_eq!(f.client.claimable(&f.stream_id, &1_500), 1);
+
+    // Non-positive claim amounts panic and leave state/balances untouched.
+    for bad in [0i128, -1, i128::MIN] {
+        assert!(f.client.try_claim(&f.stream_id, &f.recipient, &bad).is_err());
+        assert_eq!(f.stream().claimed_amount, 0);
+        assert_eq!(f.token.balance(&f.recipient), 0);
+        assert_eq!(f.token.balance(&f.contract_id), 2);
+    }
+
+    // One-unit claim at midpoint.
+    f.sign_claim(&f.recipient, 1);
+    assert_eq!(f.client.claim(&f.stream_id, &f.recipient, &1), 1);
+    assert_eq!(f.stream().claimed_amount, 1);
+    assert_eq!(f.client.claimable(&f.stream_id, &1_500), 0);
+    assert_eq!(f.count_events(symbol_short!("Completed")), 0);
+
+    // Drain escrow at end_time so the completing remaining-unit transfer fails after auth.
+    f.set_time(2_000);
+    assert_eq!(f.client.claimable(&f.stream_id, &2_000), 1);
+    env.mock_all_auths();
+    let sink = Address::generate(&env);
+    env.as_contract(&f.contract_id, || {
+        f.token.transfer(&f.contract_id, &sink, &1);
+    });
+    let before = f.stream();
+    let events_before = f.contract_events();
+    f.sign_claim(&f.recipient, 1);
+    assert!(f.client.try_claim(&f.stream_id, &f.recipient, &1).is_err());
+    assert_eq!(f.stream(), before);
+    assert_eq!(f.contract_events().len(), events_before.len());
+    assert_eq!(f.token.balance(&f.recipient), 1);
+    assert_eq!(f.token.balance(&f.contract_id), 0);
+    assert_eq!(f.count_events(symbol_short!("Completed")), 0);
+
+    // Refill escrow and complete the remaining one-unit claim.
+    env.mock_all_auths();
+    token::StellarAssetClient::new(&env, &f.token.address).mint(&f.contract_id, &1);
+    f.sign_claim(&f.recipient, 1);
+    assert_eq!(f.client.claim(&f.stream_id, &f.recipient, &1), 1);
+    assert_eq!(f.stream().claimed_amount, 2);
+    assert_eq!(f.token.balance(&f.recipient), 2);
+    assert_eq!(f.token.balance(&f.contract_id), 0);
+    assert_eq!(f.count_events(symbol_short!("Completed")), 1);
+}
+
+#[test]
+fn test_1138_one_unit_claim_then_remaining_max_amount_checked_arithmetic() {
+    let env = Env::default();
+    let f = reg_fixture(&env, i128::MAX, 1_000, 2_000);
+    f.set_time(2_000);
+    assert_eq!(f.client.claimable(&f.stream_id, &2_000), i128::MAX);
+
+    // Claim 1 integer unit, then the remaining (i128::MAX - 1) units.
+    assert_eq!(f.client.claim(&f.stream_id, &f.recipient, &1), 1);
+    assert_eq!(f.stream().claimed_amount, 1);
+    assert_eq!(f.client.claimable(&f.stream_id, &2_000), i128::MAX - 1);
+
+    // Non-positive claim amounts after a partial claim still revert without altering state.
+    assert!(f.client.try_claim(&f.stream_id, &f.recipient, &0).is_err());
+    assert!(f.client.try_claim(&f.stream_id, &f.recipient, &-1).is_err());
+    assert_eq!(f.stream().claimed_amount, 1);
+
+    assert_eq!(
+        f.client.claim(&f.stream_id, &f.recipient, &(i128::MAX - 1)),
+        i128::MAX - 1
+    );
+    assert_eq!(f.stream().claimed_amount, i128::MAX);
+    assert_eq!(f.client.claimable(&f.stream_id, &2_000), 0);
+    assert_eq!(f.token.balance(&f.recipient), i128::MAX);
+    assert_eq!(f.token.balance(&f.contract_id), 0);
+    assert_eq!(f.count_events(symbol_short!("Completed")), 1);
+}
+
 // =============================================================================
 // #1137 — Align events with the Partial claim state
 //
