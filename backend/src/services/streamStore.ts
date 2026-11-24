@@ -1641,7 +1641,70 @@ export async function cancelStream(
   };
 }
 
+/**
+ * Submit a pause_stream / resume_stream transaction on chain (best effort).
+ * Failures are logged and do not block the local state change.
+ */
+async function submitStreamControlOnChain(
+  method: "pause_stream" | "resume_stream",
+  id: string,
+  sender: string,
+): Promise<void> {
+  try {
+    const sorobanContext = getSorobanContext();
+    if (sorobanContext && rpcServer && serverKeypair) {
+      const contractId = process.env.CONTRACT_ID;
+      if (contractId) {
+        const sourceAccount = await rpcServer.getAccount(serverKeypair.publicKey());
+        const contract = new Contract(contractId);
+        const tx = contract.call(
+          method,
+          nativeToScVal(parseInt(id), { type: "u64" }),
+          new Address(sender).toScVal(),
+        );
+
+        const built = await rpcServer.prepareTransaction(
+          new TransactionBuilder(sourceAccount, {
+            fee: "1000",
+            networkPassphrase: process.env.NETWORK_PASSPHRASE || Networks.TESTNET,
+          })
+            .addOperation(tx)
+            .setTimeout(30)
+            .build(),
+        );
+
+        built.sign(serverKeypair);
+        const sendRes = await retryWithBackoff(() => rpcServer!.sendTransaction(built));
+        if (sendRes.status === "PENDING") {
+          let txResult;
+          let attempts = 0;
+          while (attempts < 10) {
+            txResult = await retryWithBackoff(() => rpcServer!.getTransaction(sendRes.hash));
+            if (txResult.status !== "NOT_FOUND") break;
+            await new Promise((r) => setTimeout(r, 1000));
+            attempts++;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, streamId: id }, `failed to ${method.replace("_stream", "")} stream on chain`);
+  }
+}
+
 export async function pauseStream(id: string): Promise<StreamRecord> {
+  // Validate before touching the chain; the committed state is re-checked
+  // under the writer lock in mutateStreamAndEvent below.
+  const existing = getStream(id);
+  if (!existing) {
+    throw streamError("Stream not found.", 404);
+  }
+  if (computeStatus(existing, nowInSeconds()) !== "active") {
+    throw streamError("Only active streams can be paused.", 400);
+  }
+  // Submit on-chain pause_stream transaction before updating local state.
+  await submitStreamControlOnChain("pause_stream", id, existing.sender);
+
   const pausedAt = nowInSeconds();
   const { stream } = mutateStreamAndEvent(id, (current) => {
     // Re-read committed state under the writer lock so a concurrent writer
@@ -1666,6 +1729,18 @@ export async function pauseStream(id: string): Promise<StreamRecord> {
 
 export async function resumeStream(id: string): Promise<StreamRecord> {
   const now = nowInSeconds();
+  // Validate before touching the chain; the committed state is re-checked
+  // under the writer lock in mutateStreamAndEvent below.
+  const existing = getStream(id);
+  if (!existing) {
+    throw streamError("Stream not found.", 404);
+  }
+  if (existing.pausedAt === undefined) {
+    throw streamError("Stream is not paused.", 400);
+  }
+  // Submit on-chain resume_stream transaction before updating local state.
+  await submitStreamControlOnChain("resume_stream", id, existing.sender);
+
   const { stream } = mutateStreamAndEvent(id, (current) => {
     // Re-read committed state under the writer lock so a concurrent writer
     // (e.g. cancel) cannot be overwritten with a stale record.
