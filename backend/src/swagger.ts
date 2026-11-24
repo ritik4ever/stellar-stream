@@ -1820,6 +1820,8 @@ export const swaggerDocument = {
         description:
           "Cancels a stream by its ID. Cancellation is terminal and idempotent: the first committed call sets `canceledAt` and persists `refundedAmount = totalAmount - vestedAmount at the cancel timestamp`, the same rule the Soroban `cancel` entry point settles. Claimed amounts recorded in stream history are preserved. " +
           "If the stream is already canceled, the endpoint returns 200 with the committed record unchanged and writes no duplicate event. A completed stream remains cancellable per the documented behavior: `completedAt` is retained, the final `progress.status` is `canceled`, and the refund is 0 because nothing remains unvested. " +
+          "The committed outcome is reported explicitly: `X-Cancel-Outcome` is one of `success`, `already_completed`, `racing_claim`, or `already_canceled` (with the matching numeric `X-Cancel-Outcome-Code`), and `X-Idempotent-Replay: true` marks a call that wrote nothing because the stream was already canceled. " +
+          "Repeated cancels preserve `canceledAt`, `completedAt`, and `refundedAmount`, and never add a second `canceled` event. " +
           "The `data` object always mirrors committed state; when the request fails, no cancellation or refund is committed.",
         parameters: [
           {
@@ -1834,7 +1836,39 @@ export const swaggerDocument = {
         ],
         responses: {
           "200": {
-            description: "Stream cancelled successfully.",
+            description:
+              "Stream canceled, or the committed cancel record replayed for an already-canceled stream.",
+            headers: {
+              "X-Cancel-Outcome": {
+                description:
+                  "Committed outcome of the request. `already_completed` means the first cancel of a completed stream, `already_canceled` means the stream was already canceled before this call.",
+                schema: {
+                  type: "string",
+                  enum: [
+                    "success",
+                    "already_completed",
+                    "racing_claim",
+                    "already_canceled",
+                  ],
+                },
+              },
+              "X-Cancel-Outcome-Code": {
+                description:
+                  "Stable numeric code matching `X-Cancel-Outcome`: success=0, already_canceled=1, already_completed=2, racing_claim=3, failure=4.",
+                schema: {
+                  type: "integer",
+                  enum: [0, 1, 2, 3, 4],
+                },
+              },
+              "X-Idempotent-Replay": {
+                description:
+                  "Present as `true` when no state was written because the stream was already canceled.",
+                schema: {
+                  type: "string",
+                  enum: ["true"],
+                },
+              },
+            },
             content: {
               "application/json": {
                 schema: {
@@ -1844,6 +1878,16 @@ export const swaggerDocument = {
                       $ref: "#/components/schemas/Stream",
                     },
                   },
+                },
+              },
+            },
+          },
+          "400": {
+            description: "Stream ID is not a positive integer.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
                 },
               },
             },

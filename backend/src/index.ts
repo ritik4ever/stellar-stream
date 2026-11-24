@@ -69,6 +69,7 @@ import {
 } from "./services/webhook";
 import { emitListStreamsSignal } from "./services/listStreamsOutcome";
 import {
+  CANCEL_STREAM_OUTCOME_CODES,
   emitCancelStreamSignal,
   CancelStreamOutcome,
 } from "./services/cancelStreamOutcome";
@@ -1916,6 +1917,16 @@ app.post(
         refundedAmount: updated.refundedAmount,
         requestId,
       });
+
+      // SSB-2026-096 / #1038: expose the committed outcome explicitly so a
+      // repeated cancel on a completed stream is distinguishable from a cancel
+      // that actually changed state. Status codes and the `data` body are
+      // unchanged; these headers are the stable boundary contract.
+      res.setHeader("X-Cancel-Outcome", outcome);
+      res.setHeader("X-Cancel-Outcome-Code", CANCEL_STREAM_OUTCOME_CODES[outcome]);
+      if (!result.changed) {
+        res.setHeader("X-Idempotent-Replay", "true");
+      }
 
       res.json({
         data: {
