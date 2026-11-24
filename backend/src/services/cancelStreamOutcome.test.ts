@@ -242,6 +242,9 @@ describe("Cancel Stream Actionable Signals & Observability (SSB-2026-099 / #1041
         .set("x-correlation-id", "corr-repeat-cancel");
 
       expect(res.status).toBe(200);
+      expect(res.headers["x-cancel-outcome"]).toBe("already_canceled");
+      expect(res.headers["x-cancel-outcome-code"]).toBe("1");
+      expect(res.headers["x-idempotent-replay"]).toBe("true");
       const signal = getLastPublishedCancelStreamSignal();
       expect(signal).not.toBeNull();
       expect(signal?.outcome).toBe("already_canceled");
@@ -282,6 +285,9 @@ describe("Cancel Stream Actionable Signals & Observability (SSB-2026-099 / #1041
         .post("/api/streams/1001/cancel");
 
       expect(res.status).toBe(200);
+      expect(res.headers["x-cancel-outcome"]).toBe("racing_claim");
+      expect(res.headers["x-cancel-outcome-code"]).toBe("3");
+      expect(res.headers["x-idempotent-replay"]).toBeUndefined();
       const signal = getLastPublishedCancelStreamSignal();
       expect(signal).not.toBeNull();
       expect(signal?.outcome).toBe("racing_claim");
