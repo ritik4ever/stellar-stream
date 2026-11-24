@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 import { app } from "../index";
 import { initDb, getDb } from "./db";
 import { initCache } from "./cache";
-import { getStreamHistory } from "./eventHistory";
+import { getClaimedTotal, getStreamHistory } from "./eventHistory";
 import { getJwtSecret } from "./auth";
 import { cancelStream, pauseStream } from "./streamStore";
 import path from "path";
@@ -209,7 +209,7 @@ describe("POST /api/streams/:id/cancel Integration Tests", () => {
     it("handles repeated cancel on a completed stream idempotently without duplicate side effects (SSB-2026-100)", async () => {
       const now = Math.floor(Date.now() / 1000);
       const completedStream = {
-        id: "completed-repeated-cancel",
+        id: "1040",
         sender: mockSender,
         recipient: mockRecipient,
         asset_code: "USDC",
@@ -235,6 +235,8 @@ describe("POST /api/streams/:id/cancel Integration Tests", () => {
       const initialCanceledAt = res1.body.data.canceledAt;
       expect(initialCanceledAt).toBeDefined();
       expect(res1.body.data.progress.status).toBe("canceled");
+      // A fully vested stream refunds nothing, matching the contract settlement.
+      expect(res1.body.data.refundedAmount).toBe(0);
 
       // Repeated cancel on completed stream
       const res2 = await request(app)
@@ -245,11 +247,13 @@ describe("POST /api/streams/:id/cancel Integration Tests", () => {
       expect(res2.body.data.canceledAt).toBe(initialCanceledAt);
       expect(res2.body.data.completedAt).toBe(completedStream.completed_at);
       expect(res2.body.data.progress.status).toBe("canceled");
+      expect(res2.body.data.refundedAmount).toBe(0);
 
       // Stored record verification
-      const stored = db.prepare("SELECT canceled_at, completed_at FROM streams WHERE id = ?").get(completedStream.id);
+      const stored = db.prepare("SELECT canceled_at, completed_at, refunded_amount FROM streams WHERE id = ?").get(completedStream.id);
       expect(stored.canceled_at).toBe(initialCanceledAt);
       expect(stored.completed_at).toBe(completedStream.completed_at);
+      expect(stored.refunded_amount).toBe(0);
 
       // Verify no duplicate events or side effects
       const history = getStreamHistory(completedStream.id);
@@ -262,7 +266,7 @@ describe("POST /api/streams/:id/cancel Integration Tests", () => {
     it("preserves atomic stream state, refund calculations, and absence of duplicate side effects when cancel races with a claim", async () => {
       const now = Math.floor(Date.now() / 1000);
       const racingStream = {
-        id: "racing-cancel-claim",
+        id: "1041",
         sender: mockSender,
         recipient: mockRecipient,
         asset_code: "USDC",
@@ -278,9 +282,9 @@ describe("POST /api/streams/:id/cancel Integration Tests", () => {
         VALUES (@id, @sender, @recipient, @asset_code, @total_amount, @duration_seconds, @start_at, @created_at)
       `).run(racingStream);
 
-      // Simulate partial claim occurring right before cancel resolves
+      // Simulate a partial recipient claim committed right before cancel resolves.
+      // Claimed totals live in the event log; there is no claimed_amount column.
       const claimedAmount = 400;
-      db.prepare("UPDATE streams SET claimed_amount = ? WHERE id = ?").run(claimedAmount, racingStream.id);
       db.prepare(`
         INSERT INTO stream_events (stream_id, event_type, timestamp, actor, amount)
         VALUES (?, 'claimed', ?, ?, ?)
@@ -293,16 +297,21 @@ describe("POST /api/streams/:id/cancel Integration Tests", () => {
 
       expect(response.status).toBe(200);
       expect(response.body.data.progress.status).toBe("canceled");
-      expect(response.body.data.claimedAmount).toBe(claimedAmount);
+      // The claim event is preserved and still the only source of claimed totals.
+      expect(getClaimedTotal(racingStream.id)).toBe(claimedAmount);
 
-      // Final stored state verification
-      const stored = db.prepare("SELECT canceled_at, claimed_amount, total_amount FROM streams WHERE id = ?").get(racingStream.id);
+      // Final stored state verification — the response must mirror the commit.
+      const stored = db.prepare("SELECT canceled_at, refunded_amount, total_amount FROM streams WHERE id = ?").get(racingStream.id);
       expect(stored.canceled_at).not.toBeNull();
-      expect(stored.claimed_amount).toBe(claimedAmount);
+      expect(stored.canceled_at).toBe(response.body.data.canceledAt);
+      expect(stored.refunded_amount).toBe(response.body.data.refundedAmount);
 
-      // Refund calculation: total remaining refundable = total_amount - claimed_amount
-      const remainingRefundable = stored.total_amount - stored.claimed_amount;
-      expect(remainingRefundable).toBe(600);
+      // Refund calculation: total_amount - vested at cancel timestamp,
+      // matching the contract's settle_cancel rule.
+      expect(stored.refunded_amount).toBeGreaterThan(0);
+      expect(
+        stored.refunded_amount + response.body.data.progress.vestedAmount,
+      ).toBeCloseTo(stored.total_amount, 3);
 
       // Verify exactly one canceled event exists and event order is preserved
       const history = getStreamHistory(racingStream.id);
@@ -318,7 +327,129 @@ describe("POST /api/streams/:id/cancel Integration Tests", () => {
 
       expect(retryResponse.status).toBe(200);
       expect(retryResponse.body.data.canceledAt).toBe(stored.canceled_at);
+      expect(retryResponse.body.data.refundedAmount).toBe(stored.refunded_amount);
       expect(getStreamHistory(racingStream.id).filter(e => e.eventType === "canceled")).toHaveLength(1);
+    });
+  });
+
+  describe("Committed-state consistency (SSB-2026-098 / #1040)", () => {
+    it("returns the committed record that a subsequent read observes", async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const stream = {
+        id: "1044",
+        sender: mockSender,
+        recipient: mockRecipient,
+        asset_code: "USDC",
+        total_amount: 1000,
+        duration_seconds: 3600,
+        start_at: now - 1800,
+        created_at: now - 3600,
+      };
+      const db = getDb();
+      db.prepare(`
+        INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+        VALUES (@id, @sender, @recipient, @asset_code, @total_amount, @duration_seconds, @start_at, @created_at)
+      `).run(stream);
+
+      const cancelResponse = await request(app)
+        .post(`/api/streams/${stream.id}/cancel`)
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect(cancelResponse.status).toBe(200);
+
+      const readResponse = await request(app).get(`/api/streams/${stream.id}`);
+      expect(readResponse.status).toBe(200);
+
+      // The mutation response and the next read must agree on every committed field.
+      expect(readResponse.body.data).toMatchObject({
+        id: stream.id,
+        canceledAt: cancelResponse.body.data.canceledAt,
+        refundedAmount: cancelResponse.body.data.refundedAmount,
+        progress: cancelResponse.body.data.progress,
+      });
+
+      // Refund and vested amount partition the stream total.
+      expect(
+        cancelResponse.body.data.refundedAmount +
+          cancelResponse.body.data.progress.vestedAmount,
+      ).toBeCloseTo(stream.total_amount, 3);
+    });
+
+    it("commits exactly one cancellation when duplicate requests race", async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const stream = {
+        id: "1045",
+        sender: mockSender,
+        recipient: mockRecipient,
+        asset_code: "USDC",
+        total_amount: 1000,
+        duration_seconds: 3600,
+        start_at: now - 1800,
+        created_at: now - 3600,
+      };
+      const db = getDb();
+      db.prepare(`
+        INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+        VALUES (@id, @sender, @recipient, @asset_code, @total_amount, @duration_seconds, @start_at, @created_at)
+      `).run(stream);
+
+      const [first, second] = await Promise.all([
+        request(app)
+          .post(`/api/streams/${stream.id}/cancel`)
+          .set("Authorization", `Bearer ${authToken}`),
+        request(app)
+          .post(`/api/streams/${stream.id}/cancel`)
+          .set("Authorization", `Bearer ${authToken}`),
+      ]);
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(second.body.data.canceledAt).toBe(first.body.data.canceledAt);
+      expect(second.body.data.refundedAmount).toBe(first.body.data.refundedAmount);
+
+      const stored = db
+        .prepare("SELECT canceled_at, refunded_amount FROM streams WHERE id = ?")
+        .get(stream.id);
+      expect(stored.canceled_at).toBe(first.body.data.canceledAt);
+      expect(stored.refunded_amount).toBe(first.body.data.refundedAmount);
+      expect(
+        getStreamHistory(stream.id).filter((event) => event.eventType === "canceled"),
+      ).toHaveLength(1);
+    });
+
+    it("treats a fully claimed stream as completed and refunds nothing", async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const stream = {
+        id: "1046",
+        sender: mockSender,
+        recipient: mockRecipient,
+        asset_code: "USDC",
+        total_amount: 1000,
+        duration_seconds: 3600,
+        start_at: now - 3600,
+        created_at: now - 7200,
+      };
+      const db = getDb();
+      db.prepare(`
+        INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+        VALUES (@id, @sender, @recipient, @asset_code, @total_amount, @duration_seconds, @start_at, @created_at)
+      `).run(stream);
+      db.prepare(`
+        INSERT INTO stream_events (stream_id, event_type, timestamp, actor, amount)
+        VALUES (?, 'claimed', ?, ?, ?)
+      `).run(stream.id, now - 100, mockRecipient, stream.total_amount);
+
+      const response = await request(app)
+        .post(`/api/streams/${stream.id}/cancel`)
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.refundedAmount).toBe(0);
+      expect(response.body.data.progress.status).toBe("canceled");
+      expect(getClaimedTotal(stream.id)).toBe(stream.total_amount);
+      expect(
+        getStreamHistory(stream.id).filter((event) => event.eventType === "claimed"),
+      ).toHaveLength(1);
     });
   });
 
@@ -364,7 +495,7 @@ describe("POST /api/streams/:id/cancel Integration Tests", () => {
     it("returns a stable error and rolls back the stream update when event insertion fails", async () => {
       const now = Math.floor(Date.now() / 1000);
       const stream = {
-        id: "rollback-event-write",
+        id: "1042",
         sender: mockSender,
         recipient: mockRecipient,
         asset_code: "USDC",
@@ -401,6 +532,10 @@ describe("POST /api/streams/:id/cancel Integration Tests", () => {
           db.prepare("SELECT canceled_at FROM streams WHERE id = ?").get(stream.id)
             .canceled_at,
         ).toBeNull();
+        expect(
+          db.prepare("SELECT refunded_amount FROM streams WHERE id = ?").get(stream.id)
+            .refunded_amount,
+        ).toBeNull();
         expect(getStreamHistory(stream.id)).toHaveLength(0);
       } finally {
         db.exec("DROP TRIGGER IF EXISTS fail_canceled_event");
@@ -410,7 +545,7 @@ describe("POST /api/streams/:id/cancel Integration Tests", () => {
     it("preserves both updates and history when two writers update the same stream", async () => {
       const now = Math.floor(Date.now() / 1000);
       const stream = {
-        id: "concurrent-stream-writes",
+        id: "1043",
         sender: mockSender,
         recipient: mockRecipient,
         asset_code: "USDC",

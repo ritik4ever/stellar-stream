@@ -1863,23 +1863,15 @@ app.post(
       return;
     }
 
-    const wasAlreadyCanceled = stream.canceledAt !== undefined;
-    const now = nowInSeconds();
-    const progressBefore = calculateProgress(stream, now);
-    const wasCompleted =
-      progressBefore.status === "completed" ||
-      (stream.claimedAmount !== undefined && stream.claimedAmount >= stream.totalAmount);
-    const initialClaimedAmount = stream.claimedAmount ?? 0;
-
     try {
-      const updated = await cancelStream(parsedId.value);
-      if (!updated) {
+      const result = await cancelStream(parsedId.value);
+      if (!result) {
         emitCancelStreamSignal({
           outcome: "failure",
           detail: "Failed to update stream during cancellation.",
           isNormalEmpty: false,
           isRacingClaim: false,
-          isRepeatedCancel: wasAlreadyCanceled,
+          isRepeatedCancel: false,
           latencyMs: Date.now() - startTime,
           streamId: parsedId.value,
           sender: stream.sender,
@@ -1890,18 +1882,22 @@ app.post(
         return;
       }
 
-      const isRacingClaim = (updated.claimedAmount ?? 0) > initialClaimedAmount;
+      // SSB-2026-098 / #1040: classify from committed state, not from the
+      // pre-request snapshot, so a retry or a lost race is never reported as
+      // a change this request made.
+      const { stream: updated } = result;
+      const isRacingClaim = result.claimedAmountAfter > result.claimedAmountBefore;
 
       let outcome: CancelStreamOutcome = "success";
       let detail = "Stream cancelled successfully.";
 
-      if (wasAlreadyCanceled) {
+      if (result.wasAlreadyCanceled) {
         outcome = "already_canceled";
         detail = "Repeated cancel on an already canceled stream.";
       } else if (isRacingClaim) {
         outcome = "racing_claim";
         detail = "Cancel succeeded with racing claim settlement.";
-      } else if (wasCompleted) {
+      } else if (result.wasCompleted) {
         outcome = "already_completed";
         detail = "Cancel requested on an already completed stream.";
       }
@@ -1909,14 +1905,15 @@ app.post(
       emitCancelStreamSignal({
         outcome,
         detail,
-        isNormalEmpty: wasAlreadyCanceled || wasCompleted,
+        isNormalEmpty: result.wasAlreadyCanceled || result.wasCompleted,
         isRacingClaim,
-        isRepeatedCancel: wasAlreadyCanceled,
+        isRepeatedCancel: result.wasAlreadyCanceled,
         latencyMs: Date.now() - startTime,
         streamId: parsedId.value,
         sender: stream.sender,
         recipient: stream.recipient,
         canceledAt: updated.canceledAt,
+        refundedAmount: updated.refundedAmount,
         requestId,
       });
 
@@ -1933,7 +1930,7 @@ app.post(
         detail: error?.message || "Failed to cancel stream.",
         isNormalEmpty: false,
         isRacingClaim: false,
-        isRepeatedCancel: wasAlreadyCanceled,
+        isRepeatedCancel: false,
         latencyMs: Date.now() - startTime,
         streamId: parsedId.value,
         sender: stream.sender,

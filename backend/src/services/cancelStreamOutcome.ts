@@ -24,7 +24,7 @@ export interface CancelStreamOutcomeSignal {
   isNormalEmpty: boolean;
   /** Indicates whether a concurrent claim raced during the cancellation flow. */
   isRacingClaim: boolean;
-  /** Indicates whether this was a repeated cancellation request on an already completed/canceled stream. */
+  /** Indicates whether the committed record was already canceled when this request arrived. */
   isRepeatedCancel: boolean;
   latencyMs: number;
   streamId: string;
