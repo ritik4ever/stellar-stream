@@ -42,6 +42,7 @@ vi.mock("./metrics", () => ({
   indexerCircuitState: mockIndexerCircuitState,
   indexerEventsDedupedTotal: { inc: vi.fn() },
   indexerPollDurationMs: { set: vi.fn() },
+  indexerLastSuccessTimestampSeconds: { set: vi.fn() },
 }));
 
 // ── In-Memory SQLite DB Double ───────────────────────────────────────────────

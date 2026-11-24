@@ -23,6 +23,7 @@ vi.mock("./metrics", () => ({
   indexerCircuitState: mockIndexerCircuitState,
   indexerEventsDedupedTotal: { inc: vi.fn() },
   indexerPollDurationMs: { set: vi.fn() },
+  indexerLastSuccessTimestampSeconds: { set: vi.fn() },
 }));
 
 let db: InstanceType<typeof Database>;

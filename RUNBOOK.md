@@ -10,13 +10,15 @@ For initial production setup, refer to the **[Deployment Guide](DEPLOYMENT.md)**
 6. [Archive Old Streams Manually](#archive-old-streams-manually)
 7. [Indexer Falls Behind](#indexer-falls-behind)
 8. [Indexer Monitoring Outcome Signal](#indexer-monitoring-outcome-signal)
-9. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
-10. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
-11. [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal)
-12. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
-13. [Contract Invocation Timeout](#contract-invocation-timeout)
-14. [Docker Compose Startup Failure](#docker-compose-startup-failure)
-15. [Reconciliation Worker Outcome Signal](#reconciliation-worker-outcome-signal)
+9. [Verify Indexer Monitoring (repeatable)](#verify-indexer-monitoring-repeatable)
+10. [Verify SQLite Restore Before Start](#verify-sqlite-restore-before-start)
+11. [Webhook Dead-Letter Spike](#webhook-dead-letter-spike)
+12. [Webhook Delivery Outcome Signal](#webhook-delivery-outcome-signal)
+13. [Secrets Rotation Outcome Signal](#secrets-rotation-outcome-signal)
+14. [SQLite WAL Size Growth](#sqlite-wal-size-growth)
+15. [Contract Invocation Timeout](#contract-invocation-timeout)
+16. [Docker Compose Startup Failure](#docker-compose-startup-failure)
+17. [Reconciliation Worker Outcome Signal](#reconciliation-worker-outcome-signal)
 
 ---
 
@@ -655,6 +657,70 @@ an explicit owner action instead of raw counters.
    advances; lag alone does not raise the outcome. If lag keeps growing while
    `indexer_outcome` stays `0`, follow [Indexer Falls Behind](#indexer-falls-behind)
    remediation step 3.
+
+---
+
+### Verify Indexer Monitoring (repeatable)
+The repeatable, CI-safe verification of the two failure modes this runbook
+section cluster covers — `lag increasing while RPC is healthy` and
+`RPC rate limit or disconnection` (issue #1228):
+
+```bash
+cd backend
+npx vitest run src/services/indexer.monitoring.test.ts   # outcome classification
+npx vitest run src/services/indexer.cursorage.test.ts    # cursor age + poll path
+```
+
+The classification suite drives the outcome signal through both failure modes;
+the cursor-age suite drives the **production poll path** (`indexEvents`) against
+a programmable RPC through three scenarios — both fail on any violated
+expectation:
+
+1. **Healthy poll** — lag returns to 0, cursor age fresh, zero errors,
+   `indexer_outcome` = success.
+2. **Lag increasing while RPC is healthy** — `indexer_ledger_lag` grows across
+   polls while `getLatestLedger` keeps answering; the cursor age grows
+   (`indexer_last_success_timestamp_seconds` frozen) and `indexer_errors_total`
+   climbs.
+3. **RPC rate limit / disconnection** — the failure is classified
+   (`rate_limited` / `disconnected`, never a raw provider message), the outcome
+   escalates to `blocked` once the circuit opens, and open-circuit polls stop
+   hitting the RPC entirely.
+
+**Cursor-age alerting:** `indexer_last_success_timestamp_seconds` (unix seconds
+of the last successful poll) is published on `/metrics`. Alert when
+`now - indexer_last_success_timestamp_seconds` exceeds a few poll intervals —
+it distinguishes a stalled indexer (timestamp frozen, lag gauges may look
+normal) from a healthy one (timestamp refreshes every successful poll).
+
+---
+
+### Verify SQLite Restore Before Start
+Run **before** starting the backend on a restored `streams.db` (issue #1221).
+The verifier is read-only — it never migrates or repairs — so a failing check
+means the operator decides deliberately instead of startup silently catching
+the schema up (a partial rollout):
+
+```bash
+cd backend
+npx ts-node --transpile-only src/services/restoreVerify.ts [path/to/streams.db]
+```
+
+Omitting the path verifies `DB_PATH` (or the default `backend/data/streams.db`).
+Checks, in order — the first failure exits non-zero:
+
+| Check | PASS means |
+| --- | --- |
+| `file_exists` | the restored file is present |
+| `sqlite_open` / `integrity_check` | a sound SQLite database (`PRAGMA integrity_check` = ok) |
+| `schema_version` | restored schema matches this build's migrations, using the same `success` / `transient_delay` / `blocked` classification as the live `sqlite_restore_outcome` signal — `transient_delay` (backup older than code) still FAILs here so migration is a deliberate operator step |
+| `row_counts` | `streams=N stream_events=M` readable, to compare against the backup manifest |
+| `indexer_cursor` | the poller will resume from the restore point, never rewind (missing row → FAIL with the fix) |
+
+All lines `PASS` → start the backend. Any `FAIL` → error messages carry paths,
+versions and counts only (never file contents or credentials); see
+[Force Indexer Reconcile](#force-indexer-reconcile) to set a missing cursor and
+[Reset SQLite Database](#reset-sqlite-database) to start from scratch.
 
 ---
 

@@ -44,6 +44,12 @@ export const indexerCircuitState = new Gauge({
   registers: [register],
 });
 
+export const indexerLastSuccessTimestampSeconds = new Gauge({
+  name: "indexer_last_success_timestamp_seconds",
+  help: "Unix seconds of the last indexer poll that completed successfully. A growing now - this value is the cursor age: it distinguishes a stalled indexer (timestamp frozen) from a healthy one even when lag gauges reset between polls (issue #1228)",
+  registers: [register],
+});
+
 export const webhookQueuePending = new Gauge({
   name: "webhook_queue_pending",
   help: "Webhook deliveries currently queued (not yet successful or dead-lettered)",
