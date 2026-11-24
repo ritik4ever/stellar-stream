@@ -53,7 +53,7 @@ The signal payload guarantees strict zero-secret compliance:
 
 1. **Request Correlation**: Operators can trace cancellations end-to-end using the `requestId` from the `x-request-id` or `x-correlation-id` HTTP request headers.
 2. **Stream Lifecycle Correlation**: All signals include `streamId` allowing operators to cross-reference with event history and stream audit trails.
-3. **Idempotency vs Failure**: Repeated cancellations on completed or already-canceled streams set `isNormalEmpty: true` and `isRepeatedCancel: true`, preventing false-positive alert pages on routine user retries.
+3. **Idempotency vs Failure**: Cancellations of completed streams and repeated cancellations of already-canceled streams set `isNormalEmpty: true`. Only a request whose committed record was already canceled sets `isRepeatedCancel: true`; the first cancel of a completed stream reports `already_completed` with `isRepeatedCancel: false`. Both prevent false-positive alert pages on routine user retries.
 
 ---
 

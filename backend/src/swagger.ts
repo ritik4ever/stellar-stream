@@ -1817,7 +1817,10 @@ export const swaggerDocument = {
     "/api/streams/{id}/cancel": {
       post: {
         summary: "Cancel a Stream",
-        description: "Cancels an active stream by its ID.",
+        description:
+          "Cancels a stream by its ID. Cancellation is terminal and idempotent: the first committed call sets `canceledAt` and persists `refundedAmount = totalAmount - vestedAmount at the cancel timestamp`, the same rule the Soroban `cancel` entry point settles. Claimed amounts recorded in stream history are preserved. " +
+          "If the stream is already canceled, the endpoint returns 200 with the committed record unchanged and writes no duplicate event. A completed stream remains cancellable per the documented behavior: `completedAt` is retained, the final `progress.status` is `canceled`, and the refund is 0 because nothing remains unvested. " +
+          "The `data` object always mirrors committed state; when the request fails, no cancellation or refund is committed.",
         parameters: [
           {
             name: "id",
@@ -1845,6 +1848,16 @@ export const swaggerDocument = {
               },
             },
           },
+          "403": {
+            description: "Only the stream sender may cancel it.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
           "404": {
             description: "Stream not found.",
             content: {
@@ -1856,7 +1869,7 @@ export const swaggerDocument = {
             },
           },
           "500": {
-            description: "Failed to cancel stream.",
+            description: "Failed to cancel stream; no state change is committed.",
             content: {
               "application/json": {
                 schema: {

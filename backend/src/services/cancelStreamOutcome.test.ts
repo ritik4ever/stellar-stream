@@ -13,7 +13,7 @@ const mockSender = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 const mockRecipient = "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 
 const activeStream = {
-  id: "stream-cancel-001",
+  id: "1001",
   sender: mockSender,
   recipient: mockRecipient,
   assetCode: "USDC",
@@ -25,7 +25,7 @@ const activeStream = {
 };
 
 const completedStream = {
-  id: "stream-cancel-002",
+  id: "1002",
   sender: mockSender,
   recipient: mockRecipient,
   assetCode: "USDC",
@@ -37,7 +37,7 @@ const completedStream = {
 };
 
 const alreadyCanceledStream = {
-  id: "stream-cancel-003",
+  id: "1003",
   sender: mockSender,
   recipient: mockRecipient,
   assetCode: "USDC",
@@ -49,7 +49,30 @@ const alreadyCanceledStream = {
   canceledAt: 1700001000,
 };
 
+function cancelResult(
+  stream: Record<string, any>,
+  overrides: Partial<{
+    changed: boolean;
+    wasAlreadyCanceled: boolean;
+    wasCompleted: boolean;
+    claimedAmountBefore: number;
+    claimedAmountAfter: number;
+  }> = {},
+) {
+  return {
+    stream,
+    changed: true,
+    wasAlreadyCanceled: false,
+    wasCompleted: false,
+    claimedAmountBefore: 0,
+    claimedAmountAfter: 0,
+    ...overrides,
+  };
+}
+
 const streamStoreMocks = vi.hoisted(() => ({
+  MIN_COMPARE_STREAMS: 2,
+  MAX_COMPARE_STREAMS: 5,
   calculateProgress: vi.fn((stream: any) => ({
     status: stream.claimedAmount >= stream.totalAmount ? "completed" : stream.canceledAt ? "canceled" : "active",
     ratePerSecond: 1.0,
@@ -99,6 +122,9 @@ vi.mock("./auth", () => ({
   adminJwtAuth: vi.fn((req: any, res: any, next: any) => next()),
   generateToken: vi.fn(() => "mock_token"),
   verifyToken: vi.fn(() => ({ accountId: mockSender })),
+  generateChallenge: vi.fn(),
+  refreshToken: vi.fn((req: any, res: any, next: any) => next()),
+  verifyChallengeAndIssueToken: vi.fn(),
   getJwtSecret: vi.fn(() => "test_secret"),
 }));
 vi.mock("./indexer", () => ({
@@ -179,20 +205,19 @@ describe("Cancel Stream Actionable Signals & Observability (SSB-2026-099 / #1041
   describe("POST /api/streams/:id/cancel Signal Integration", () => {
     it("emits success signal when cancelling an active stream", async () => {
       streamStoreMocks.getStream.mockReturnValue({ ...activeStream });
-      streamStoreMocks.cancelStream.mockResolvedValue({
-        ...activeStream,
-        canceledAt: 1700002000,
-      });
+      streamStoreMocks.cancelStream.mockResolvedValue(
+        cancelResult({ ...activeStream, canceledAt: 1700002000 }),
+      );
 
       const res = await request(app)
-        .post("/api/streams/stream-cancel-001/cancel")
+        .post("/api/streams/1001/cancel")
         .set("x-request-id", "req-cancel-active");
 
       expect(res.status).toBe(200);
       const signal = getLastPublishedCancelStreamSignal();
       expect(signal).not.toBeNull();
       expect(signal?.outcome).toBe("success");
-      expect(signal?.streamId).toBe("stream-cancel-001");
+      expect(signal?.streamId).toBe("1001");
       expect(signal?.requestId).toBe("req-cancel-active");
       expect(signal?.isRepeatedCancel).toBe(false);
       expect(signal?.isRacingClaim).toBe(false);
@@ -200,10 +225,20 @@ describe("Cancel Stream Actionable Signals & Observability (SSB-2026-099 / #1041
 
     it("emits already_canceled signal when repeatedly cancelling an already canceled stream", async () => {
       streamStoreMocks.getStream.mockReturnValue({ ...alreadyCanceledStream });
-      streamStoreMocks.cancelStream.mockResolvedValue({ ...alreadyCanceledStream });
+      streamStoreMocks.cancelStream.mockResolvedValue(
+        cancelResult(
+          { ...alreadyCanceledStream },
+          {
+            changed: false,
+            wasAlreadyCanceled: true,
+            claimedAmountBefore: 200,
+            claimedAmountAfter: 200,
+          },
+        ),
+      );
 
       const res = await request(app)
-        .post("/api/streams/stream-cancel-003/cancel")
+        .post("/api/streams/1003/cancel")
         .set("x-correlation-id", "corr-repeat-cancel");
 
       expect(res.status).toBe(200);
@@ -212,18 +247,20 @@ describe("Cancel Stream Actionable Signals & Observability (SSB-2026-099 / #1041
       expect(signal?.outcome).toBe("already_canceled");
       expect(signal?.isRepeatedCancel).toBe(true);
       expect(signal?.isNormalEmpty).toBe(true);
-      expect(signal?.streamId).toBe("stream-cancel-003");
+      expect(signal?.streamId).toBe("1003");
     });
 
     it("emits already_completed signal when cancelling a completed stream", async () => {
       streamStoreMocks.getStream.mockReturnValue({ ...completedStream });
-      streamStoreMocks.cancelStream.mockResolvedValue({
-        ...completedStream,
-        canceledAt: 1700002000,
-      });
+      streamStoreMocks.cancelStream.mockResolvedValue(
+        cancelResult(
+          { ...completedStream, canceledAt: 1700002000 },
+          { wasCompleted: true },
+        ),
+      );
 
       const res = await request(app)
-        .post("/api/streams/stream-cancel-002/cancel");
+        .post("/api/streams/1002/cancel");
 
       expect(res.status).toBe(200);
       const signal = getLastPublishedCancelStreamSignal();
@@ -233,15 +270,16 @@ describe("Cancel Stream Actionable Signals & Observability (SSB-2026-099 / #1041
     });
 
     it("emits racing_claim signal when claimed amount advances during cancellation", async () => {
-      streamStoreMocks.getStream.mockReturnValue({ ...activeStream, claimedAmount: 100 });
-      streamStoreMocks.cancelStream.mockResolvedValue({
-        ...activeStream,
-        claimedAmount: 400, // Claim advanced concurrently
-        canceledAt: 1700002000,
-      });
+      streamStoreMocks.getStream.mockReturnValue({ ...activeStream });
+      streamStoreMocks.cancelStream.mockResolvedValue(
+        cancelResult(
+          { ...activeStream, canceledAt: 1700002000 },
+          { claimedAmountBefore: 100, claimedAmountAfter: 400 },
+        ),
+      );
 
       const res = await request(app)
-        .post("/api/streams/stream-cancel-001/cancel");
+        .post("/api/streams/1001/cancel");
 
       expect(res.status).toBe(200);
       const signal = getLastPublishedCancelStreamSignal();
@@ -255,7 +293,7 @@ describe("Cancel Stream Actionable Signals & Observability (SSB-2026-099 / #1041
       streamStoreMocks.cancelStream.mockRejectedValue(new Error("Database transaction deadlock"));
 
       const res = await request(app)
-        .post("/api/streams/stream-cancel-001/cancel")
+        .post("/api/streams/1001/cancel")
         .set("x-request-id", "req-fail-deadlock");
 
       expect(res.status).toBe(500);

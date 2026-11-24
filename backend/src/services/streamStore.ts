@@ -1469,12 +1469,64 @@ function mutateStreamAndEvent(
   }
 }
 
+export interface CancelStreamResult {
+  /** Committed record after the call. Always reflects stored state. */
+  stream: StreamRecord;
+  /** True only when this call wrote `canceled_at`. False for idempotent replays. */
+  changed: boolean;
+  /** The committed record was already canceled before this call. */
+  wasAlreadyCanceled: boolean;
+  /** The stream was already final (completed or fully claimed) when cancel committed. */
+  wasCompleted: boolean;
+  /** Claimed total derived from the event log before the cancel flow started. */
+  claimedAmountBefore: number;
+  /** Claimed total derived from the event log when cancel committed. */
+  claimedAmountAfter: number;
+}
+
+/**
+ * Completion is a property of the stream itself, not of the cancel flag.
+ * `completed_at`, a fully claimed balance, or an elapsed duration all make a
+ * stream final, matching the status returned by `calculateProgress`.
+ */
+function wasCompletedAt(
+  stream: StreamRecord,
+  at: number,
+  claimedAmount: number,
+): boolean {
+  if (stream.completedAt !== undefined) {
+    return true;
+  }
+  if (claimedAmount >= stream.totalAmount) {
+    return true;
+  }
+  // Ignore the cancel flag so an already-canceled replay can still be
+  // classified as having been completed when it was canceled.
+  return computeStatus({ ...stream, canceledAt: undefined }, at) === "completed";
+}
+
 export async function cancelStream(
   id: string,
-): Promise<StreamRecord | undefined> {
+): Promise<CancelStreamResult | undefined> {
   const existingStream = getStream(id);
-  if (!existingStream || existingStream.canceledAt !== undefined) {
-    return existingStream;
+  if (!existingStream) {
+    return undefined;
+  }
+
+  const claimedAmountBefore = getClaimedTotal(id);
+  if (existingStream.canceledAt !== undefined) {
+    return {
+      stream: existingStream,
+      changed: false,
+      wasAlreadyCanceled: true,
+      wasCompleted: wasCompletedAt(
+        existingStream,
+        existingStream.canceledAt,
+        claimedAmountBefore,
+      ),
+      claimedAmountBefore,
+      claimedAmountAfter: claimedAmountBefore,
+    };
   }
 
   let refundedAmount: number | undefined;
@@ -1526,14 +1578,30 @@ export async function cancelStream(
   }
 
   const canceledAt = nowInSeconds();
+  let claimedAmountAfter = claimedAmountBefore;
+  let wasCompleted = false;
+
   const result = mutateStreamAndEvent(id, (stream) => {
+    // Re-read committed state under the writer lock so a concurrent cancel
+    // cannot be reported as a change this request made.
     if (stream.canceledAt !== undefined) {
+      claimedAmountAfter = getClaimedTotal(id);
       return undefined;
     }
+    claimedAmountAfter = getClaimedTotal(id);
+    wasCompleted = wasCompletedAt(stream, canceledAt, claimedAmountAfter);
     stream.canceledAt = canceledAt;
-    if (refundedAmount !== undefined) {
-      stream.refundedAmount = refundedAmount;
-    }
+    // SSB-2026-098 / #1040: persist the same refund the contract settles —
+    // everything not vested at the cancel timestamp. The on-chain return value
+    // is authoritative when a contract cancellation actually settled.
+    stream.refundedAmount =
+      refundedAmount ??
+      round(
+        Math.max(
+          0,
+          stream.totalAmount - calculateProgress(stream, canceledAt).vestedAmount,
+        ),
+      );
     return {
       eventType: "canceled",
       timestamp: canceledAt,
@@ -1541,7 +1609,18 @@ export async function cancelStream(
     };
   });
   if (!result.changed) {
-    return result.stream;
+    return {
+      stream: result.stream,
+      changed: false,
+      wasAlreadyCanceled: true,
+      wasCompleted: wasCompletedAt(
+        result.stream,
+        result.stream.canceledAt ?? canceledAt,
+        claimedAmountAfter,
+      ),
+      claimedAmountBefore,
+      claimedAmountAfter,
+    };
   }
 
   const stream = result.stream;
@@ -1552,7 +1631,14 @@ export async function cancelStream(
   resetStreamMetricsCache();
 
   triggerWebhook("canceled", stream);
-  return stream;
+  return {
+    stream,
+    changed: true,
+    wasAlreadyCanceled: false,
+    wasCompleted,
+    claimedAmountBefore,
+    claimedAmountAfter,
+  };
 }
 
 export async function pauseStream(id: string): Promise<StreamRecord> {
