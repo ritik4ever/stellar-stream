@@ -1,0 +1,134 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`VestingBar snapshots > matches snapshot for active partial vesting 1`] = `
+<div
+  class="vesting-bar"
+  data-testid="vesting-bar"
+>
+  <div
+    class="vesting-bar__header"
+  >
+    <span
+      class="vesting-bar__percent"
+    >
+      50.00
+      %
+    </span>
+    <span
+      class="vesting-bar__amounts muted"
+    >
+      500
+       / 
+      1000
+       
+      USDC
+       vested
+    </span>
+    <span
+      class="badge badge-active"
+    >
+      active
+    </span>
+  </div>
+  <div
+    aria-label="Vesting progress"
+    aria-valuemax="100"
+    aria-valuemin="0"
+    aria-valuenow="50"
+    aria-valuetext="50% complete, 500 USDC vested, 500 USDC remaining"
+    class="progress-bar"
+    role="progressbar"
+  >
+    <div
+      style="width: 50%;"
+    />
+  </div>
+</div>
+`;
+
+exports[`VestingBar snapshots > matches snapshot for completed vesting 1`] = `
+<div
+  class="vesting-bar"
+  data-testid="vesting-bar"
+>
+  <div
+    class="vesting-bar__header"
+  >
+    <span
+      class="vesting-bar__percent"
+    >
+      100.00
+      %
+    </span>
+    <span
+      class="vesting-bar__amounts muted"
+    >
+      1000
+       / 
+      1000
+       
+      XLM
+       vested
+    </span>
+    <span
+      class="badge badge-completed"
+    >
+      completed
+    </span>
+  </div>
+  <div
+    aria-label="Vesting progress"
+    aria-valuemax="100"
+    aria-valuemin="0"
+    aria-valuenow="100"
+    aria-valuetext="100% complete, 1000 XLM vested, 0 XLM remaining"
+    class="progress-bar"
+    role="progressbar"
+  >
+    <div
+      style="width: 100%;"
+    />
+  </div>
+</div>
+`;
+
+exports[`VestingBar snapshots > matches snapshot with clamped out-of-range percentages 1`] = `
+<div>
+  <div
+    class="vesting-bar"
+    data-testid="vesting-bar"
+  >
+    <div
+      aria-label="Underflow bar"
+      aria-valuemax="100"
+      aria-valuemin="0"
+      aria-valuenow="0"
+      aria-valuetext="0% complete"
+      class="progress-bar"
+      role="progressbar"
+    >
+      <div
+        style="width: 0%;"
+      />
+    </div>
+  </div>
+  <div
+    class="vesting-bar"
+    data-testid="vesting-bar"
+  >
+    <div
+      aria-label="Overflow bar"
+      aria-valuemax="100"
+      aria-valuemin="0"
+      aria-valuenow="100"
+      aria-valuetext="100% complete"
+      class="progress-bar"
+      role="progressbar"
+    >
+      <div
+        style="width: 100%;"
+      />
+    </div>
+  </div>
+</div>
+`;

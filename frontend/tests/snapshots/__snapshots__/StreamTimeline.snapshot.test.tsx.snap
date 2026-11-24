@@ -1,0 +1,343 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`StreamTimeline snapshots > matches snapshot for empty global event feed 1`] = `
+<div
+  class="activity-empty"
+>
+  <span
+    aria-hidden="true"
+    class="activity-empty-icon"
+  >
+    --
+  </span>
+  <p>
+    No activity to show yet.
+  </p>
+</div>
+`;
+
+exports[`StreamTimeline snapshots > matches snapshot for error state 1`] = `
+<div
+  class="activity-error"
+  data-testid="timeline-error-state"
+  role="alert"
+>
+  <h3
+    data-testid="timeline-error-title"
+  >
+    Unable to load activity
+  </h3>
+  <p
+    data-testid="timeline-error-message"
+  >
+    Network error
+  </p>
+  <div
+    style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem; flex-wrap: wrap;"
+  >
+    <button
+      class="retry-btn"
+      data-testid="timeline-retry-btn"
+      style="min-height: 44px; min-width: 44px;"
+      type="button"
+    >
+      Try again
+    </button>
+  </div>
+</div>
+`;
+
+exports[`StreamTimeline snapshots > matches snapshot for stream history events 1`] = `
+<div
+  aria-label="Stream event timeline"
+  class="activity-feed"
+  data-testid="timeline-activity-feed"
+  role="feed"
+  style="max-width: 100%; overflow-x: hidden;"
+>
+  <div
+    aria-atomic="true"
+    aria-live="polite"
+    class="sr-only"
+    data-testid="timeline-a11y-announcer"
+    role="status"
+  >
+    Showing 3 events.
+  </div>
+  <div
+    aria-label="Filter events by type"
+    class="flex flex-wrap gap-2 items-center p-3 bg-white border border-gray-200 rounded-lg"
+    data-testid="timeline-filter-bar"
+    role="group"
+    style="max-width: 100%; flex-wrap: wrap; gap: 0.5rem;"
+  >
+    <span
+      class="text-sm font-medium text-gray-700"
+      style="word-break: break-word;"
+    >
+      Filter by:
+    </span>
+    <button
+      aria-label="Filter by Created"
+      aria-pressed="false"
+      class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200"
+      data-testid="filter-btn-created"
+      style="min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center;"
+    >
+      Created
+    </button>
+    <button
+      aria-label="Filter by Claimed"
+      aria-pressed="false"
+      class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200"
+      data-testid="filter-btn-claimed"
+      style="min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center;"
+    >
+      Claimed
+    </button>
+    <button
+      aria-label="Filter by Canceled"
+      aria-pressed="false"
+      class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200"
+      data-testid="filter-btn-canceled"
+      style="min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center;"
+    >
+      Canceled
+    </button>
+    <button
+      aria-label="Filter by Start Time Updated"
+      aria-pressed="false"
+      class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200"
+      data-testid="filter-btn-start_time_updated"
+      style="min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center;"
+    >
+      Start Time Updated
+    </button>
+    <button
+      aria-label="Filter by Paused"
+      aria-pressed="false"
+      class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200"
+      data-testid="filter-btn-paused"
+      style="min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center;"
+    >
+      Paused
+    </button>
+    <button
+      aria-label="Filter by Resumed"
+      aria-pressed="false"
+      class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors bg-gray-100 text-gray-700 hover:bg-gray-200"
+      data-testid="filter-btn-resumed"
+      style="min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center;"
+    >
+      Resumed
+    </button>
+  </div>
+  <article
+    aria-labelledby="event-title-1"
+    aria-posinset="1"
+    aria-setsize="3"
+    class="activity-item"
+    data-testid="activity-item-1"
+    style="min-width: 0; max-width: 100%; overflow-wrap: break-word;"
+    tabindex="0"
+  >
+    <div
+      aria-hidden="true"
+      class="activity-icon"
+    >
+      🚀
+    </div>
+    <div
+      class="activity-content"
+      style="min-width: 0; max-width: 100%; word-break: break-word; flex-grow: 1; flex-shrink: 1; flex-basis: 0%;"
+    >
+      <div
+        style="display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; min-width: 0; max-width: 100%;"
+      >
+        <p
+          class="activity-title"
+          id="event-title-1"
+          style="margin: 0px; word-break: break-word;"
+        >
+          Stream created
+        </p>
+      </div>
+      <div
+        class="activity-meta"
+        style="flex-wrap: wrap; gap: 0.5rem;"
+      >
+        <span>
+          2h ago
+        </span>
+      </div>
+      <div
+        class="muted"
+        style="margin-top: 0.35rem; word-break: break-word; overflow-wrap: anywhere;"
+      >
+        Initiated by GSENDE...6789 for 1000 tokens
+      </div>
+      <div
+        style="margin-top: 0.5rem; max-width: 100%; overflow-x: hidden;"
+      >
+        <div
+          class="copyable-address"
+          style="display: inline-flex; align-items: center; gap: 0.4rem;"
+        >
+          <span
+            class="truncate-address"
+            title="GSENDER1234567890123456789012345678901234567890123456789"
+          >
+            GSENDER1...
+          </span>
+          <button
+            class="btn-ghost copyable-address__copy"
+            style="padding: 0.15rem 0.35rem; font-size: 0.75rem; min-height: 44px; line-height: 1;"
+            title="Copy address"
+            type="button"
+          >
+            📋
+          </button>
+        </div>
+      </div>
+    </div>
+  </article>
+  <article
+    aria-labelledby="event-title-2"
+    aria-posinset="2"
+    aria-setsize="3"
+    class="activity-item"
+    data-testid="activity-item-2"
+    style="min-width: 0; max-width: 100%; overflow-wrap: break-word;"
+    tabindex="0"
+  >
+    <div
+      aria-hidden="true"
+      class="activity-icon"
+    >
+      💸
+    </div>
+    <div
+      class="activity-content"
+      style="min-width: 0; max-width: 100%; word-break: break-word; flex-grow: 1; flex-shrink: 1; flex-basis: 0%;"
+    >
+      <div
+        style="display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; min-width: 0; max-width: 100%;"
+      >
+        <p
+          class="activity-title"
+          id="event-title-2"
+          style="margin: 0px; word-break: break-word;"
+        >
+          Stream claimed
+        </p>
+      </div>
+      <div
+        class="activity-meta"
+        style="flex-wrap: wrap; gap: 0.5rem;"
+      >
+        <span>
+          1h ago
+        </span>
+      </div>
+      <div
+        class="muted"
+        style="margin-top: 0.35rem; word-break: break-word; overflow-wrap: anywhere;"
+      >
+        Claim of 250 tokens processed by GRECIP...2345
+      </div>
+      <div
+        style="margin-top: 0.5rem; max-width: 100%; overflow-x: hidden;"
+      >
+        <div
+          class="copyable-address"
+          style="display: inline-flex; align-items: center; gap: 0.4rem;"
+        >
+          <span
+            class="truncate-address"
+            title="GRECIPIENT123456789012345678901234567890123456789012345"
+          >
+            GRECIPIE...
+          </span>
+          <button
+            class="btn-ghost copyable-address__copy"
+            style="padding: 0.15rem 0.35rem; font-size: 0.75rem; min-height: 44px; line-height: 1;"
+            title="Copy address"
+            type="button"
+          >
+            📋
+          </button>
+        </div>
+      </div>
+    </div>
+  </article>
+  <article
+    aria-labelledby="event-title-3"
+    aria-posinset="3"
+    aria-setsize="3"
+    class="activity-item"
+    data-testid="activity-item-3"
+    style="min-width: 0; max-width: 100%; overflow-wrap: break-word;"
+    tabindex="0"
+  >
+    <div
+      aria-hidden="true"
+      class="activity-icon"
+    >
+      ⏸️
+    </div>
+    <div
+      class="activity-content"
+      style="min-width: 0; max-width: 100%; word-break: break-word; flex-grow: 1; flex-shrink: 1; flex-basis: 0%;"
+    >
+      <div
+        style="display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; min-width: 0; max-width: 100%;"
+      >
+        <p
+          class="activity-title"
+          id="event-title-3"
+          style="margin: 0px; word-break: break-word;"
+        >
+          Stream paused
+        </p>
+      </div>
+      <div
+        class="activity-meta"
+        style="flex-wrap: wrap; gap: 0.5rem;"
+      >
+        <span>
+          46m ago
+        </span>
+      </div>
+      <div
+        class="muted"
+        style="margin-top: 0.35rem; word-break: break-word; overflow-wrap: anywhere;"
+      >
+        Stream paused by GSENDE...6789
+      </div>
+      <div
+        style="margin-top: 0.5rem; max-width: 100%; overflow-x: hidden;"
+      >
+        <div
+          class="copyable-address"
+          style="display: inline-flex; align-items: center; gap: 0.4rem;"
+        >
+          <span
+            class="truncate-address"
+            title="GSENDER1234567890123456789012345678901234567890123456789"
+          >
+            GSENDER1...
+          </span>
+          <button
+            class="btn-ghost copyable-address__copy"
+            style="padding: 0.15rem 0.35rem; font-size: 0.75rem; min-height: 44px; line-height: 1;"
+            title="Copy address"
+            type="button"
+          >
+            📋
+          </button>
+        </div>
+      </div>
+    </div>
+  </article>
+</div>
+`;

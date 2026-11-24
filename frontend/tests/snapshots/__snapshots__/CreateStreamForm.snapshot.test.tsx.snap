@@ -1,0 +1,621 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`CreateStreamForm snapshots > matches snapshot in default state with connected wallet 1`] = `
+<form
+  novalidate=""
+>
+  <div
+    class="field-group"
+    style="margin-bottom: 1.5rem;"
+  >
+    <label
+      style="margin-bottom: 0.5rem; display: block;"
+    >
+      Stream Type
+    </label>
+    <div
+      style="display: flex; gap: 0.5rem;"
+    >
+      <button
+        aria-pressed="true"
+        class="btn-primary"
+        type="button"
+      >
+        Single Recipient
+      </button>
+      <button
+        aria-pressed="false"
+        class="btn-ghost"
+        type="button"
+      >
+        Split Stream
+      </button>
+    </div>
+  </div>
+  <div
+    class="field-group field-group--error"
+  >
+    <label
+      for="stream-sender"
+    >
+      Sender Account
+      <span
+        aria-hidden="true"
+        class="field-required"
+      >
+        *
+      </span>
+    </label>
+    <input
+      aria-describedby="sender-error"
+      aria-invalid="true"
+      autocomplete="off"
+      id="stream-sender"
+      placeholder="G… (56-character Stellar public key)"
+      spellcheck="false"
+      type="text"
+      value=""
+    />
+    <span
+      class="field-error"
+      id="sender-error"
+      role="alert"
+    >
+      Sender account is required.
+    </span>
+  </div>
+  <div
+    class="field-group field-group--error"
+  >
+    <label
+      for="stream-recipient"
+    >
+      Recipient Account
+      <span
+        aria-hidden="true"
+        class="field-required"
+      >
+        *
+      </span>
+    </label>
+    <input
+      aria-describedby="recipient-error"
+      aria-invalid="true"
+      autocomplete="off"
+      id="stream-recipient"
+      placeholder="G… (56-character Stellar public key)"
+      spellcheck="false"
+      type="text"
+      value=""
+    />
+    <span
+      class="field-error"
+      id="recipient-error"
+      role="alert"
+    >
+      Account ID is required.
+    </span>
+  </div>
+  <div
+    class="row"
+  >
+    <div
+      class="field-group"
+    >
+      <div
+        style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.35rem;"
+      >
+        <label
+          for="stream-asset"
+        >
+          Asset Code
+          <span
+            aria-hidden="true"
+            class="field-required"
+          >
+            *
+          </span>
+        </label>
+      </div>
+      <select
+        aria-describedby="asset-hint"
+        aria-invalid="false"
+        id="stream-asset"
+        required=""
+        style="min-height: 44px; width: 100%; max-width: 100%; box-sizing: border-box;"
+      >
+        <option
+          value="USDC"
+        >
+          USDC
+        </option>
+        <option
+          value="XLM"
+        >
+          XLM
+        </option>
+      </select>
+      <span
+        aria-live="polite"
+        class="field-hint"
+        id="asset-hint"
+        role="status"
+        style="word-break: break-all; overflow-wrap: anywhere; display: block;"
+      >
+        Selected asset: 
+        USDC
+      </span>
+    </div>
+    <div
+      class="field-group"
+    >
+      <label
+        for="stream-amount"
+      >
+        Total Amount
+        <span
+          aria-hidden="true"
+          class="field-required"
+        >
+          *
+        </span>
+      </label>
+      <input
+        aria-describedby="amount-hint"
+        aria-invalid="false"
+        id="stream-amount"
+        min="0.000001"
+        required=""
+        step="0.000001"
+        style="min-height: 44px;"
+        type="number"
+        value="150"
+      />
+      <span
+        aria-live="polite"
+        class="field-hint"
+        id="amount-hint"
+      >
+        Enter a positive number
+      </span>
+    </div>
+  </div>
+  <div
+    class="row"
+  >
+    <div
+      class="field-group"
+    >
+      <label
+        for="stream-duration"
+      >
+        Duration (minutes)
+        <span
+          aria-hidden="true"
+          class="field-required"
+        >
+          *
+        </span>
+      </label>
+      <input
+        aria-describedby="duration-hint"
+        aria-invalid="false"
+        id="stream-duration"
+        min="1"
+        required=""
+        step="1"
+        type="number"
+        value="1440"
+      />
+      <span
+        aria-live="polite"
+        class="field-hint"
+        id="duration-hint"
+      >
+        Starts immediately (current minute) · Ends: Nov 15, 2023 at 22:13 UTC
+      </span>
+    </div>
+    <div
+      class="field-group"
+    >
+      <label
+        for="stream-start"
+      >
+        Start In (minutes)
+        <span
+          aria-hidden="true"
+          class="field-required"
+        >
+          *
+        </span>
+      </label>
+      <input
+        aria-describedby="start-hint"
+        aria-invalid="false"
+        id="stream-start"
+        min="0"
+        required=""
+        step="1"
+        type="number"
+        value="0"
+      />
+      <span
+        class="field-hint"
+        id="start-hint"
+      >
+        Enter 0 to start immediately
+      </span>
+    </div>
+  </div>
+  <div
+    class="field-group"
+  >
+    <label
+      for="stream-cliff"
+    >
+      Cliff Period (days)
+    </label>
+    <input
+      aria-describedby="cliff-hint"
+      aria-invalid="false"
+      id="stream-cliff"
+      min="0"
+      step="1"
+      type="number"
+      value="0"
+    />
+    <span
+      class="field-hint"
+      id="cliff-hint"
+    >
+      Optional. No tokens vest before the cliff elapses.
+    </span>
+  </div>
+  <div
+    aria-live="polite"
+    class="field-hint schedule-preview-box"
+    data-testid="schedule-preview"
+    role="status"
+    style="margin-top: -0.5rem; margin-bottom: 1rem; color: var(--color-success-text, #2e7d32); font-weight: 500; overflow-wrap: anywhere; word-break: break-word;"
+  >
+    <span
+      class="schedule-boundary-tag schedule-boundary-tag--immediate"
+      data-testid="boundary-current-minute"
+      style="display: inline-block; padding: 2px 8px; margin-right: 6px; font-size: 0.8rem; border-radius: 4px; background: rgba(46, 125, 50, 0.12); color: #2e7d32;"
+    >
+      Current-minute boundary
+    </span>
+    Starts immediately (current minute) · Ends: Nov 15, 2023 at 22:13 UTC
+  </div>
+  <div
+    style="display: flex; gap: 1rem; align-items: center; margin-top: 1rem; flex-wrap: wrap;"
+  >
+    <button
+      aria-busy="false"
+      class="btn-primary create-stream-submit-btn"
+      disabled=""
+      style="min-height: 44px;"
+      type="submit"
+    >
+      Create Stream
+    </button>
+  </div>
+</form>
+`;
+
+exports[`CreateStreamForm snapshots > matches snapshot when API error is displayed 1`] = `
+<form
+  novalidate=""
+>
+  <div
+    class="api-error-box"
+  >
+    <div
+      class="api-error-box__title"
+    >
+      Insufficient or stale balance
+    </div>
+    <div
+      class="api-error-box__hint"
+    >
+      The sender's balance may be stale or too low. Refresh your wallet, confirm the available balance, and try again.
+    </div>
+  </div>
+  <div
+    class="field-group"
+    style="margin-bottom: 1.5rem;"
+  >
+    <label
+      style="margin-bottom: 0.5rem; display: block;"
+    >
+      Stream Type
+    </label>
+    <div
+      style="display: flex; gap: 0.5rem;"
+    >
+      <button
+        aria-pressed="true"
+        class="btn-primary"
+        type="button"
+      >
+        Single Recipient
+      </button>
+      <button
+        aria-pressed="false"
+        class="btn-ghost"
+        type="button"
+      >
+        Split Stream
+      </button>
+    </div>
+  </div>
+  <div
+    class="field-group field-group--error"
+  >
+    <label
+      for="stream-sender"
+    >
+      Sender Account
+      <span
+        aria-hidden="true"
+        class="field-required"
+      >
+        *
+      </span>
+    </label>
+    <input
+      aria-describedby="sender-error"
+      aria-invalid="true"
+      autocomplete="off"
+      id="stream-sender"
+      placeholder="G… (56-character Stellar public key)"
+      spellcheck="false"
+      type="text"
+      value=""
+    />
+    <span
+      class="field-error"
+      id="sender-error"
+      role="alert"
+    >
+      Sender account is required.
+    </span>
+  </div>
+  <div
+    class="field-group field-group--error"
+  >
+    <label
+      for="stream-recipient"
+    >
+      Recipient Account
+      <span
+        aria-hidden="true"
+        class="field-required"
+      >
+        *
+      </span>
+    </label>
+    <input
+      aria-describedby="recipient-error"
+      aria-invalid="true"
+      autocomplete="off"
+      id="stream-recipient"
+      placeholder="G… (56-character Stellar public key)"
+      spellcheck="false"
+      type="text"
+      value=""
+    />
+    <span
+      class="field-error"
+      id="recipient-error"
+      role="alert"
+    >
+      Account ID is required.
+    </span>
+  </div>
+  <div
+    class="row"
+  >
+    <div
+      class="field-group"
+    >
+      <div
+        style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.35rem;"
+      >
+        <label
+          for="stream-asset"
+        >
+          Asset Code
+          <span
+            aria-hidden="true"
+            class="field-required"
+          >
+            *
+          </span>
+        </label>
+      </div>
+      <select
+        aria-describedby="asset-hint"
+        aria-invalid="false"
+        id="stream-asset"
+        required=""
+        style="min-height: 44px; width: 100%; max-width: 100%; box-sizing: border-box;"
+      >
+        <option
+          value="USDC"
+        >
+          USDC
+        </option>
+        <option
+          value="XLM"
+        >
+          XLM
+        </option>
+      </select>
+      <span
+        aria-live="polite"
+        class="field-hint"
+        id="asset-hint"
+        role="status"
+        style="word-break: break-all; overflow-wrap: anywhere; display: block;"
+      >
+        Selected asset: 
+        USDC
+      </span>
+    </div>
+    <div
+      class="field-group"
+    >
+      <label
+        for="stream-amount"
+      >
+        Total Amount
+        <span
+          aria-hidden="true"
+          class="field-required"
+        >
+          *
+        </span>
+      </label>
+      <input
+        aria-describedby="amount-hint"
+        aria-invalid="false"
+        id="stream-amount"
+        min="0.000001"
+        required=""
+        step="0.000001"
+        style="min-height: 44px;"
+        type="number"
+        value="150"
+      />
+      <span
+        aria-live="polite"
+        class="field-hint"
+        id="amount-hint"
+      >
+        Enter a positive number
+      </span>
+    </div>
+  </div>
+  <div
+    class="row"
+  >
+    <div
+      class="field-group"
+    >
+      <label
+        for="stream-duration"
+      >
+        Duration (minutes)
+        <span
+          aria-hidden="true"
+          class="field-required"
+        >
+          *
+        </span>
+      </label>
+      <input
+        aria-describedby="duration-hint"
+        aria-invalid="false"
+        id="stream-duration"
+        min="1"
+        required=""
+        step="1"
+        type="number"
+        value="1440"
+      />
+      <span
+        aria-live="polite"
+        class="field-hint"
+        id="duration-hint"
+      >
+        Starts immediately (current minute) · Ends: Nov 15, 2023 at 22:13 UTC
+      </span>
+    </div>
+    <div
+      class="field-group"
+    >
+      <label
+        for="stream-start"
+      >
+        Start In (minutes)
+        <span
+          aria-hidden="true"
+          class="field-required"
+        >
+          *
+        </span>
+      </label>
+      <input
+        aria-describedby="start-hint"
+        aria-invalid="false"
+        id="stream-start"
+        min="0"
+        required=""
+        step="1"
+        type="number"
+        value="0"
+      />
+      <span
+        class="field-hint"
+        id="start-hint"
+      >
+        Enter 0 to start immediately
+      </span>
+    </div>
+  </div>
+  <div
+    class="field-group"
+  >
+    <label
+      for="stream-cliff"
+    >
+      Cliff Period (days)
+    </label>
+    <input
+      aria-describedby="cliff-hint"
+      aria-invalid="false"
+      id="stream-cliff"
+      min="0"
+      step="1"
+      type="number"
+      value="0"
+    />
+    <span
+      class="field-hint"
+      id="cliff-hint"
+    >
+      Optional. No tokens vest before the cliff elapses.
+    </span>
+  </div>
+  <div
+    aria-live="polite"
+    class="field-hint schedule-preview-box"
+    data-testid="schedule-preview"
+    role="status"
+    style="margin-top: -0.5rem; margin-bottom: 1rem; color: var(--color-success-text, #2e7d32); font-weight: 500; overflow-wrap: anywhere; word-break: break-word;"
+  >
+    <span
+      class="schedule-boundary-tag schedule-boundary-tag--immediate"
+      data-testid="boundary-current-minute"
+      style="display: inline-block; padding: 2px 8px; margin-right: 6px; font-size: 0.8rem; border-radius: 4px; background: rgba(46, 125, 50, 0.12); color: #2e7d32;"
+    >
+      Current-minute boundary
+    </span>
+    Starts immediately (current minute) · Ends: Nov 15, 2023 at 22:13 UTC
+  </div>
+  <div
+    style="display: flex; gap: 1rem; align-items: center; margin-top: 1rem; flex-wrap: wrap;"
+  >
+    <button
+      aria-busy="false"
+      class="btn-primary create-stream-submit-btn"
+      disabled=""
+      style="min-height: 44px;"
+      type="submit"
+    >
+      Create Stream
+    </button>
+  </div>
+</form>
+`;
