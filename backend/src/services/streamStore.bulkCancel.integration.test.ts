@@ -287,5 +287,57 @@ describe("POST /api/streams/bulk-cancel Integration Tests", () => {
       expect(canceledStream1.canceled_at).toBeDefined();
       expect(canceledStream2.canceled_at).toBeDefined();
     });
+
+    it("should report completed streams as failed without mutating them", async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const db = getDb();
+      db.prepare(`
+        INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+        VALUES (@id, @sender, @recipient, @asset_code, @total_amount, @duration_seconds, @start_at, @created_at)
+      `).run({
+        id: "1",
+        sender: mockSender,
+        recipient: mockRecipient,
+        asset_code: "USDC",
+        total_amount: 1000,
+        duration_seconds: 3600,
+        start_at: now - 1800,
+        created_at: now - 3600,
+      });
+      db.prepare(`
+        INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at, completed_at)
+        VALUES (@id, @sender, @recipient, @asset_code, @total_amount, @duration_seconds, @start_at, @created_at, @completed_at)
+      `).run({
+        id: "2",
+        sender: mockSender,
+        recipient: mockRecipient,
+        asset_code: "USDC",
+        total_amount: 1000,
+        duration_seconds: 3600,
+        start_at: now - 7200,
+        created_at: now - 10800,
+        completed_at: now - 3600,
+      });
+
+      const response = await request(app)
+        .post("/api/streams/bulk-cancel")
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({
+          streamIds: ["1", "2"],
+          sender: mockSender,
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.canceled).toEqual(["1"]);
+      expect(response.body.failed).toEqual([
+        { id: "2", error: "Stream is already completed" },
+      ]);
+
+      const completed = db
+        .prepare("SELECT canceled_at, completed_at FROM streams WHERE id = ?")
+        .get("2") as any;
+      expect(completed.canceled_at).toBeNull();
+      expect(completed.completed_at).toBe(now - 3600);
+    });
   });
 });

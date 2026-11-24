@@ -3,7 +3,7 @@ import request from "supertest";
 import jwt from "jsonwebtoken";
 import { app } from "../index";
 import { initDb, getDb } from "./db";
-import { initCache } from "./cache";
+import { initCache, getCache } from "./cache";
 import { getStreamHistory } from "./eventHistory";
 import { getJwtSecret } from "./auth";
 import path from "path";
@@ -12,6 +12,31 @@ import fs from "fs";
 // Use a separate test database
 const TEST_DB_PATH = path.join(__dirname, "..", "..", "data", "test-cancel-streams.db");
 const TEST_SECRET = "test_secret_for_cancel_integration";
+
+/**
+ * Holds the first cache invalidation of a cancel request so another request
+ * can be interleaved deterministically, instead of relying on socket timing.
+ */
+function gateCacheInvalidation() {
+  const cache = getCache() as any;
+  const originalDel = cache.del.bind(cache);
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((resolve) => { releaseGate = resolve; });
+  let reached = false;
+  const spy = vi.spyOn(cache, "del").mockImplementation(async (...args: unknown[]) => {
+    if (!reached) {
+      reached = true;
+      await gate;
+    }
+    return originalDel(String(args[0]));
+  });
+
+  return {
+    release: () => releaseGate(),
+    isReached: () => reached,
+    restore: () => spy.mockRestore(),
+  };
+}
 
 describe("POST /api/streams/:id/cancel Integration Tests", () => {
   let authToken: string;
@@ -164,7 +189,7 @@ describe("POST /api/streams/:id/cancel Integration Tests", () => {
   });
 
   describe("Cancel completed stream", () => {
-    it("should return 200 and cancel a completed stream (sets canceledAt)", async () => {
+    it("should return 409 without mutating a stream completed on-chain", async () => {
       const now = Math.floor(Date.now() / 1000);
       const completedStream = {
         id: "3",
@@ -189,20 +214,186 @@ describe("POST /api/streams/:id/cancel Integration Tests", () => {
         .post(`/api/streams/${completedStream.id}/cancel`)
         .set("Authorization", `Bearer ${authToken}`);
 
-      expect(response.status).toBe(200);
-      expect(response.body.data).toMatchObject({
-        id: completedStream.id,
-        completedAt: completedStream.completed_at,
-        progress: {
-          status: "canceled" // Completed streams can be canceled, status becomes "canceled"
-        }
-      });
-      expect(response.body.data.canceledAt).toBeDefined();
+      expect(response.status).toBe(409);
+      expect(response.body.error).toBe("Stream is already completed.");
+      expect(response.body.code).toBe("ALREADY_COMPLETED");
 
-      // Verify canceled event was recorded for completed stream
-      const history = getStreamHistory(completedStream.id);
-      const canceledEvents = history.filter(e => e.eventType === "canceled");
-      expect(canceledEvents).toHaveLength(1);
+      // Nothing moved: no canceled_at, no canceled event, no webhook.
+      const row = db
+        .prepare("SELECT canceled_at, completed_at FROM streams WHERE id = @id")
+        .get({ id: completedStream.id }) as any;
+      expect(row.canceled_at).toBeNull();
+      expect(row.completed_at).toBe(completedStream.completed_at);
+
+      const canceledEvents = getStreamHistory(completedStream.id).filter(
+        e => e.eventType === "canceled",
+      );
+      expect(canceledEvents).toHaveLength(0);
+    });
+
+    it("should return 409 for a stream whose vesting period ended before completion was recorded", async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const db = getDb();
+      db.prepare(`
+        INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+        VALUES (@id, @sender, @recipient, @asset_code, @total_amount, @duration_seconds, @start_at, @created_at)
+      `).run({
+        id: "6",
+        sender: mockSender,
+        recipient: mockRecipient,
+        asset_code: "USDC",
+        total_amount: 1000,
+        duration_seconds: 3600,
+        start_at: now - 7200, // Fully vested, completed_at not written yet
+        created_at: now - 10800,
+      });
+
+      const response = await request(app)
+        .post("/api/streams/6/cancel")
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect(response.status).toBe(409);
+      expect(response.body.code).toBe("ALREADY_COMPLETED");
+
+      const row = db.prepare("SELECT canceled_at FROM streams WHERE id = @id").get({ id: "6" }) as any;
+      expect(row.canceled_at).toBeNull();
+      expect(getStreamHistory("6").filter(e => e.eventType === "canceled")).toHaveLength(0);
+    });
+  });
+
+  describe("Concurrent cancel requests", () => {
+    it("should let exactly one request commit the cancel and its side effects", async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const db = getDb();
+      db.prepare(`
+        INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+        VALUES (@id, @sender, @recipient, @asset_code, @total_amount, @duration_seconds, @start_at, @created_at)
+      `).run({
+        id: "7",
+        sender: mockSender,
+        recipient: mockRecipient,
+        asset_code: "USDC",
+        total_amount: 1000,
+        duration_seconds: 3600,
+        start_at: now - 1800,
+        created_at: now - 3600,
+      });
+
+      // Hold the first request mid-flight, then send a second cancel before it
+      // can commit: the classic duplicate-refund window.
+      const gate = gateCacheInvalidation();
+      try {
+        const firstCancel = request(app)
+          .post("/api/streams/7/cancel")
+          .set("Authorization", `Bearer ${authToken}`)
+          .then(r => r);
+
+        for (let i = 0; i < 200 && !gate.isReached(); i++) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        expect(gate.isReached()).toBe(true);
+
+        const secondCancel = await request(app)
+          .post("/api/streams/7/cancel")
+          .set("Authorization", `Bearer ${authToken}`);
+
+        gate.release();
+        const firstResponse = await firstCancel;
+
+        // Every caller sees the same committed outcome: no 5xx, stable canceledAt.
+        expect([firstResponse.status, secondCancel.status]).toEqual([200, 200]);
+        expect(secondCancel.body.data.canceledAt).toBe(firstResponse.body.data.canceledAt);
+
+        // Exactly one canceled event, no duplicate money-moving/stored effects.
+        const canceledEvents = getStreamHistory("7").filter(e => e.eventType === "canceled");
+        expect(canceledEvents).toHaveLength(1);
+
+        const row = db
+          .prepare("SELECT canceled_at FROM streams WHERE id = @id")
+          .get({ id: "7" }) as any;
+        expect(row.canceled_at).toBe(firstResponse.body.data.canceledAt);
+      } finally {
+        gate.release();
+        gate.restore();
+      }
+    });
+  });
+
+  describe("Cancel racing with a claim", () => {
+    it("should never record a claim larger than the amount vested at cancel time", async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const db = getDb();
+      db.prepare(`
+        INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+        VALUES (@id, @sender, @recipient, @asset_code, @total_amount, @duration_seconds, @start_at, @created_at)
+      `).run({
+        id: "8",
+        sender: mockSender,
+        recipient: mockRecipient,
+        asset_code: "USDC",
+        total_amount: 1000,
+        duration_seconds: 3600,
+        start_at: now - 1800, // 500 vested, 500 still streaming
+        created_at: now - 3600,
+      });
+
+      // Hold the cancel request mid-flight so a claim can slip into the race
+      // window deterministically.
+      const gate = gateCacheInvalidation();
+
+      // Drift the wall clock while cancel is held; vesting keeps accruing.
+      const realNow = Date.now.bind(Date);
+      let clockOffsetMs = 0;
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => realNow() + clockOffsetMs);
+
+      try {
+        const cancelPromise = request(app)
+          .post("/api/streams/8/cancel")
+          .set("Authorization", `Bearer ${authToken}`)
+          .then(r => r);
+
+        for (let i = 0; i < 200 && !gate.isReached(); i++) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        expect(gate.isReached()).toBe(true);
+
+        clockOffsetMs = 600_000; // 10 minutes of extra vesting
+        const claimResponse = await request(app)
+          .post("/api/streams/8/claim")
+          .set("Authorization", `Bearer ${recipientToken}`);
+
+        gate.release();
+        const cancelResponse = await cancelPromise;
+
+        expect(claimResponse.status).toBe(200);
+        expect(cancelResponse.status).toBe(200);
+
+        const row = db
+          .prepare("SELECT canceled_at, start_at, duration_seconds FROM streams WHERE id = @id")
+          .get({ id: "8" }) as any;
+        const vestedAtCancel = Math.min(
+          1000,
+          ((row.canceled_at - row.start_at) / row.duration_seconds) * 1000,
+        );
+        const claimed = db
+          .prepare(
+            "SELECT amount FROM stream_events WHERE stream_id = ? AND event_type = 'claimed'",
+          )
+          .all("8") as Array<{ amount: number }>;
+
+        expect(claimed).toHaveLength(1);
+        // Money-moving invariant: claimed amount + refund can never exceed total.
+        expect(claimed[0].amount).toBeLessThanOrEqual(vestedAtCancel);
+        expect(claimResponse.body.result.claimedAmount).toBeLessThanOrEqual(vestedAtCancel);
+
+        // The cancel itself still happened once and only once.
+        const canceledEvents = getStreamHistory("8").filter(e => e.eventType === "canceled");
+        expect(canceledEvents).toHaveLength(1);
+      } finally {
+        gate.release();
+        gate.restore();
+        nowSpy.mockRestore();
+      }
     });
   });
 

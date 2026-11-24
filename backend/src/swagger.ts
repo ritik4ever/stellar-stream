@@ -1656,7 +1656,11 @@ export const swaggerDocument = {
     "/api/streams/{id}/cancel": {
       post: {
         summary: "Cancel a Stream",
-        description: "Cancels an active stream by its ID.",
+        description:
+          "Cancels a stream owned by the authenticated sender and refunds the unvested amount. " +
+          "Cancelling is idempotent: repeating a successful request returns the recorded cancellation without submitting another on-chain cancel, recording another `canceled` event, or queuing another webhook. " +
+          "A completed stream (including a fully vested stream whose `completedAt` has not been recorded yet) has nothing left to refund and returns 409 `ALREADY_COMPLETED`. " +
+          "When the on-chain cancel fails after the local transition commits, the refund stays unset and is reconciled from the indexer's `Canceled` event rather than retried, so a retry can never duplicate the money-moving call.",
         parameters: [
           {
             name: "id",
@@ -1690,6 +1694,23 @@ export const swaggerDocument = {
               "application/json": {
                 schema: {
                   $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
+          "409": {
+            description:
+              "Stream is already completed. A completed stream has no unvested balance to refund and must not be moved back to a canceled state.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/ConflictError",
+                },
+                example: {
+                  error: "Stream is already completed.",
+                  statusCode: 409,
+                  code: "ALREADY_COMPLETED",
+                  requestId: "req_01HPX7...",
                 },
               },
             },

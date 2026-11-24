@@ -1638,7 +1638,13 @@ app.post(
         canceled.push(streamId);
       } catch (error: any) {
         logger.error({ err: error, streamId }, "failed to cancel stream in bulk operation");
-        failed.push({ id: streamId, error: "Failed to cancel stream" });
+        failed.push({
+          id: streamId,
+          error:
+            error?.code === "ALREADY_COMPLETED"
+              ? "Stream is already completed"
+              : "Failed to cancel stream",
+        });
       }
     }
 
@@ -1781,9 +1787,21 @@ app.post(
       const { recordEventWithDb } = await import("./services/eventHistory");
       const now = Math.floor(Date.now() / 1000);
 
-      // Guard against double-spend: check and write inside one atomic transaction.
+      // Guard against double-spend: read the stream, compute what is vested,
+      // and write the event inside one atomic transaction. Re-reading here (and
+      // not reusing the snapshot taken before the request) makes a concurrent
+      // cancel visible, so a claim can never record more than vested at the
+      // committed cancel time — claimed + refund stays within totalAmount.
       let alreadyClaimed = false;
+      let streamMissing = false;
+      let noClaimableAmount = false;
+      let claimedAmount = 0;
       db.transaction(() => {
+        const current = getStream(stream.id);
+        if (!current) {
+          streamMissing = true;
+          return;
+        }
         const existing = db
           .prepare(
             `SELECT 1 FROM stream_events WHERE stream_id = ? AND event_type = 'claimed' LIMIT 1`,
@@ -1793,20 +1811,38 @@ app.post(
           alreadyClaimed = true;
           return;
         }
+        const currentProgress = calculateProgress(current, now);
+        if (currentProgress.vestedAmount <= 0) {
+          noClaimableAmount = true;
+          return;
+        }
+        claimedAmount = currentProgress.vestedAmount;
         recordEventWithDb(
           db,
           stream.id,
           "claimed",
           now,
-          stream.recipient,
-          progress.vestedAmount,
-          { assetCode: stream.assetCode },
+          current.recipient,
+          currentProgress.vestedAmount,
+          { assetCode: current.assetCode },
         );
       })();
+
+      if (streamMissing) {
+        sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
+        return;
+      }
 
       if (alreadyClaimed) {
         sendApiError(req, res, 409, "Stream has already been claimed.", {
           code: "ALREADY_CLAIMED",
+        });
+        return;
+      }
+
+      if (noClaimableAmount) {
+        sendApiError(req, res, 400, "No claimable amount available.", {
+          code: "NO_CLAIMABLE_AMOUNT",
         });
         return;
       }
@@ -1829,7 +1865,7 @@ app.post(
 
       res.json({
         result: {
-          claimedAmount: progress.vestedAmount,
+          claimedAmount,
           assetCode: stream.assetCode,
           txHash: `local-${stream.id}-${now}`,
         },

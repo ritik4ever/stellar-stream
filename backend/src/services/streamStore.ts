@@ -448,8 +448,16 @@ export function calculateProgress(
   stream: StreamRecord,
   at = nowInSeconds(),
 ): StreamProgress {
-  const effectiveAt =
-    stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
+  // Vesting stops at the first terminal observation: a canceled stream no
+  // longer accrues after cancellation, so claims can never exceed the amount
+  // that was vested (and potentially refunded) at cancel time.
+  let effectiveAt = at;
+  if (stream.canceledAt !== undefined) {
+    effectiveAt = Math.min(effectiveAt, stream.canceledAt);
+  }
+  if (stream.pausedAt !== undefined) {
+    effectiveAt = Math.min(effectiveAt, stream.pausedAt);
+  }
 
   const elapsed = Math.max(0, Math.max(0, effectiveAt - stream.startAt) - stream.pausedDuration);
   const ratio = stream.durationSeconds <= 0 ? 1 : Math.min(1, elapsed / stream.durationSeconds);
@@ -1162,16 +1170,16 @@ export function compareStreams(
   });
 }
 
-export async function cancelStream(
-  id: string,
-): Promise<StreamRecord | undefined> {
-  const stream = getStream(id);
-  if (!stream || stream.canceledAt !== undefined) {
-    return stream;
-  }
-
-  stream.canceledAt = nowInSeconds();
-
+/**
+ * Submits `cancel_stream` for a stream whose cancellation is already committed
+ * locally, and returns the refund reported by the chain when available.
+ *
+ * This is deliberately best-effort: the local cancel is the single source of
+ * truth for the transition, so a chain failure must not roll it back (a retry
+ * would submit a second money-moving call). The refund is left unset and is
+ * reconciled from the indexer's `Canceled` event instead.
+ */
+async function submitOnChainCancel(id: string): Promise<number | undefined> {
   try {
     const sorobanContext = getSorobanContext();
     if (sorobanContext && rpcServer && serverKeypair) {
@@ -1209,13 +1217,83 @@ export async function cancelStream(
           }
 
           if (txResult?.status === "SUCCESS" && txResult.returnValue) {
-            stream.refundedAmount = Number(scValToNative(txResult.returnValue));
+            return Number(scValToNative(txResult.returnValue));
           }
         }
       }
     }
   } catch (err) {
-    logger.warn({ err, streamId: id }, "failed to get refund amount from chain");
+    logger.warn(
+      { err, streamId: id },
+      "on-chain cancel failed; local cancel stays committed and the refund is left for reconciliation",
+    );
+  }
+
+  return undefined;
+}
+
+function completedStreamError(): Error {
+  const err: any = new Error("Stream is already completed.");
+  err.statusCode = 409;
+  err.code = "ALREADY_COMPLETED";
+  return err;
+}
+
+export async function cancelStream(
+  id: string,
+): Promise<StreamRecord | undefined> {
+  const stream = getStream(id);
+  if (!stream) {
+    return undefined;
+  }
+
+  // A repeat cancel is an idempotent replay: return the recorded outcome
+  // without re-running chain calls, events, or webhooks.
+  if (stream.canceledAt !== undefined) {
+    return stream;
+  }
+
+  const canceledAt = nowInSeconds();
+  if (computeStatus(stream, canceledAt) === "completed") {
+    // A completed stream has nothing left to refund. Cancelling it would
+    // overwrite the terminal status and emit a refund that cannot vest.
+    throw completedStreamError();
+  }
+
+  const db = getDb();
+
+  // Claim the cancel transition with a conditional UPDATE so exactly one
+  // caller (in any process) can move the stream to `canceled`. The event is
+  // recorded in the same transaction, so a committed cancel always has
+  // exactly one event and a losing request has no stored side effects.
+  const won = db.transaction(() => {
+    const result = db
+      .prepare(
+        `UPDATE streams
+         SET canceled_at = @canceledAt
+         WHERE id = @id AND canceled_at IS NULL AND completed_at IS NULL`,
+      )
+      .run({ id, canceledAt });
+
+    if (result.changes !== 1) {
+      return false;
+    }
+
+    recordEventWithDb(db, id, "canceled", canceledAt, stream.sender);
+    return true;
+  })();
+
+  if (!won) {
+    const current = getStream(id);
+    if (!current) {
+      return undefined;
+    }
+    if (current.canceledAt !== undefined) {
+      // Lost the race to another cancel request: report what that request
+      // committed instead of applying the transition twice.
+      return current;
+    }
+    throw completedStreamError();
   }
 
   await invalidateCache(`stream:${id}`);
@@ -1224,14 +1302,17 @@ export async function cancelStream(
   resetStatsCache();
   resetStreamMetricsCache();
 
-  const db = getDb();
-  db.transaction(() => {
-    upsertStream(stream);
-    recordEventWithDb(db, stream.id, "canceled", stream.canceledAt!, stream.sender);
-  })();
+  const refundedAmount = await submitOnChainCancel(id);
+  const updated = getStream(id) ?? { ...stream, canceledAt };
+  if (refundedAmount !== undefined) {
+    db.prepare(
+      `UPDATE streams SET refunded_amount = @refundedAmount WHERE id = @id`,
+    ).run({ id, refundedAmount });
+    updated.refundedAmount = refundedAmount;
+  }
 
-  triggerWebhook("canceled", stream);
-  return stream;
+  triggerWebhook("canceled", updated);
+  return updated;
 }
 
 export async function pauseStream(id: string): Promise<StreamRecord> {
