@@ -1,0 +1,1253 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`StreamsTable snapshots > matches snapshot when empty 1`] = `
+<div
+  class="card"
+>
+  <div
+    class="filter-bar card"
+    style="margin-bottom: 1.5rem; padding: 1.25rem;"
+  >
+    <div
+      class="filter-grid"
+      style="display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));"
+    >
+      <div
+        class="field-group"
+      >
+        <label
+          for="q"
+        >
+          Search ID / Address
+        </label>
+        <input
+          id="q"
+          name="q"
+          placeholder="Search..."
+          type="text"
+          value=""
+        />
+      </div>
+      <div
+        class="field-group"
+      >
+        <label
+          for="status"
+        >
+          Status
+        </label>
+        <select
+          id="status"
+          style="border: 1.5px solid #d1d5db; border-radius: 8px; min-height: 44px; padding: 0.45rem 0.6rem; font-size: 0.9rem; outline-color: none; outline-style: none; outline-width: initial;"
+        >
+          <option
+            value=""
+          >
+            All Statuses
+          </option>
+          <option
+            value="scheduled"
+          >
+            Scheduled
+          </option>
+          <option
+            value="active"
+          >
+            Active
+          </option>
+          <option
+            value="paused"
+          >
+            Paused
+          </option>
+          <option
+            value="completed"
+          >
+            Completed
+          </option>
+          <option
+            value="canceled"
+          >
+            Canceled
+          </option>
+        </select>
+      </div>
+      <div
+        class="field-group"
+      >
+        <label
+          for="asset"
+        >
+          Asset Code
+        </label>
+        <input
+          id="asset"
+          name="asset"
+          placeholder="e.g. USDC"
+          type="text"
+          value=""
+        />
+      </div>
+    </div>
+    <div
+      class="presets-row"
+      style="margin-top: 1.25rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; padding-top: 1.25rem; border-top-width: 1px; border-top-style: solid; border-top-color: #f3f4f6;"
+    >
+      <span
+        style="font-size: 0.85rem; font-weight: 600; color: #6b7280;"
+      >
+        Bulk Presets:
+      </span>
+      <button
+        class="btn-ghost"
+        style="font-size: 0.85rem;"
+        type="button"
+      >
+        📅 Scheduled
+      </button>
+      <button
+        class="btn-ghost"
+        style="font-size: 0.85rem;"
+        type="button"
+      >
+        ⚠️ At-Risk (Active)
+      </button>
+      <button
+        class="btn-ghost"
+        style="font-size: 0.85rem;"
+        type="button"
+      >
+        ✅ Completed
+      </button>
+      <div
+        style="margin-left: auto;"
+      >
+        <button
+          class="btn-ghost"
+          style="font-size: 0.85rem; color: #6b7280;"
+          type="button"
+        >
+          Reset All
+        </button>
+      </div>
+    </div>
+  </div>
+  <div
+    class="streams-table-toolbar"
+    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: 0.75rem;"
+  >
+    <label
+      class="mobile-select-all"
+    >
+      <input
+        aria-checked="false"
+        aria-label="No selectable streams on this page"
+        data-testid="streams-table-select-all"
+        disabled=""
+        type="checkbox"
+      />
+      <span>
+        No selectable streams
+      </span>
+    </label>
+    <h2
+      style="margin: 0px;"
+    >
+      Live Streams
+    </h2>
+    <div
+      style="display: flex; align-items: center; gap: 0.5rem;"
+    >
+      <div
+        class="column-toggle"
+        style="position: relative;"
+      >
+        <button
+          aria-expanded="false"
+          aria-haspopup="true"
+          aria-label="Toggle table columns"
+          class="btn-ghost"
+          type="button"
+        >
+          ⊞ Columns
+        </button>
+      </div>
+      <a
+        class="btn-ghost"
+        download=""
+        href="http://localhost:3000/api/streams/export.csv"
+      >
+        Export CSV
+      </a>
+    </div>
+  </div>
+  <div
+    class="streams-table-scroll"
+    data-testid="streams-table-scroll"
+    style="max-height: min(70vh, 720px);"
+  >
+    <table
+      aria-busy="false"
+      aria-label="Streams"
+    >
+      <thead
+        class="streams-table-head"
+      >
+        <tr>
+          <th>
+            <input
+              aria-checked="false"
+              aria-label="No selectable streams on this page"
+              data-testid="streams-table-header-select-all"
+              disabled=""
+              type="checkbox"
+            />
+          </th>
+          <th>
+            ID
+          </th>
+          <th>
+            Sender
+          </th>
+          <th>
+            Recipient
+          </th>
+          <th>
+            Progress
+          </th>
+          <th>
+            Status
+          </th>
+          <th>
+            Actions
+          </th>
+        </tr>
+      </thead>
+      <tbody />
+    </table>
+    <div
+      data-testid="infinite-scroll-sentinel"
+      style="height: 1px;"
+    />
+  </div>
+</div>
+`;
+
+exports[`StreamsTable snapshots > matches snapshot while loading 1`] = `
+<div
+  class="card"
+>
+  <div
+    class="filter-bar card"
+    style="margin-bottom: 1.5rem; padding: 1.25rem;"
+  >
+    <div
+      class="filter-grid"
+      style="display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));"
+    >
+      <div
+        class="field-group"
+      >
+        <label
+          for="q"
+        >
+          Search ID / Address
+        </label>
+        <input
+          id="q"
+          name="q"
+          placeholder="Search..."
+          type="text"
+          value=""
+        />
+      </div>
+      <div
+        class="field-group"
+      >
+        <label
+          for="status"
+        >
+          Status
+        </label>
+        <select
+          id="status"
+          style="border: 1.5px solid #d1d5db; border-radius: 8px; min-height: 44px; padding: 0.45rem 0.6rem; font-size: 0.9rem; outline-color: none; outline-style: none; outline-width: initial;"
+        >
+          <option
+            value=""
+          >
+            All Statuses
+          </option>
+          <option
+            value="scheduled"
+          >
+            Scheduled
+          </option>
+          <option
+            value="active"
+          >
+            Active
+          </option>
+          <option
+            value="paused"
+          >
+            Paused
+          </option>
+          <option
+            value="completed"
+          >
+            Completed
+          </option>
+          <option
+            value="canceled"
+          >
+            Canceled
+          </option>
+        </select>
+      </div>
+      <div
+        class="field-group"
+      >
+        <label
+          for="asset"
+        >
+          Asset Code
+        </label>
+        <input
+          id="asset"
+          name="asset"
+          placeholder="e.g. USDC"
+          type="text"
+          value=""
+        />
+      </div>
+    </div>
+    <div
+      class="presets-row"
+      style="margin-top: 1.25rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; padding-top: 1.25rem; border-top-width: 1px; border-top-style: solid; border-top-color: #f3f4f6;"
+    >
+      <span
+        style="font-size: 0.85rem; font-weight: 600; color: #6b7280;"
+      >
+        Bulk Presets:
+      </span>
+      <button
+        class="btn-ghost"
+        style="font-size: 0.85rem;"
+        type="button"
+      >
+        📅 Scheduled
+      </button>
+      <button
+        class="btn-ghost"
+        style="font-size: 0.85rem;"
+        type="button"
+      >
+        ⚠️ At-Risk (Active)
+      </button>
+      <button
+        class="btn-ghost"
+        style="font-size: 0.85rem;"
+        type="button"
+      >
+        ✅ Completed
+      </button>
+      <div
+        style="margin-left: auto;"
+      >
+        <button
+          class="btn-ghost"
+          style="font-size: 0.85rem; color: #6b7280;"
+          type="button"
+        >
+          Reset All
+        </button>
+      </div>
+    </div>
+  </div>
+  <div
+    class="streams-table-toolbar"
+    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: 0.75rem;"
+  >
+    <label
+      class="mobile-select-all"
+    >
+      <input
+        aria-checked="false"
+        aria-label="No selectable streams on this page"
+        data-testid="streams-table-select-all"
+        disabled=""
+        type="checkbox"
+      />
+      <span>
+        No selectable streams
+      </span>
+    </label>
+    <h2
+      style="margin: 0px;"
+    >
+      Live Streams
+    </h2>
+    <div
+      style="display: flex; align-items: center; gap: 0.5rem;"
+    >
+      <div
+        class="column-toggle"
+        style="position: relative;"
+      >
+        <button
+          aria-expanded="false"
+          aria-haspopup="true"
+          aria-label="Toggle table columns"
+          class="btn-ghost"
+          type="button"
+        >
+          ⊞ Columns
+        </button>
+      </div>
+      <a
+        class="btn-ghost"
+        download=""
+        href="http://localhost:3000/api/streams/export.csv"
+      >
+        Export CSV
+      </a>
+    </div>
+  </div>
+  <div
+    class="streams-table-scroll"
+    data-testid="streams-table-scroll"
+    style="max-height: min(70vh, 720px);"
+  >
+    <table
+      aria-busy="true"
+      aria-label="Streams"
+    >
+      <thead
+        class="streams-table-head"
+      >
+        <tr>
+          <th>
+            <input
+              aria-checked="false"
+              aria-label="No selectable streams on this page"
+              data-testid="streams-table-header-select-all"
+              disabled=""
+              type="checkbox"
+            />
+          </th>
+          <th>
+            ID
+          </th>
+          <th>
+            Sender
+          </th>
+          <th>
+            Recipient
+          </th>
+          <th>
+            Progress
+          </th>
+          <th>
+            Status
+          </th>
+          <th>
+            Actions
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr
+          aria-hidden="true"
+        >
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+        </tr>
+        <tr
+          aria-hidden="true"
+        >
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+        </tr>
+        <tr
+          aria-hidden="true"
+        >
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+        </tr>
+        <tr
+          aria-hidden="true"
+        >
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+        </tr>
+        <tr
+          aria-hidden="true"
+        >
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+        </tr>
+        <tr
+          aria-hidden="true"
+        >
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+          <td>
+            <div
+              class="skeleton"
+              style="width: 80px; height: 16px;"
+            />
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <div
+      data-testid="infinite-scroll-sentinel"
+      style="height: 1px;"
+    />
+  </div>
+</div>
+`;
+
+exports[`StreamsTable snapshots > matches snapshot with active and completed streams 1`] = `
+<div
+  class="card"
+>
+  <div
+    class="filter-bar card"
+    style="margin-bottom: 1.5rem; padding: 1.25rem;"
+  >
+    <div
+      class="filter-grid"
+      style="display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));"
+    >
+      <div
+        class="field-group"
+      >
+        <label
+          for="q"
+        >
+          Search ID / Address
+        </label>
+        <input
+          id="q"
+          name="q"
+          placeholder="Search..."
+          type="text"
+          value=""
+        />
+      </div>
+      <div
+        class="field-group"
+      >
+        <label
+          for="status"
+        >
+          Status
+        </label>
+        <select
+          id="status"
+          style="border: 1.5px solid #d1d5db; border-radius: 8px; min-height: 44px; padding: 0.45rem 0.6rem; font-size: 0.9rem; outline-color: none; outline-style: none; outline-width: initial;"
+        >
+          <option
+            value=""
+          >
+            All Statuses
+          </option>
+          <option
+            value="scheduled"
+          >
+            Scheduled
+          </option>
+          <option
+            value="active"
+          >
+            Active
+          </option>
+          <option
+            value="paused"
+          >
+            Paused
+          </option>
+          <option
+            value="completed"
+          >
+            Completed
+          </option>
+          <option
+            value="canceled"
+          >
+            Canceled
+          </option>
+        </select>
+      </div>
+      <div
+        class="field-group"
+      >
+        <label
+          for="asset"
+        >
+          Asset Code
+        </label>
+        <input
+          id="asset"
+          name="asset"
+          placeholder="e.g. USDC"
+          type="text"
+          value=""
+        />
+      </div>
+    </div>
+    <div
+      class="presets-row"
+      style="margin-top: 1.25rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; padding-top: 1.25rem; border-top-width: 1px; border-top-style: solid; border-top-color: #f3f4f6;"
+    >
+      <span
+        style="font-size: 0.85rem; font-weight: 600; color: #6b7280;"
+      >
+        Bulk Presets:
+      </span>
+      <button
+        class="btn-ghost"
+        style="font-size: 0.85rem;"
+        type="button"
+      >
+        📅 Scheduled
+      </button>
+      <button
+        class="btn-ghost"
+        style="font-size: 0.85rem;"
+        type="button"
+      >
+        ⚠️ At-Risk (Active)
+      </button>
+      <button
+        class="btn-ghost"
+        style="font-size: 0.85rem;"
+        type="button"
+      >
+        ✅ Completed
+      </button>
+      <div
+        style="margin-left: auto;"
+      >
+        <button
+          class="btn-ghost"
+          style="font-size: 0.85rem; color: #6b7280;"
+          type="button"
+        >
+          Reset All
+        </button>
+      </div>
+    </div>
+  </div>
+  <div
+    class="streams-table-toolbar"
+    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: 0.75rem;"
+  >
+    <label
+      class="mobile-select-all"
+    >
+      <input
+        aria-checked="false"
+        aria-label="Select all streams"
+        data-testid="streams-table-select-all"
+        type="checkbox"
+      />
+      <span>
+        Select all streams
+      </span>
+    </label>
+    <h2
+      style="margin: 0px;"
+    >
+      Live Streams
+    </h2>
+    <div
+      style="display: flex; align-items: center; gap: 0.5rem;"
+    >
+      <div
+        class="column-toggle"
+        style="position: relative;"
+      >
+        <button
+          aria-expanded="false"
+          aria-haspopup="true"
+          aria-label="Toggle table columns"
+          class="btn-ghost"
+          type="button"
+        >
+          ⊞ Columns
+        </button>
+      </div>
+      <a
+        class="btn-ghost"
+        download=""
+        href="http://localhost:3000/api/streams/export.csv"
+      >
+        Export CSV
+      </a>
+    </div>
+  </div>
+  <div
+    class="streams-table-scroll"
+    data-testid="streams-table-scroll"
+    style="max-height: min(70vh, 720px);"
+  >
+    <table
+      aria-busy="false"
+      aria-label="Streams"
+    >
+      <thead
+        class="streams-table-head"
+      >
+        <tr>
+          <th>
+            <input
+              aria-checked="false"
+              aria-label="Select all streams"
+              data-testid="streams-table-header-select-all"
+              type="checkbox"
+            />
+          </th>
+          <th>
+            ID
+          </th>
+          <th>
+            Sender
+          </th>
+          <th>
+            Recipient
+          </th>
+          <th>
+            Progress
+          </th>
+          <th>
+            Status
+          </th>
+          <th>
+            Actions
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr
+          data-index="0"
+        >
+          <td
+            data-label="Select"
+          >
+            <label
+              class="stream-row-select"
+            >
+              <input
+                aria-checked="false"
+                aria-label="Select stream stream-1"
+                type="checkbox"
+              />
+            </label>
+          </td>
+          <td
+            data-label="ID"
+          >
+            <button
+              aria-controls="timeline-stream-1"
+              aria-expanded="false"
+              class="btn-ghost"
+              title="Show timeline"
+              type="button"
+            >
+              ▼
+               
+              stream-1
+            </button>
+          </td>
+          <td
+            data-label="Sender"
+          >
+            <div
+              class="copyable-address"
+              style="display: inline-flex; align-items: center; gap: 0.4rem;"
+            >
+              <span
+                class="truncate-address"
+                title="GSENDER1234567890123456789012345678901234567890123456789"
+              >
+                GSENDER1...
+              </span>
+              <button
+                class="btn-ghost copyable-address__copy"
+                style="padding: 0.15rem 0.35rem; font-size: 0.75rem; min-height: 44px; line-height: 1;"
+                title="Copy address"
+                type="button"
+              >
+                📋
+              </button>
+            </div>
+          </td>
+          <td
+            data-label="Recipient"
+          >
+            <div
+              class="copyable-address"
+              style="display: inline-flex; align-items: center; gap: 0.4rem;"
+            >
+              <span
+                class="truncate-address"
+                title="GRECIPIENT123456789012345678901234567890123456789012345"
+              >
+                GRECIPIE...
+              </span>
+              <button
+                class="btn-ghost copyable-address__copy"
+                style="padding: 0.15rem 0.35rem; font-size: 0.75rem; min-height: 44px; line-height: 1;"
+                title="Copy address"
+                type="button"
+              >
+                📋
+              </button>
+            </div>
+          </td>
+          <td
+            data-label="Progress"
+          >
+            <div
+              class="progress-copy"
+            >
+              <strong>
+                50.00
+                %
+              </strong>
+              <span
+                class="muted"
+              >
+                Vested: 
+                500.00
+                 
+                USDC
+              </span>
+            </div>
+            <div
+              aria-hidden="true"
+              class="progress-bar"
+            >
+              <div
+                style="width: 50%;"
+              />
+            </div>
+          </td>
+          <td
+            data-label="Status"
+          >
+            <div
+              class="status-cell"
+            >
+              <span
+                class="badge badge-active"
+              >
+                active
+              </span>
+            </div>
+          </td>
+          <td
+            data-label="Actions"
+          >
+            <div
+              class="action-cell"
+            >
+              <button
+                aria-label="Pause stream stream-1"
+                class="btn-ghost"
+                type="button"
+              >
+                ⏸ Pause
+              </button>
+              <button
+                aria-label="Cancel stream stream-1"
+                class="btn-ghost"
+                type="button"
+              >
+                Cancel
+              </button>
+            </div>
+          </td>
+        </tr>
+        <tr
+          data-index="1"
+        >
+          <td
+            data-label="Select"
+          >
+            <label
+              class="stream-row-select"
+            >
+              <input
+                aria-checked="false"
+                aria-label="Select stream stream-2"
+                disabled=""
+                type="checkbox"
+              />
+            </label>
+          </td>
+          <td
+            data-label="ID"
+          >
+            <button
+              aria-controls="timeline-stream-2"
+              aria-expanded="false"
+              class="btn-ghost"
+              title="Show timeline"
+              type="button"
+            >
+              ▼
+               
+              stream-2
+            </button>
+          </td>
+          <td
+            data-label="Sender"
+          >
+            <div
+              class="copyable-address"
+              style="display: inline-flex; align-items: center; gap: 0.4rem;"
+            >
+              <span
+                class="truncate-address"
+                title="GSENDER1234567890123456789012345678901234567890123456789"
+              >
+                GSENDER1...
+              </span>
+              <button
+                class="btn-ghost copyable-address__copy"
+                style="padding: 0.15rem 0.35rem; font-size: 0.75rem; min-height: 44px; line-height: 1;"
+                title="Copy address"
+                type="button"
+              >
+                📋
+              </button>
+            </div>
+          </td>
+          <td
+            data-label="Recipient"
+          >
+            <div
+              class="copyable-address"
+              style="display: inline-flex; align-items: center; gap: 0.4rem;"
+            >
+              <span
+                class="truncate-address"
+                title="GRECIPIENT223456789012345678901234567890123456789012345"
+              >
+                GRECIPIE...
+              </span>
+              <button
+                class="btn-ghost copyable-address__copy"
+                style="padding: 0.15rem 0.35rem; font-size: 0.75rem; min-height: 44px; line-height: 1;"
+                title="Copy address"
+                type="button"
+              >
+                📋
+              </button>
+            </div>
+          </td>
+          <td
+            data-label="Progress"
+          >
+            <div
+              class="progress-copy"
+            >
+              <strong>
+                100.00
+                %
+              </strong>
+              <span
+                class="muted"
+              >
+                Vested: 
+                250.00
+                 
+                XLM
+              </span>
+            </div>
+            <div
+              aria-hidden="true"
+              class="progress-bar"
+            >
+              <div
+                style="width: 100%;"
+              />
+            </div>
+          </td>
+          <td
+            data-label="Status"
+          >
+            <div
+              class="status-cell"
+            >
+              <span
+                class="badge badge-completed"
+              >
+                completed
+              </span>
+            </div>
+          </td>
+          <td
+            data-label="Actions"
+          >
+            <div
+              class="action-cell"
+            >
+              <button
+                aria-label="Cancel stream stream-2"
+                class="btn-ghost"
+                disabled=""
+                type="button"
+              >
+                Cancel
+              </button>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <div
+      data-testid="infinite-scroll-sentinel"
+      style="height: 1px;"
+    />
+  </div>
+</div>
+`;

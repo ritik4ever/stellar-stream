@@ -8,6 +8,8 @@
         "build": "tsc && vite build",
         "preview": "vite preview",
         "test": "vitest",
+        "test:snapshots": "vitest run tests/snapshots",
+        "test:snapshots:update": "vitest run -u tests/snapshots",
         "test:e2e": "npx playwright test --config=playwright.config.ts",
         "lint": "eslint src",
         "storybook": "storybook dev -p 6006",

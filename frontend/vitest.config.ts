@@ -6,7 +6,12 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "happy-dom",
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    include: [
+      "src/**/*.test.ts",
+      "src/**/*.test.tsx",
+      "tests/snapshots/**/*.test.ts",
+      "tests/snapshots/**/*.test.tsx",
+    ],
     setupFiles: ["src/setupTests.ts"],
     server: {
       deps: {
