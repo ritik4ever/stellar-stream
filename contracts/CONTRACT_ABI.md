@@ -12,10 +12,21 @@ must update this document and the migration notes below in the same release.
 | `NativeToken` | `Address` | Instance | Written by `initialize`; retained for the contract lifetime. |
 | `AllowedTokens` | `Vec<Address>` | Instance | Written by `initialize`, `add_allowed_token`, and `remove_allowed_token`; retained for the contract lifetime. |
 | `NextStreamId` | `u64` | **Persistent** | Monotonically increases after stream creation. Must be **Persistent** — not Instance — so the counter survives ledger expiry and stream IDs never collide across upgrades. |
-| `Stream(id)` | `Stream` | Persistent | Created by `create_stream`/`create_split_stream`; updated by claim, pause, resume, cancel, clawback, and transfer. Persistent storage is required because streams outlive individual ledgers. |
+| `Stream(id)` | `Stream` | Persistent | Created by `create_stream`/`create_split_stream`/`create_fanout_stream`; updated by claim, pause, resume, cancel, clawback, and transfer. Persistent storage is required because streams outlive individual ledgers. |
 | `SplitChildren(parent_id)` | `Vec<u64>` | Instance | Written when a split stream is created; retained as an index for the parent stream. |
 | `ChildToParent(child_id)` | `u64` | Instance | Written when a split stream is created; retained as a reverse lookup index. |
 | `ContractVersion` | `u32` | Instance | Written by `initialize` with the value of `STREAM_LAYOUT_VERSION`. Upgrade scripts call `get_contract_version()` to compare this against the version compiled into the new WASM and detect whether a `Stream` layout migration is required. A missing key means the contract predates versioning; treat it as version 0. |
+
+### Fan-out keys (`FanoutDataKey`, issue #674)
+
+Fan-out groups live in their own enum in `contracts/src/fanout.rs`, so the
+`DataKey` layout and `STREAM_LAYOUT_VERSION` are unchanged by this feature.
+Fan-out IDs use an independent counter and never consume a `Stream(id)` slot.
+
+| Key | Value | Persistence | Lifecycle |
+| --- | --- | --- | --- |
+| `NextFanoutId` | `u64` | Persistent | Monotonically increases after `create_fanout_stream`; must survive ledger expiry so IDs never collide. |
+| `Fanout(id)` | `FanoutStream` | Persistent | Holds the sender, asset, total, shared start/end window, ordered sub-stream IDs, and `canceled`. Written on creation; `canceled` is set by `cancel_fanout_stream`. |
 
 The legacy `EscrowVestingContract` at the top of `lib.rs` uses the string
 instance keys `total_vested` (`ii28`) and `claimed_amount` (`ii28`). They are
@@ -79,6 +90,27 @@ Storage TTLs are deliberately not used for stream state: expiry would make a
 valid long-running stream unreadable. If temporary operational keys are added
 in a future version, their TWL and cleanup behavior must be documented here.
 
+## Fan-out streams (issue #674)
+
+`create_fanout_stream(sender, recipients, asset, duration)` funds and creates
+one ordinary stream per recipient in a single transaction:
+
+- At most 10 recipients (`MAX_FANOUT_RECIPIENTS`); the list must not be empty
+  and every allocation must be positive.
+- There is no separate total argument: the total is the checked sum of the
+  allocations, and exactly that sum is transferred from the sender into escrow.
+  The sender must hold it, so a fan-out cannot be partially funded.
+- All children share `start_time = ledger.timestamp()` and
+  `end_time = start_time + duration`; `duration > 0`.
+- Children use the same allowlist and native-sentinel rules as `create_stream`.
+
+`cancel_fanout_stream(fanout_id, sender)` settles every child that has not
+been canceled individually with the same rules as `cancel`: vesting freezes at
+`now`, unvested funds are refunded, and `end_time`/`total_amount` shrink to the
+vested amount. The call is idempotent (a canceled group refunds 0 and emits no
+further events) and atomic — any failure rolls back every refund and flag from
+the same invocation, so there is no partial-cancel state.
+
 ## Event payload stability (stable ABI)
 
 The field names and types listed below are a **stable ABI** consumed by
@@ -97,6 +129,10 @@ These three fields are always declared first in every event struct.
 Adding new optional fields after the mandatory base is permitted; removing or
 reordering the mandatory base fields is a breaking change.
 
+Fan-out group events (`FanoutStreamCreated`, `FanoutStreamCanceled`) declare
+`fanout_id: u64` in place of `stream_id`; `actor` and `timestamp` keep their
+positions.
+
 ### Event-specific fields the indexer reads
 
 | Event | Fields consumed by indexer |
@@ -109,6 +145,8 @@ reordering the mandatory base fields is a breaking change.
 | `StreamResumed` | `sender`, `resumed_at` |
 | `StreamTransferred` | `old_recipient`, `new_recipient` |
 | `ClawbackExecuted` | `amount`, `recipient` |
+| `FanoutStreamCreated` | `sender`, `token`, `total_amount`, `start_time`, `end_time`, `stream_ids` |
+| `FanoutStreamCanceled` | `sender`, `refunded_amount` |
 
 ### Event topic keys (stable)
 
@@ -127,6 +165,16 @@ Events are published under the two-symbol topic `("Stream", <name>)`:
 | `ClawbackExecuted` | `"Stream"` | `"Clawback"` |
 
 The indexer routes events by `topic[1]`.  These strings must not change.
+
+Fan-out group events use their own `"Fanout"` topic prefix so they are never
+mistaken for a stream-level action.  The per-child `StreamCreated` and
+`StreamCanceled` events keep the `"Stream"` topics above and are the source of
+truth for child stream state:
+
+| Event struct | topic[0] | topic[1] |
+| --- | --- | --- |
+| `FanoutStreamCreated` | `"Fanout"` | `"Created"` |
+| `FanoutStreamCanceled` | `"Fanout"` | `"Canceled"` |
 
 ---
 
@@ -189,7 +237,9 @@ rollback are covered by `test_1138_one_unit_claim_then_remaining_claim` and
 | Entry point | Event emitted |
 | --- | --- |
 | `create_stream` / `create_split_stream` | `StreamCreated` (one per child for split) |
+| `create_fanout_stream` | `StreamCreated` (one per child) + `FanoutStreamCreated` |
 | `cancel` | `StreamCanceled` |
+| `cancel_fanout_stream` | `StreamCanceled` (one per unsettled child) + `FanoutStreamCanceled` |
 | `pause_stream` | `StreamPaused` |
 | `resume_stream` | `StreamResumed` |
 | `transfer_stream` | `StreamTransferred` |

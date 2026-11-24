@@ -5,6 +5,7 @@ mod errors;
 use crate::templates::{StreamTemplate, TemplateCreated};
 use errors::ContractError;
 pub mod dao;
+pub mod fanout;
 pub mod templates;
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
@@ -745,6 +746,39 @@ impl StellarStreamContract {
             .unwrap_or_else(|| Vec::<u64>::new(&env))
     }
 
+    // -----------------------------------------------------------------------
+    // Multi-recipient fan-out streams (#674)
+    //
+    // Thin entry points; the implementation and the FanoutDataKey layout live
+    // in `fanout.rs`.  A fan-out funds N ordinary streams with one transfer
+    // and cancels them all-or-none.
+    // -----------------------------------------------------------------------
+
+    /// Creates one stream per recipient from a single funding transfer.
+    /// See [`fanout::create_fanout_stream`] for validation rules (max 10
+    /// recipients, positive allocations, exact-sum funding).
+    pub fn create_fanout_stream(
+        env: Env,
+        sender: Address,
+        recipients: Vec<(Address, u64)>,
+        asset: Address,
+        duration: u64,
+    ) -> u64 {
+        fanout::create_fanout_stream(&env, sender, recipients, asset, duration)
+    }
+
+    /// Cancels every sub-stream of the fan-out and refunds the unvested
+    /// remainder to the sender in the same transaction.  Returns the total
+    /// refunded.  Repeated calls are no-ops that refund nothing further.
+    pub fn cancel_fanout_stream(env: Env, fanout_id: u64, sender: Address) -> i128 {
+        fanout::cancel_fanout_stream(&env, fanout_id, sender)
+    }
+
+    /// Returns the fan-out parent record, including all sub-stream IDs.
+    pub fn get_fanout_stream(env: Env, fanout_id: u64) -> fanout::FanoutStream {
+        fanout::read_fanout(&env, fanout_id)
+    }
+
     pub fn get_stream(env: Env, stream_id: u64) -> Stream {
         read_stream(&env, stream_id)
     }
@@ -969,51 +1003,7 @@ impl StellarStreamContract {
         }
 
         let now = env.ledger().timestamp();
-        stream.canceled = true;
-
-        let vested = vested_amount(&stream, now);
-        let sender_refund = stream.total_amount - vested;
-
-        let min_end = if now > stream.start_time {
-            now
-        } else {
-            stream.start_time
-        };
-        if min_end < stream.end_time {
-            stream.end_time = min_end;
-            stream.total_amount = vested;
-        }
-
-        if sender_refund > 0 {
-            let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
-            let actual_token = if is_native {
-                env.storage()
-                    .instance()
-                    .get(&DataKey::NativeToken)
-                    .unwrap_or_else(|| panic!("not initialized"))
-            } else {
-                stream.token.clone()
-            };
-            let token_client = TokenClient::new(&env, &actual_token);
-            let contract_address = env.current_contract_address();
-
-            token_client.transfer(&contract_address, &sender, &sender_refund);
-        }
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::Stream(stream_id), &stream);
-
-        env.events().publish(
-            (symbol_short!("Stream"), symbol_short!("Canceled")),
-            StreamCanceled {
-                stream_id,
-                actor: sender.clone(),
-                timestamp: now,
-                sender,
-                refunded_amount: sender_refund,
-            },
-        );
+        settle_cancel(&env, stream_id, &mut stream, &sender, now);
     }
 
     pub fn transfer_stream(env: Env, stream_id: u64, new_recipient: Address) {
@@ -1286,6 +1276,110 @@ impl StellarStreamContract {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Validates the token allowlist for a newly created stream or fan-out and
+/// resolves the native sentinel in one pass, so a creation pays for the
+/// `Address::to_string()` conversion only once.
+///
+/// Test builds tolerate an empty allowlist so fixtures can use bare token
+/// addresses; production builds always require a listed token.
+pub(crate) fn validate_and_resolve_token(env: &Env, token: &Address) -> Address {
+    let is_native = token.to_string() == String::from_str(env, NATIVE_SENTINEL);
+
+    if !is_native {
+        let allowed_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or_else(|| Vec::new(env));
+        #[cfg(not(any(test, feature = "testutils")))]
+        if !allowed_tokens.contains(token) {
+            panic!("ContractError::TokenNotAllowed");
+        }
+        #[cfg(any(test, feature = "testutils"))]
+        if !allowed_tokens.is_empty() && !allowed_tokens.contains(token) {
+            panic!("ContractError::TokenNotAllowed");
+        }
+    }
+
+    if is_native {
+        env.storage()
+            .instance()
+            .get(&DataKey::NativeToken)
+            .unwrap_or_else(|| panic!("not initialized"))
+    } else {
+        token.clone()
+    }
+}
+
+/// Resolves the native sentinel (`GAAAA...WHF`) to the configured XLM SAC
+/// address.  Every other address is returned unchanged.
+pub(crate) fn resolve_token(env: &Env, token: &Address) -> Address {
+    if token.to_string() == String::from_str(env, NATIVE_SENTINEL) {
+        env.storage()
+            .instance()
+            .get(&DataKey::NativeToken)
+            .unwrap_or_else(|| panic!("not initialized"))
+    } else {
+        token.clone()
+    }
+}
+
+/// Shared cancel settlement used by both `cancel` and `cancel_fanout_stream`.
+///
+/// Freezes vesting at `now`, refunds the unvested remainder to `sender`, writes
+/// the shrunk stream back, and emits `StreamCanceled`.  Returns the refunded
+/// amount.  Callers must have verified that the sender owns the stream and that
+/// it is not already canceled.
+///
+/// Keeping this in one place is deliberate: a fan-out cancel must settle its
+/// children with exactly the same rules as a standalone cancel, and two copies
+/// of the vesting math would drift apart.
+pub(crate) fn settle_cancel(
+    env: &Env,
+    stream_id: u64,
+    stream: &mut Stream,
+    sender: &Address,
+    now: u64,
+) -> i128 {
+    stream.canceled = true;
+
+    let vested = vested_amount(stream, now);
+    let sender_refund = stream.total_amount - vested;
+
+    let min_end = if now > stream.start_time {
+        now
+    } else {
+        stream.start_time
+    };
+    if min_end < stream.end_time {
+        stream.end_time = min_end;
+        stream.total_amount = vested;
+    }
+
+    if sender_refund > 0 {
+        let actual_token = resolve_token(env, &stream.token);
+        let token_client = TokenClient::new(env, &actual_token);
+        token_client.transfer(&env.current_contract_address(), sender, &sender_refund);
+    }
+
+    env.storage()
+        .persistent()
+        .set(&DataKey::Stream(stream_id), stream);
+
+    env.events().publish(
+        (symbol_short!("Stream"), symbol_short!("Canceled")),
+        StreamCanceled {
+            stream_id,
+            actor: sender.clone(),
+            timestamp: now,
+            sender: sender.clone(),
+            refunded_amount: sender_refund,
+        },
+    );
+
+    sender_refund
+}
+
 #[allow(clippy::too_many_arguments)]
 fn create_stream_with_config(
     env: &Env,
@@ -1309,31 +1403,7 @@ fn create_stream_with_config(
         panic!("end_time must be greater than start_time");
     }
 
-    let is_native = token.to_string() == String::from_str(env, NATIVE_SENTINEL);
-    if !is_native {
-        let allowed_tokens: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::AllowedTokens)
-            .unwrap_or_else(|| Vec::new(env));
-        #[cfg(not(any(test, feature = "testutils")))]
-        if !allowed_tokens.contains(&token) {
-            panic!("ContractError::TokenNotAllowed");
-        }
-        #[cfg(any(test, feature = "testutils"))]
-        if !allowed_tokens.is_empty() && !allowed_tokens.contains(&token) {
-            panic!("ContractError::TokenNotAllowed");
-        }
-    }
-
-    let actual_token = if is_native {
-        env.storage()
-            .instance()
-            .get(&DataKey::NativeToken)
-            .unwrap_or_else(|| panic!("not initialized"))
-    } else {
-        token.clone()
-    };
+    let actual_token = validate_and_resolve_token(env, &token);
     let token_client = TokenClient::new(env, &actual_token);
     let sender_balance = token_client.balance(&sender);
     if sender_balance < total_amount {
@@ -1406,7 +1476,7 @@ fn read_template(env: &Env, template_id: u64) -> StreamTemplate {
         .unwrap_or_else(|| panic!("template not found"))
 }
 
-fn read_stream(env: &Env, stream_id: u64) -> Stream {
+pub(crate) fn read_stream(env: &Env, stream_id: u64) -> Stream {
     let key = DataKey::Stream(stream_id);
     let fields: Map<Symbol, Val> = env
         .storage()
